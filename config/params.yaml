@@ -1,0 +1,40 @@
+# stock-agent strategy parameters (V1). All numeric params are backtest-sweep candidates,
+# these are baseline defaults per DESIGN.md. Edit freely; log changes for reproducibility.
+
+# ---- Portfolio (Q5) ----
+portfolio:
+  k: 5                  # number of sector ETFs held simultaneously (equal weight)
+  equal_weight: true    # each held sector gets 1/k
+
+# ---- Rotation layer (weekly, Friday close) (Q4, Q6) ----
+rotation:
+  rebalance_weekday: 4  # 0=Mon .. 4=Fri
+  trend_gate_ma: 60     # candidate must have close > MA(60) to be eligible
+  momentum:
+    windows: [60, 120, 250]     # lookback days (slow momentum — sweep winner)
+    weights: [0.2, 0.3, 0.5]    # weights, summing to 1
+
+# ---- Regime / market timing layer (daily) (Q7) ----
+regime:
+  benchmark_symbol: "510300"   # 沪深300 ETF (also used as backtest benchmark)
+  ma_period: 120               # close below MA(120) => risk-off
+  risk_off_symbol: "511990"    # 货币ETF (华宝添益) — parking spot when risk-off
+
+# ---- Per-position stop loss (daily) (Q8) ----
+stop:
+  trailing_pct: 0.08   # exit if price falls 8% from peak since entry
+
+# ---- Engine priority hard rule (Q13) ----
+priority: ["stop", "rotation", "regime"]  # stop > rotation > regime on conflicts
+
+# ---- Backtest (Q11) ----
+backtest:
+  single_side_cost: 0.001   # ~0.1% per side (commission + slippage, ETF has no stamp duty)
+  fill: "next_open"         # signal on T close, fill at T+1 open
+  enforce_t_plus_1: true    # cannot sell what was bought today
+  adjust: "hfq"             # backtest uses 后复权 (history-stable, no lookahead leak)
+
+# ---- Live data (Q10) ----
+data:
+  adjust: "hfq"             # store 后复权 for math (returns identical to qfq; history stable)
+  history_years: 6          # how much history to backfill on init

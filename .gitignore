@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+
+# Data & secrets
+*.sqlite
+*.db
+*.sqlite-wal
+*.sqlite-shm
+data/cache/
+data/*.csv
+data/*.png
+.env
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db

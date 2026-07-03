@@ -1,0 +1,14 @@
+# stock-agent dependencies (minimal, per DESIGN.md)
+pandas>=2.0
+numpy>=1.24
+akshare>=1.18
+requests>=2.31
+python-dateutil>=2.8
+pyyaml>=6.0
+python-dotenv>=1.0
+pytest>=7.4
+
+# LLM (optional; report writer works without it via template fallback)
+# Install only if you wire a real model:
+# zhipuai>=2.0
+# openai>=1.0
