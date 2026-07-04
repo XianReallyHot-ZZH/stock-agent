@@ -58,3 +58,20 @@ def score_universe(close_by_symbol: dict, params: dict) -> pd.DataFrame:
         info["symbol"] = sym
         rows.append(info)
     return build_frame(rows)
+
+
+def describe_symbol(close: pd.Series, params: dict) -> dict:
+    """Human-facing indicator snapshot for the report (reversion-specific)."""
+    p = _rev_params(params)
+    rsi_p, oversold, long_ma = int(p["rsi_period"]), float(p["oversold_threshold"]), int(p["long_ma"])
+    r = ind.rsi(close, rsi_p)
+    ma = ind.sma(close, long_ma)
+    last = float(close.iloc[-1]) if len(close) else float("nan")
+    above = (not pd.isna(ma)) and (last > ma)
+    eligible = bool(above and (not pd.isna(r)) and r < oversold)
+    score = (oversold - r) if not pd.isna(r) else float("nan")
+    rsi_str = f"{r:.0f}" if not pd.isna(r) else "NA"
+    is_over = (not pd.isna(r)) and r < oversold
+    summ = (f"RSI {rsi_str} ({'超跌' if is_over else '未超跌'}, 门槛{int(oversold)}) | "
+            f"{'在' + str(long_ma) + '日线上' if above else '跌破' + str(long_ma) + '日线'}")
+    return {"score": score, "eligible": eligible, "summary": summ}

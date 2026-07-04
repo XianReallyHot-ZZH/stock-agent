@@ -29,15 +29,21 @@ def _action_line(signal: dict, meta: dict) -> tuple[str, str]:
     if signal.get("regime") == "risk_off" and any(a["type"] in ("sell", "to_cash") for a in acts):
         return "避险：全部转入货币ETF", "沪深300 跌破120日半年线，按规则空仓避险"
 
+    sig = signal.get("signal_name", "momentum")
     parts = []
     if sells:
         names = "、".join(_name(meta, a["symbol"]) for a in sells)
-        why = "触发止损" if all(a["symbol"] in stopped for a in sells) else "动量走弱/轮动换出"
+        why = "触发止损" if all(a["symbol"] in stopped for a in sells) else "得分掉出前列/轮动换出"
         parts.append(f"卖出 {names}（{why}）")
     if buys:
         names = "、".join(_name(meta, a["symbol"]) for a in buys)
-        parts.append(f"买入 {names}（新进动量前3）")
+        parts.append(f"买入 {names}（新进{sig}前列）")
     if not parts:
+        target = signal.get("target", {})
+        risk_off_sym = signal.get("risk_off_symbol")
+        if signal.get("regime") == "risk_on" and not any(s != risk_off_sym for s in target):
+            gate = "close>250日线 且 RSI<30" if sig == "reversion" else "close>60日线"
+            return "无变动，维持空仓", f"风险开但无板块同时满足{sig}门槛（{gate}）→ 空仓观望"
         return "无变动，维持持有", "今日无任何触发（未轮动、未止损、未避险）"
     return "；".join(parts), "按规则执行，无需主观判断"
 
@@ -46,8 +52,11 @@ def _state_line(signal: dict, meta: dict, cfg: Config) -> str:
     regime = signal.get("regime")
     target = signal.get("target", {})
     risk_off = cfg.params["regime"]["risk_off_symbol"]
-    if regime == "risk_off" or (len(target) == 1 and risk_off in target):
-        return f"风险关 · 100% 货币ETF避险"
+    only_cash = (len(target) == 0) or (len(target) == 1 and risk_off in target)
+    if regime == "risk_off":
+        return "风险关 · 大盘破位避险（100% 货币ETF）"
+    if only_cash:
+        return "风险开 · 无合格标的·空仓观望（100% 货币ETF）"
     holds = [f"{_name(meta, s)}({round(w*100)}%)" for s, w in target.items() if s != risk_off]
     cash = signal.get("cash_weight", 0)
     line = f"风险开 · 持仓 {' '.join(holds)}" if holds else "风险开 · 空仓"
@@ -63,9 +72,39 @@ def _bench_line(signal: dict) -> str:
         return "大盘数据不足"
     pos = "在" if above else "跌破"
     status = "正常" if above else "避险中"
+    dist = b.get("distance_pct")
+    dist_str = f"（偏离{dist:+.1%}）" if dist is not None else ""
     near = signal.get("warnings", {}).get("near_regime_line", False)
     flag = " ⚠逼近半年线" if near else ""
-    return f"沪深300 {last} {pos}120日线({ma})，{status}{flag}"
+    return f"沪深300 {last} {pos}120日线({ma}){dist_str}，{status}{flag}"
+
+
+def _holdings_line(signal: dict, meta: dict) -> str:
+    hd = signal.get("holdings_detail") or []
+    if not hd:
+        return "（当前空仓，无持仓）"
+    out = []
+    for h in hd:
+        nm = _name(meta, h["symbol"])
+        w = round(h.get("weight", 0) * 100)
+        dd = h.get("drawdown_from_peak")
+        dd_str = f" | 自高点 {round(dd*100)}%" if dd is not None else ""
+        out.append(f"  • {nm}({h['symbol']}) {w}% | {h.get('summary','')}{dd_str}")
+    return "\n".join(out)
+
+
+def _candidates_line(signal: dict, meta: dict) -> str:
+    det = signal.get("details") or []
+    if not det:
+        return "（无候选数据）"
+    out = []
+    for d in det:
+        nm = _name(meta, d["symbol"])
+        sc = d.get("score")
+        sc_str = f"{sc:+.2f}" if isinstance(sc, (int, float)) else "NA"
+        mark = "✓达标" if d.get("eligible") else "✗未达标"
+        out.append(f"  • {nm}({d['symbol']}) 得分{sc_str} | {d.get('summary','')} [{mark}]")
+    return "\n".join(out)
 
 
 def _watch_line(signal: dict, meta: dict) -> str:
@@ -133,8 +172,10 @@ def compose_report(signal: dict, cfg: Config, use_llm: bool = True) -> str:
     if adh.get("available"):
         adh_line = f"\n🧭 自律度：{adh['adherence_pct']}%（实际持仓 vs 目标偏离 {adh['total_drift']}）"
 
+    sig_name = signal.get("signal_name", "momentum")
+    n_det = len(signal.get("details") or [])
     lines = [
-        f"📊 {d} {wd} 早盘报告",
+        f"📊 {d} {wd} 早盘报告 [{sig_name}]",
         "━━━━━━━━━━━━",
         f"🟢 今日动作：{headline}",
         f"   理由：{reason}",
@@ -143,7 +184,12 @@ def compose_report(signal: dict, cfg: Config, use_llm: bool = True) -> str:
         f"📈 大盘：{_bench_line(signal)}",
         f"⚠️ 盯防：{_watch_line(signal, meta)}" + adh_line,
         "━━━━━━━━━━━━",
+        "📋 持仓明细：",
+        _holdings_line(signal, meta),
+        f"🏆 候选榜（{sig_name} 得分前{n_det}）：",
+        _candidates_line(signal, meta),
+        "━━━━━━━━━━━━",
         f"🔍 简评：{commentary}",
-        f"（数据截至 {d} 收盘 · 源：{('LLM' if (use_llm and llm_client.llm_available()) else '规则模板')}）",
+        f"（数据截至 {d} 收盘 · 信号={sig_name} · 源：{('LLM' if (use_llm and llm_client.llm_available()) else '规则模板')}）",
     ]
     return "\n".join(lines)

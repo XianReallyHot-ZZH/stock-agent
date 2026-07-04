@@ -50,6 +50,20 @@ def score_universe(close_by_symbol: dict[str, pd.Series], params: dict) -> pd.Da
     return df
 
 
+def describe_symbol(close: pd.Series, params: dict) -> dict:
+    """Human-facing indicator snapshot for the report (momentum-specific)."""
+    rot = params.get("rotation", {})
+    win = rot.get("momentum", {}).get("windows", [20, 60, 120])
+    wts = rot.get("momentum", {}).get("weights", [0.2, 0.3, 0.5])
+    gate_ma = rot.get("trend_gate_ma", 60)
+    score = ind.momentum_score(close, win, wts)
+    above = passes_trend_gate(close, gate_ma)
+    rets = [ind.returns(close, n) for n in win]
+    ret_str = "/".join(f"{r:+.1%}" for r in rets)
+    summary = f"{win}日涨幅 {ret_str} | {'在' + str(gate_ma) + '日线上' if above else '跌破' + str(gate_ma) + '日线'}"
+    return {"score": score, "eligible": bool(above and not pd.isna(score)), "summary": summary}
+
+
 def select_top_k(scored: pd.DataFrame, k: int) -> list[str]:
     """Top-K eligible symbols (delegates to signals._common; kept for API compat)."""
     from .signals._common import select_top_k as _stk

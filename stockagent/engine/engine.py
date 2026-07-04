@@ -12,7 +12,7 @@ import pandas as pd
 
 from ..config import Config, get_config
 from ..data import Store
-from . import momentum as mom
+from . import indicators as ind
 from . import stop as stop_mod
 from .portfolio import TargetPlan, decide_target, diff
 from .regime import regime_state
@@ -92,16 +92,47 @@ class Engine:
         }
         actions = diff(current_w, plan, self.risk_off)
 
+        # 6) rich per-symbol detail for the report (signal-aware describe)
+        sig = current_signal(params)
+        signal_name = params.get("rotation", {}).get("signal", {}).get("name", "momentum")
+        ranking_top = scored.head(6)
+        details = []
+        for _, row in ranking_top.iterrows():
+            sym = row["symbol"]
+            desc = sig.describe_symbol(self._close(sym, decision_date), params)
+            details.append({"symbol": sym, "score": row["score"], "eligible": bool(row["eligible"]), "summary": desc["summary"]})
+
+        holdings_detail = []
+        for sym, w in plan.target.items():
+            if sym == self.risk_off:
+                continue
+            info = current_holdings.get(sym, {}) if isinstance(current_holdings.get(sym), dict) else {}
+            entry = info.get("entry_date")
+            dd = None
+            if entry:
+                cs = self._close_since(sym, entry, decision_date)
+                if len(cs):
+                    dd = round(float(ind.drawdown_from_peak(cs)), 4)
+            desc = sig.describe_symbol(self._close(sym, decision_date), params)
+            holdings_detail.append({"symbol": sym, "weight": round(w, 4), "drawdown_from_peak": dd, "summary": desc["summary"]})
+
+        bench_dist = (bench_last / bench_ma - 1.0) if (not pd.isna(bench_ma) and bench_ma > 0) else None
+
         return {
             "decision_date": decision_date,
+            "signal_name": signal_name,
+            "risk_off_symbol": self.risk_off,
             "regime": regime,
             "benchmark": {
                 "symbol": self.benchmark,
                 "last": round(bench_last, 4),
                 "ma": round(bench_ma, 4),
                 "above_ma": bool(bench_last > bench_ma) if not pd.isna(bench_ma) else None,
+                "distance_pct": round(bench_dist, 4) if bench_dist is not None else None,
             },
             "ranking": scored[["symbol", "score", "eligible"]].to_dict("records"),
+            "details": details,
+            "holdings_detail": holdings_detail,
             "top_k": plan.picks,
             "target": plan.target,
             "cash_weight": round(plan.cash_weight, 4),
