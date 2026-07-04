@@ -73,14 +73,21 @@ def decide_target(
     return plan
 
 
-def diff(current: dict[str, float], plan: TargetPlan, risk_off_symbol: str) -> list[dict]:
-    """Produce buy/sell/hold actions between current holdings and the target plan."""
+def diff(current: dict[str, float], plan: TargetPlan, risk_off_symbol: str,
+         rebalance_threshold: float = 0.0) -> list[dict]:
+    """Produce buy/sell/hold actions between current holdings and the target plan.
+
+    V2.9: if rebalance_threshold > 0, small weight deviations are labeled 'hold'
+    (no action) instead of generating micro buy/sell.
+    """
     target = plan.target
     actions: list[dict] = []
     for s, w in target.items():
         cur = current.get(s, 0.0)
         if s == risk_off_symbol and w > 0:
             actions.append({"type": "to_cash" if cur < w - 1e-9 else "hold_cash", "symbol": s, "weight": w})
+        elif abs(cur - w) <= rebalance_threshold:
+            actions.append({"type": "hold", "symbol": s, "weight": w, "note": "微调不操作"})
         elif cur < w - 1e-9:
             actions.append({"type": "buy", "symbol": s, "weight": w, "reason": plan.reasons.get(s, "")})
         else:

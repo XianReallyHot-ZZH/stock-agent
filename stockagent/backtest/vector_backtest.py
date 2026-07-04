@@ -83,6 +83,7 @@ def run_backtest(
     sig = current_signal(p)  # V2.4: resolve once for signal-specific exits
     rebal_dow = int(p["rotation"].get("rebalance_weekday", 4))
     cost = float(p["backtest"]["single_side_cost"])
+    rebal_thr = float(p.get("portfolio", {}).get("rebalance_threshold", 0.0))
 
     timeline, closes, opens, shares_wide = _load_panel(store, rot_syms, bench, risk_off)
     ro_ret = closes[risk_off].pct_change().fillna(0.0)
@@ -132,6 +133,9 @@ def run_backtest(
                 tgt_value = order["weight"] * order["equity_ref"]
                 cur_value = shares.get(sym, 0.0) * px
                 delta = tgt_value - cur_value
+                # V2.9: skip micro-rebalancing (deviation below threshold)
+                if tgt_value > 0 and abs(delta) / tgt_value < rebal_thr:
+                    continue
                 if delta > 1 and px > 0:
                     buy_sh = delta / px
                     shares[sym] = shares.get(sym, 0.0) + buy_sh

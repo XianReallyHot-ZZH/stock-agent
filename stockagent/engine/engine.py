@@ -131,7 +131,8 @@ class Engine:
             sym: (info.get("weight", 0.0) if isinstance(info, dict) else float(info))
             for sym, info in current_holdings.items()
         }
-        actions = diff(current_w, plan, self.risk_off)
+        _rebal = float(p.get("portfolio", {}).get("rebalance_threshold", 0.0))
+        actions = diff(current_w, plan, self.risk_off, rebalance_threshold=_rebal)
 
         # 6) rich per-symbol detail for the report (signal-aware describe)
         sig = current_signal(params)

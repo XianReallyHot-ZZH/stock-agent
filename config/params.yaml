@@ -5,6 +5,7 @@
 portfolio:
   k: 3                  # number of sector ETFs held simultaneously (equal weight)
   equal_weight: true    # each held sector gets 1/k
+  rebalance_threshold: 0.10  # V2.9: skip reweight if deviation < 10% (reduces micro-trades)
 
 # ---- Rotation layer (weekly, Friday close) (Q4, Q6) ----
 rotation:
