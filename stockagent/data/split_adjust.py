@@ -19,27 +19,32 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
-SPLIT_THRESHOLD = -0.25  # one-day return < -25% => likely split/merger
+SPLIT_THRESHOLD_DOWN = -0.25  # one-day return < -25% => likely split
+SPLIT_THRESHOLD_UP = 1.0     # one-day return > +100% => likely reverse split/merger
 
 
-def detect_splits(close: pd.Series, threshold: float = SPLIT_THRESHOLD) -> list[dict]:
-    """Detect split/merger events in a close-price series.
+def detect_splits(close: pd.Series) -> list[dict]:
+    """Detect split/merger events (both forward splits and reverse splits).
 
-    Returns list of {date, ratio, prev_close, event_close} sorted oldest-first.
+    Returns list of {date, ratio, prev_close, event_close, return} sorted oldest-first.
+    Forward split: price drops >25% → ratio < 0.75
+    Reverse split: price jumps >100% → ratio > 2.0
     """
     rets = close.pct_change().dropna()
     splits = []
     for d, r in rets.items():
-        if r < threshold:
+        if r < SPLIT_THRESHOLD_DOWN or r > SPLIT_THRESHOLD_UP:
             prev_close = float(close.loc[:d].iloc[-2])
             event_close = float(close.loc[d])
             ratio = event_close / prev_close
+            kind = "reverse_split" if r > 0 else "split"
             splits.append({
                 "date": d,
                 "ratio": ratio,
                 "prev_close": prev_close,
                 "event_close": event_close,
                 "return": r,
+                "kind": kind,
             })
     return splits
 
