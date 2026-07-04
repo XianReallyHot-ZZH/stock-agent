@@ -171,3 +171,43 @@ def fetch_trade_dates() -> list[str]:
 
 def today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
+
+
+# ---- fund flow (V2.3) — eastmoney-only, currently throttled; graceful degrade at manager ----
+def _find_col(cols: list[str], keywords: list[str]):
+    for c in cols:
+        if all(k in str(c) for k in keywords):
+            return c
+    return None
+
+
+def fetch_sector_fund_flow_rank(indicator: str = "今日", sector_type: str = "行业资金流",
+                                timeout: float = 40.0) -> pd.DataFrame:
+    """Snapshot of sector net-inflow ranking. Returns DataFrame[sector, net_inflow]."""
+    df = _run_with_timeout(ak.stock_sector_fund_flow_rank, timeout,
+                           indicator=indicator, sector_type=sector_type)
+    if df is None or len(df) == 0:
+        raise FetchError("empty fund_flow_rank")
+    cols = list(df.columns)
+    name_col = next((c for c in cols if str(c) in ("名称", "行业", "板块")), cols[0])
+    inflow_col = _find_col(cols, ["主力净流入", "净额"]) or _find_col(cols, ["净流入"])
+    out = pd.DataFrame({"sector": df[name_col].astype(str)})
+    if inflow_col is not None:
+        out["net_inflow"] = pd.to_numeric(df[inflow_col], errors="coerce")
+    return out
+
+
+def fetch_sector_fund_flow_hist(symbol: str, timeout: float = 40.0) -> pd.DataFrame:
+    """Historical daily net-inflow for one sector name. Returns DataFrame indexed by date
+    with column net_inflow. Backtestable."""
+    df = _run_with_timeout(ak.stock_sector_fund_flow_hist, timeout, symbol=symbol)
+    if df is None or len(df) == 0:
+        raise FetchError("empty fund_flow_hist")
+    cols = list(df.columns)
+    date_col = next((c for c in cols if "日期" in str(c) or str(c).lower() == "date"), cols[0])
+    inflow_col = _find_col(cols, ["主力净流入", "净额"]) or _find_col(cols, ["净流入"])
+    out = pd.DataFrame({"date": pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d")})
+    if inflow_col is not None:
+        out["net_inflow"] = pd.to_numeric(df[inflow_col], errors="coerce")
+    out = out.dropna(subset=["date"]).drop_duplicates("date").set_index("date").sort_index()
+    return out

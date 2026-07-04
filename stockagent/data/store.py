@@ -25,7 +25,16 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS fund_flow (
+    sector     TEXT NOT NULL,
+    date       TEXT NOT NULL,
+    net_inflow REAL,
+    rank       INTEGER,
+    source     TEXT,
+    PRIMARY KEY (sector, date)
+);
 CREATE INDEX IF NOT EXISTS idx_prices_symbol ON daily_prices(symbol);
+CREATE INDEX IF NOT EXISTS idx_fund_flow_sector ON fund_flow(sector);
 """
 
 
@@ -167,3 +176,52 @@ class Store:
                 (date,),
             ).fetchone()
             return row[0] if row and row[0] else None
+
+    # ---- fund flow (V2.3) ----
+    def upsert_fund_flow(self, sector: str, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with net_inflow (and optional rank)."""
+        if df is None or len(df) == 0:
+            return 0
+        rows = []
+        for d, r in df.iterrows():
+            rank = r.get("rank")
+            rows.append(
+                (sector, str(d), float(r.get("net_inflow", 0) or 0),
+                 int(rank) if rank not in (None, "") and not pd.isna(rank) else None, source)
+            )
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO fund_flow(sector,date,net_inflow,rank,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(sector,date) DO UPDATE SET "
+                "net_inflow=excluded.net_inflow,rank=excluded.rank,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_fund_flow(self, sector: str, start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,net_inflow,rank FROM fund_flow WHERE sector=?"
+        params: list = [sector]
+        if start:
+            q += " AND date>=?"
+            params.append(start)
+        if end:
+            q += " AND date<=?"
+            params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_fund_flow_date(self, sector: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(date) FROM fund_flow WHERE sector=?", (sector,)
+            ).fetchone()
+            return row[0] if row and row[0] else None
+
+    def fund_flow_sectors(self) -> list[str]:
+        with self._conn() as c:
+            rows = c.execute("SELECT DISTINCT sector FROM fund_flow").fetchall()
+            return [r[0] for r in rows]

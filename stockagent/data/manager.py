@@ -83,3 +83,36 @@ class DataManager:
         if len(df) > lookback:
             df = df.iloc[-lookback:]
         return df
+
+    # ---- fund flow (V2.3) ----
+    def update_fund_flow(self, symbols: Optional[list[str]] = None) -> dict:
+        """Fetch + store historical sector fund-flow per rotation ETF's sector.
+
+        eastmoney-only (currently often throttled). Failures degrade gracefully
+        (log + 0 rows) — never crashes a run. Returns {symbol: rows_added}.
+        Sector name comes from config.symbol_meta()[sym]['sector'].
+        """
+        meta = self.config.symbol_meta()
+        syms = symbols or self.config.rotation_symbols()
+        results: dict[str, int] = {}
+        for i, sym in enumerate(syms):
+            sector = meta.get(sym, {}).get("sector")
+            if not sector:
+                results[sym] = 0
+                continue
+            if i > 0:
+                import time as _t
+                _t.sleep(0.8)  # eastmoney fund-flow is throttle-prone
+            try:
+                df = fetcher.fetch_sector_fund_flow_hist(sector)
+            except Exception as e:  # noqa: BLE001
+                log.warning("fund_flow fetch %s (%s) failed: %s", sym, sector, str(e)[:120])
+                results[sym] = 0
+                continue
+            n = self.store.upsert_fund_flow(sector, df, source="eastmoney")
+            log.info("fund_flow %s (%s): +%d rows (to %s)",
+                     sym, sector, n, df.index[-1] if len(df) else "?")
+            results[sym] = n
+        if any(results.values()):
+            self.store.set_meta("last_fund_flow_update", fetcher.today_str())
+        return results
