@@ -131,8 +131,13 @@ def _watch_line(signal: dict, meta: dict) -> str:
 def _commentary_llm(signal: dict, meta: dict, cfg: Config) -> Optional[str]:
     """Ask GLM to write 2-3 sentences of commentary, grounded + no-prediction."""
     top = signal.get("top_k", [])
+    sig = signal.get("signal_name", "momentum")
+    gate = ("close>250日线 且 RSI<30（长期上升+短期超跌）" if sig == "reversion"
+            else "close>60日线 且 动量分领先")
     facts = {
         "decision_date": signal.get("decision_date"),
+        "signal": sig,
+        "buy_rule": gate,
         "regime": signal.get("regime"),
         "benchmark": signal.get("benchmark"),
         "top_k": [_name(meta, s) for s in top],
@@ -157,12 +162,17 @@ def _commentary_template(signal: dict, meta: dict) -> str:
     top = signal.get("top_k", [])
     regime = signal.get("regime")
     stopped = signal.get("stopped", [])
+    sig = signal.get("signal_name", "momentum")
+    is_rev = (sig == "reversion")
     if regime == "risk_off":
         return "大盘处于下行趋势，系统按规则空仓避险，等待沪深300重回120日线上方再恢复轮动。"
     if not top:
-        return "无板块通过趋势确认门槛，系统空仓观望，避免在弱势中硬选。"
+        return ("无板块同时满足'长期上升(>250日线)且短期超跌(RSI<30)'，系统空仓观望，避免在下跌中接飞刀。"
+                if is_rev else
+                "无板块站上趋势确认门槛，系统空仓观望，避免在弱势中硬选。")
     names = "、".join(_name(meta, s) for s in top)
-    s = f"系统按动量排序选中 {names} 作为当前持仓。"
+    pick = "长期上升中短期超跌、等待反弹" if is_rev else "近期涨幅领先"
+    s = f"系统按{'均值回归' if is_rev else '动量'}选中 {names}（{pick}）作为当前持仓。"
     if stopped:
         s += f"其中 {'、'.join(_name(meta, x) for x in stopped)} 触发止损已剔除，资金暂存货币池。"
     s += "以上为规则输出，不含任何涨跌预测。"
