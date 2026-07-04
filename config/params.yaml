@@ -40,7 +40,9 @@ rotation:
 # ---- Regime / market timing layer (daily) (Q7) ----
 regime:
   benchmark_symbol: "510300"   # 沪深300 ETF (also used as backtest benchmark)
-  ma_period: 120               # close below MA(120) => risk-off
+  ma_period: 120               # regime MA period
+  band_pct: 0.02               # V2.7: deadband around MA (±2%); 0 = legacy
+  confirm_days: 3              # V2.7: consecutive days beyond band to confirm flip; 1 = legacy
   risk_off_symbol: "511990"    # 货币ETF (华宝添益) — parking spot when risk-off
 
 # ---- Per-position stop loss (daily) (Q8, V2.5 ATR-adaptive) ----

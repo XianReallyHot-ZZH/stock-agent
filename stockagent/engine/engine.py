@@ -15,7 +15,7 @@ from ..data import Store
 from . import indicators as ind
 from . import stop as stop_mod
 from .portfolio import TargetPlan, decide_target, diff
-from .regime import regime_state
+from .regime import RegimeFilter, RISK_OFF, RISK_ON, regime_state
 from .signals import current_signal, get_signal
 
 
@@ -52,9 +52,12 @@ class Engine:
         current_holdings = current_holdings or {}
         params = self.config.params
 
-        # 1) regime
+        # 1) regime (V2.7: RegimeFilter with band + confirmation)
         bench_close = self._close(self.benchmark, decision_date)
-        regime = regime_state(bench_close, self.regime_ma)
+        _band = float(p.get("regime", {}).get("band_pct", 0.0))
+        _confirm = int(p.get("regime", {}).get("confirm_days", 1))
+        rf = RegimeFilter(self.regime_ma, band_pct=_band, confirm_days=_confirm)
+        regime = rf.process(bench_close)
         bench_ma = float(bench_close.tail(self.regime_ma).mean()) if len(bench_close) >= self.regime_ma else float("nan")
         bench_last = float(bench_close.iloc[-1]) if len(bench_close) else float("nan")
 

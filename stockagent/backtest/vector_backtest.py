@@ -23,7 +23,7 @@ from ..config import Config, get_config
 from ..data import Store
 from ..engine import stop as stop_mod
 from ..engine.portfolio import decide_target
-from ..engine.regime import RISK_OFF, RISK_ON, regime_state
+from ..engine.regime import RISK_OFF, RISK_ON, RegimeFilter
 from ..engine.signals import current_signal
 from . import metrics as M
 
@@ -89,6 +89,12 @@ def run_backtest(
 
     days = timeline[(timeline >= (start or timeline[0])) & (timeline <= (end or timeline[-1]))]
 
+    # V2.7: precompute regime labels (RegimeFilter with band + confirmation)
+    _band = float(p.get("regime", {}).get("band_pct", 0.0))
+    _confirm = int(p.get("regime", {}).get("confirm_days", 1))
+    rf = RegimeFilter(regime_ma, band_pct=_band, confirm_days=_confirm)
+    regime_labels = rf.process_series(closes[bench].dropna())
+
     cash = capital
     shares: dict[str, float] = {}
     entry_date: dict[str, str] = {}
@@ -148,8 +154,7 @@ def run_backtest(
         equity_curve.append((d, eq))
 
         # 4) signal at close -> pending orders for next open
-        bench_close = closes[bench].loc[:d].dropna()
-        regime = regime_state(bench_close, regime_ma)
+        regime = regime_labels.get(d, RISK_ON)  # V2.7: precomputed RegimeFilter
 
         forced_sells = []
         # V2.4: signal-specific exit via check_exits; fallback to price stop.
