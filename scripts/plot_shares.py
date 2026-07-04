@@ -71,6 +71,7 @@ def main():
     fig = make_subplots(
         rows=n, cols=1, subplot_titles=titles,
         vertical_spacing=0.5 / max(n, 1),
+        specs=[[{"secondary_y": True}]] * n,
     )
 
     for idx, (sym, name, sector, m_shares, m_price) in enumerate(plots, 1):
@@ -82,17 +83,20 @@ def main():
                 name="份额(亿份)", line=dict(color="#2563eb", width=2),
                 hovertemplate="<b>%{x}</b><br>份额: %{y:.2f} 亿份<extra></extra>",
             ),
-            row=idx, col=1,
+            row=idx, col=1, secondary_y=False,
         )
         fig.add_trace(
             go.Scatter(
                 x=dates, y=m_price.values,
                 name="价格", line=dict(color="#f97316", width=2),
-                yaxis=f"y{idx+1}" if idx > 1 else "y2",
                 hovertemplate="<b>%{x}</b><br>价格: %{y:.4f}<extra></extra>",
             ),
-            row=idx, col=1,
+            row=idx, col=1, secondary_y=True,
         )
+        fig.update_yaxes(title_text="份额(亿份)", title_font=dict(color="#2563eb"),
+                         row=idx, col=1, secondary_y=False)
+        fig.update_yaxes(title_text="价格", title_font=dict(color="#f97316"),
+                         row=idx, col=1, secondary_y=True)
 
     height = max(600, n * 220)
     fig.update_layout(
