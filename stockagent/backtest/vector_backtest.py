@@ -201,7 +201,10 @@ def run_backtest(
                 close_slice = {s: closes[s].loc[:d].dropna() for s in rot_syms}
                 share_slice = {s: shares_wide[s].loc[:d].dropna() for s in rot_syms if s in shares_wide.columns}
                 scored = sig.score_universe(close_slice, p, ctx={"share": share_slice})
-                plan = decide_target(scored, RISK_ON, p, risk_off, stopped=forced_sells)
+                # V2.8: sticky positions for STICKY signals (share_flow)
+                _held_set = {sym for sym, sh in shares.items() if sh > 0 and sym != risk_off}
+                _held = _held_set if getattr(sig, "STICKY", False) else None
+                plan = decide_target(scored, RISK_ON, p, risk_off, stopped=forced_sells, held=_held)
                 eq_ref = eq
                 for sym, w in plan.target.items():
                     if sym == risk_off:

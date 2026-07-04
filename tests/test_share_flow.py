@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 
 from stockagent.engine.signals import share_flow as sf
+from stockagent.engine.signals._common import select_top_k
 
 PARAMS = {"rotation": {"share_flow": {}}}
 
@@ -83,3 +84,34 @@ def test_score_universe_columns():
     df = sf.score_universe({"X": close}, PARAMS, ctx={"share": {"X": shares}})
     for c in ("symbol", "score", "eligible"):
         assert c in df.columns
+
+
+def test_sticky_flag_is_true():
+    assert sf.STICKY is True
+
+
+def test_select_top_k_sticky_keeps_held():
+    """Held+eligible symbols stay in top-k even if their score drops."""
+    import pandas as pd
+    scored = pd.DataFrame([
+        {"symbol": "A", "score": 0.01, "eligible": True},
+        {"symbol": "B", "score": 0.10, "eligible": True},
+        {"symbol": "C", "score": 0.50, "eligible": True},
+    ])
+    # Without sticky: top-2 = C, B
+    assert select_top_k(scored, 2) == ["C", "B"]
+    # With sticky holding A: A stays (even though lowest score), B dropped
+    assert select_top_k(scored, 2, held={"A"}) == ["A", "C"]
+
+
+def test_select_top_k_sticky_drops_ineligible_held():
+    """Held but no longer eligible → dropped (replaced by next best)."""
+    import pandas as pd
+    scored = pd.DataFrame([
+        {"symbol": "A", "score": 0.01, "eligible": False},  # held but not eligible
+        {"symbol": "B", "score": 0.10, "eligible": True},
+        {"symbol": "C", "score": 0.50, "eligible": True},
+    ])
+    picks = select_top_k(scored, 2, held={"A"})
+    assert "A" not in picks  # A dropped (ineligible)
+    assert picks == ["C", "B"]  # filled by top non-held

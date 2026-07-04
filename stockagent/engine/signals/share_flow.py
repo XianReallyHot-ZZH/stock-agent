@@ -22,6 +22,8 @@ import pandas as pd
 from .. import stop as stop_mod
 from ._common import build_frame
 
+STICKY = True  # V2.8: sticky positions (hold until DISTRIBUTING, don't rotate on rank change)
+
 SHARE_PARAMS = {
     "roc_short_days": 20,
     "roc_mid_days": 60,

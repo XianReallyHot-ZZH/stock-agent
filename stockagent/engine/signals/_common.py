@@ -18,12 +18,18 @@ def build_frame(rows: list[dict]) -> pd.DataFrame:
     return df
 
 
-def select_top_k(scored: pd.DataFrame, k: int) -> list[str]:
-    """Top-k eligible symbols by score (equal weight downstream)."""
+def select_top_k(scored: pd.DataFrame, k: int, held: set | None = None) -> list[str]:
+    """Top-k eligible symbols by score. If held provided, sticky: keep held+eligible first,
+    then fill remaining slots with highest-scored non-held."""
     if len(scored) == 0:
         return []
     elig = scored[scored["eligible"]].copy() if "eligible" in scored.columns else scored.copy()
     if len(elig) == 0:
         return []
-    elig = elig.sort_values("score", ascending=False, na_position="last").head(k)
-    return elig["symbol"].tolist()
+    elig = elig.sort_values("score", ascending=False, na_position="last")
+    if held:
+        held_elig = elig[elig["symbol"].isin(held)]
+        non_held = elig[~elig["symbol"].isin(held)]
+        picks = list(held_elig["symbol"][:k]) + list(non_held["symbol"][:k - len(held_elig)])
+        return picks[:k]
+    return elig.head(k)["symbol"].tolist()
