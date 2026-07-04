@@ -109,41 +109,73 @@ MOMENTUM = [
     ("pure60",  [60],  [1.0]),
     ("pure120", [120], [1.0]),
 ]
+# V2.1 reversion signal sub-grid (expand freely).
+REVERSION_GRID = {
+    ("portfolio", "k"): [3, 5],
+    ("regime", "ma_period"): [120, 200],
+    ("stop", "trailing_pct"): [0.08],
+    ("rotation", "reversion", "rsi_period"): [14],
+    ("rotation", "reversion", "oversold_threshold"): [30, 40],
+    ("rotation", "reversion", "long_ma"): [120, 250],
+}
+MOM_BY_NAME = {name: (wins, wts) for name, wins, wts in MOMENTUM}
+
+_ROW_COLS = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "windows",
+             "rsi_period", "oversold", "long_ma",
+             "ann", "mdd", "calmar", "sharpe", "turnover", "gate_pass"]
+
+
+def _run_one(store, base, overrides, start, end, signal, extra):
+    cfg = make_config(base, overrides)
+    res = run_backtest(store, cfg, start=start, end=end)
+    m, g = res.metrics, res.gate
+    row = {c: None for c in _ROW_COLS}
+    row.update({
+        "signal": signal,
+        "K": overrides[("portfolio", "k")],
+        "regime_ma": overrides[("regime", "ma_period")],
+        "stop%": overrides[("stop", "trailing_pct")],
+        "ann": m["annualized"], "mdd": m["max_drawdown"],
+        "calmar": m["calmar"], "sharpe": m["sharpe"],
+        "turnover": m["annual_turnover"], "gate_pass": g["pass"],
+    })
+    row.update(extra)
+    return row
 
 
 def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = True) -> pd.DataFrame:
-    """Run the full param grid x momentum presets over [start,end]. Returns ranked DataFrame."""
-    keys = list(GRID.keys())
-    base_combos = list(itertools.product(*[GRID[k] for k in keys]))
-    total = len(base_combos) * len(MOMENTUM)
-    if verbose:
-        print(f"Sweeping {total} combos over {start}..{end}")
+    """Run BOTH signals' param grids over [start,end]. Returns ranked DataFrame with a `signal` column."""
     rows = []
-    i = 0
-    for vals in base_combos:
+    # --- momentum combos ---
+    mkeys = list(GRID.keys())
+    mcombos = list(itertools.product(*[GRID[k] for k in mkeys]))
+    for vals in mcombos:
         for mname, wins, wts in MOMENTUM:
-            i += 1
-            overrides = dict(zip(keys, vals))
+            overrides = dict(zip(mkeys, vals))
+            overrides[("rotation", "signal", "name")] = "momentum"
             overrides[("rotation", "momentum", "windows")] = wins
             overrides[("rotation", "momentum", "weights")] = wts
-            cfg = make_config(base, overrides)
+            extra = {"gate_ma": overrides[("rotation", "trend_gate_ma")],
+                     "momentum": mname, "windows": str(wins)}
             try:
-                res = run_backtest(store, cfg, start=start, end=end)
-                m = res.metrics
-                g = res.gate
-                rows.append({
-                    "K": overrides[("portfolio", "k")],
-                    "regime_ma": overrides[("regime", "ma_period")],
-                    "stop%": overrides[("stop", "trailing_pct")],
-                    "gate_ma": overrides[("rotation", "trend_gate_ma")],
-                    "momentum": mname,
-                    "windows": str(wins),
-                    "ann": m["annualized"], "mdd": m["max_drawdown"],
-                    "calmar": m["calmar"], "sharpe": m["sharpe"],
-                    "turnover": m["annual_turnover"], "gate_pass": g["pass"],
-                })
-            except Exception:  # noqa: BLE001
+                rows.append(_run_one(store, base, overrides, start, end, "momentum", extra))
+            except Exception:
                 continue
+    # --- reversion combos ---
+    rkeys = list(REVERSION_GRID.keys())
+    rcombos = list(itertools.product(*[REVERSION_GRID[k] for k in rkeys]))
+    for vals in rcombos:
+        overrides = dict(zip(rkeys, vals))
+        overrides[("rotation", "signal", "name")] = "reversion"
+        extra = {"rsi_period": overrides[("rotation", "reversion", "rsi_period")],
+                 "oversold": overrides[("rotation", "reversion", "oversold_threshold")],
+                 "long_ma": overrides[("rotation", "reversion", "long_ma")]}
+        try:
+            rows.append(_run_one(store, base, overrides, start, end, "reversion", extra))
+        except Exception:
+            continue
+    if verbose:
+        print(f"Evaluated {len(rows)} combos ({len(mcombos)*len(MOMENTUM)} momentum + {len(rcombos)} reversion) over {start}..{end}")
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows).sort_values(["gate_pass", "calmar"], ascending=[False, False]).reset_index(drop=True)
@@ -168,12 +200,18 @@ def main():
     df = evaluate_grid(store, base, args.start, args.end, verbose=True)
     out = Path("data/sweep_results.csv")
     df.to_csv(out, index=False)
+    show = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "rsi_period", "oversold", "long_ma",
+            "ann", "mdd", "calmar", "sharpe", "gate_pass"]
     print("\n=== TOP 10 by gate-pass then Calmar ===")
-    print(df.head(10).to_string(index=False))
-    print("\n=== best Calmar per momentum preset ===")
-    print(df.sort_values("calmar", ascending=False).drop_duplicates("momentum").to_string(index=False))
+    print(df[show].head(10).to_string(index=False))
+    print("\n=== best per signal (by Calmar) ===")
+    for sig in ("momentum", "reversion"):
+        sub = df[df["signal"] == sig]
+        if len(sub):
+            print(f"  [{sig}] {dict(sub.sort_values('calmar', ascending=False).iloc[0][show])}")
     n_pass = int(df["gate_pass"].sum())
-    print(f"\n{n_pass}/{len(df)} combos PASS the decision gate.")
+    by_sig = df.groupby("signal")["gate_pass"].sum().to_dict() if len(df) else {}
+    print(f"\n{n_pass}/{len(df)} combos PASS the decision gate. per-signal: {by_sig}")
     print(f"full results -> {out}")
 
 

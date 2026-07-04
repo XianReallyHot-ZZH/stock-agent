@@ -47,3 +47,24 @@ def test_momentum_score_weighted():
 
 def test_momentum_short_history_nan():
     assert np.isnan(ind.momentum_score(s([1, 2, 3]), [20, 60, 120], [0.2, 0.3, 0.5]))
+
+
+def test_rsi_all_up_is_100():
+    close = pd.Series(np.linspace(10, 50, 30), dtype=float)
+    assert ind.rsi(close, 14) == 100.0
+
+
+def test_rsi_all_down_is_0():
+    close = pd.Series(np.linspace(50, 10, 30), dtype=float)
+    assert ind.rsi(close, 14) == 0.0
+
+
+def test_rsi_short_history_nan():
+    assert np.isnan(ind.rsi(s([1, 2, 3, 4]), 14))
+
+
+def test_rsi_mixed_in_range():
+    rng = np.random.default_rng(42)
+    close = pd.Series(100 + np.cumsum(rng.normal(0, 1, 60)), dtype=float)
+    val = ind.rsi(close, 14)
+    assert 0.0 < val < 100.0

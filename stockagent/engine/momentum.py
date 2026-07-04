@@ -51,9 +51,9 @@ def score_universe(close_by_symbol: dict[str, pd.Series], params: dict) -> pd.Da
 
 
 def select_top_k(scored: pd.DataFrame, k: int) -> list[str]:
-    """Top-K eligible symbols (equal weight downstream)."""
-    elig = scored[scored["eligible"]].copy() if len(scored) else scored
-    if len(elig) == 0:
-        return []
-    elig = elig.sort_values("score", ascending=False).head(k)
-    return elig["symbol"].tolist()
+    """Top-K eligible symbols (delegates to signals._common; kept for API compat)."""
+    from .signals._common import select_top_k as _stk
+    return _stk(scored, k)
+
+
+__all__ = ["passes_trend_gate", "score_symbol", "score_universe", "select_top_k"]

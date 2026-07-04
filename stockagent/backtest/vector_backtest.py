@@ -21,10 +21,10 @@ import pandas as pd
 
 from ..config import Config, get_config
 from ..data import Store
-from ..engine import momentum as mom
 from ..engine import stop as stop_mod
 from ..engine.portfolio import decide_target
 from ..engine.regime import RISK_OFF, RISK_ON, regime_state
+from ..engine.signals import current_signal
 from . import metrics as M
 
 log = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ def run_backtest(
             # rotation only on the chosen weekday
             if dt.dayofweek == rebal_dow:
                 close_slice = {s: closes[s].loc[:d].dropna() for s in rot_syms}
-                scored = mom.score_universe(close_slice, p)
+                scored = current_signal(p).score_universe(close_slice, p)
                 plan = decide_target(scored, RISK_ON, p, risk_off, stopped=forced_sells)
                 eq_ref = eq
                 for sym, w in plan.target.items():

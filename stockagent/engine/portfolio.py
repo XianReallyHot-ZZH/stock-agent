@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from . import momentum as mom
 from .regime import RISK_OFF, RISK_ON
+from .signals._common import select_top_k
 
 
 @dataclass
@@ -41,7 +41,7 @@ def decide_target(
         plan.target = {risk_off_symbol: 1.0}
         plan.cash_weight = 1.0
     else:
-        picks = mom.select_top_k(scored, k)
+        picks = select_top_k(scored, k)
         plan.picks = picks
         if not picks:
             plan.target = {risk_off_symbol: 1.0}  # nothing eligible -> cash

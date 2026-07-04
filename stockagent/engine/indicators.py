@@ -63,3 +63,28 @@ def momentum_score(close: pd.Series, windows: list[int], weights: list[float]) -
     if wsum == 0:
         return np.nan
     return total / wsum  # renormalize in case some windows were unavailable
+
+
+def rsi(close: pd.Series, period: int) -> float:
+    """Wilders RSI at the last bar, in [0, 100]. NaN if series too short.
+
+    Standard Wilders smoothing: seed avg gain/loss with the simple mean of the
+    first `period` changes, then exponentially smooth with alpha = 1/period.
+    """
+    if close is None or len(close) < period + 1:
+        return np.nan
+    s = close.astype(float).reset_index(drop=True)
+    delta = s.diff().dropna()  # length len(close)-1
+    if len(delta) < period:
+        return np.nan
+    gain = delta.clip(lower=0.0).to_numpy()
+    loss = (-delta.clip(upper=0.0)).to_numpy()
+    avg_gain = float(gain[:period].mean())
+    avg_loss = float(loss[:period].mean())
+    for i in range(period, len(delta)):
+        avg_gain = (avg_gain * (period - 1) + float(gain[i])) / period
+        avg_loss = (avg_loss * (period - 1) + float(loss[i])) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return float(100.0 - 100.0 / (1.0 + rs))

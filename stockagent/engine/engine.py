@@ -16,6 +16,7 @@ from . import momentum as mom
 from . import stop as stop_mod
 from .portfolio import TargetPlan, decide_target, diff
 from .regime import regime_state
+from .signals import current_signal
 
 
 class Engine:
@@ -57,9 +58,9 @@ class Engine:
         bench_ma = float(bench_close.tail(self.regime_ma).mean()) if len(bench_close) >= self.regime_ma else float("nan")
         bench_last = float(bench_close.iloc[-1]) if len(bench_close) else float("nan")
 
-        # 2) rotation scores
+        # 2) rotation scores (V2.1: pluggable signal — momentum or reversion)
         close_by_sym = {s: self._close(s, decision_date) for s in self.config.rotation_symbols()}
-        scored = mom.score_universe(close_by_sym, params)
+        scored = current_signal(params).score_universe(close_by_sym, params)
 
         # 3) stops on current holdings (daily protection layer)
         stopped = []
@@ -100,7 +101,7 @@ class Engine:
                 "ma": round(bench_ma, 4),
                 "above_ma": bool(bench_last > bench_ma) if not pd.isna(bench_ma) else None,
             },
-            "ranking": scored[["symbol", "score", "above_ma", "eligible"]].to_dict("records"),
+            "ranking": scored[["symbol", "score", "eligible"]].to_dict("records"),
             "top_k": plan.picks,
             "target": plan.target,
             "cash_weight": round(plan.cash_weight, 4),

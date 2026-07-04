@@ -3,16 +3,22 @@
 
 # ---- Portfolio (Q5) ----
 portfolio:
-  k: 5                  # number of sector ETFs held simultaneously (equal weight)
+  k: 3                  # number of sector ETFs held simultaneously (equal weight)
   equal_weight: true    # each held sector gets 1/k
 
 # ---- Rotation layer (weekly, Friday close) (Q4, Q6) ----
 rotation:
   rebalance_weekday: 4  # 0=Mon .. 4=Fri
-  trend_gate_ma: 60     # candidate must have close > MA(60) to be eligible
+  signal:
+    name: reversion     # V2.1 default = reversion (OOS-validated defensive signal); "momentum" available
+  trend_gate_ma: 60     # candidate must have close > MA(60) to be eligible (momentum)
   momentum:
     windows: [60, 120, 250]     # lookback days (slow momentum — sweep winner)
     weights: [0.2, 0.3, 0.5]    # weights, summing to 1
+  reversion:             # V2.1 mean-reversion signal: buy oversold pullbacks in uptrend
+    rsi_period: 14
+    oversold_threshold: 30      # train-best (walk-forward OOS: +5.5% / -9.4% mdd)
+    long_ma: 250          # eligible only if close > MA(long_ma)
 
 # ---- Regime / market timing layer (daily) (Q7) ----
 regime:

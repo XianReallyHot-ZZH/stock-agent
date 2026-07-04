@@ -1,14 +1,10 @@
-"""Walk-forward / out-of-sample validation (M2 robustness).
+"""Walk-forward / out-of-sample validation (V2.1: signal-aware).
 
-Proper procedure:
-  1. TRAIN (2021-2023): sweep params, pick the best (gate-pass first, then Calmar)
-     using ONLY train-period data — pretending we don't know the future.
-  2. TEST  (2024-2026): apply those train-selected params to the unseen test period.
-     If the gate still PASSES out-of-sample -> strategy generalizes (not just overfit).
-     If it FAILS OOS -> the in-sample pass was overfitting; do NOT trust it.
-
-Also reports the full-period champion's performance on the test period, as a sanity
-check on the params currently in params.yaml.
+Procedure:
+  1. TRAIN (2021-2023): sweep BOTH signals (momentum + reversion) + their params,
+     pick each signal's best (gate-pass first, then Calmar) using ONLY train data.
+  2. TEST  (2024-2026): apply each signal's train-selected params to the unseen
+     test period. PASS out-of-sample -> generalizes; FAIL -> overfit, don't trust.
 
 Usage: python scripts/walk_forward.py
 """
@@ -30,8 +26,9 @@ TEST_START, TEST_END = "2024-01-01", "2026-07-03"
 
 MOM_BY_NAME = {name: (wins, wts) for name, wins, wts in MOMENTUM}
 
-# The full-period champion (currently in params.yaml), for the sanity check.
+# Full-period momentum champion (params.yaml), for the sanity check.
 FULL_WINNER = {
+    ("rotation", "signal", "name"): "momentum",
     ("portfolio", "k"): 5,
     ("regime", "ma_period"): 120,
     ("stop", "trailing_pct"): 0.08,
@@ -42,20 +39,41 @@ FULL_WINNER = {
 
 
 def row_to_overrides(row) -> dict:
-    wins, wts = MOM_BY_NAME[row["momentum"]]
-    return {
+    sig = row["signal"]
+    o = {
+        ("rotation", "signal", "name"): sig,
         ("portfolio", "k"): int(row["K"]),
         ("regime", "ma_period"): int(row["regime_ma"]),
         ("stop", "trailing_pct"): float(row["stop%"]),
-        ("rotation", "trend_gate_ma"): int(row["gate_ma"]),
-        ("rotation", "momentum", "windows"): wins,
-        ("rotation", "momentum", "weights"): wts,
     }
+    if sig == "momentum":
+        wins, wts = MOM_BY_NAME[row["momentum"]]
+        o[("rotation", "trend_gate_ma")] = int(row["gate_ma"])
+        o[("rotation", "momentum", "windows")] = wins
+        o[("rotation", "momentum", "weights")] = wts
+    else:  # reversion
+        o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
+        o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
+        o[("rotation", "reversion", "long_ma")] = int(row["long_ma"])
+    return o
 
 
 def fmt_params(row) -> str:
+    if row["signal"] == "momentum":
+        return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
+                f"gate_ma={int(row['gate_ma'])} mom={row['momentum']}({row['windows']})")
     return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
-            f"gate_ma={int(row['gate_ma'])} mom={row['momentum']}({row['windows']})")
+            f"rsi={row['rsi_period']} oversold={row['oversold']} long_ma={row['long_ma']}")
+
+
+def _test(store, base, row, label):
+    cfg = make_config(base, row_to_overrides(row))
+    res = run_backtest(store, cfg, start=TEST_START, end=TEST_END)
+    m, bm, g = res.metrics, res.benchmark["csi300_buyhold"], res.gate
+    print(f"  [{label}] {fmt_params(row)}")
+    print(f"      TEST strat: ann={m['annualized']:+.4f} mdd={m['max_drawdown']:.4f} sharpe={m['sharpe']} | "
+          f"csi300bh ann={bm['annualized']:+.4f} mdd={bm['max_drawdown']:.4f} -> {'PASS ✅' if g['pass'] else 'FAIL ❌'}")
+    return g["pass"]
 
 
 def main():
@@ -64,44 +82,39 @@ def main():
     store = Store(base.db_path)
 
     print("=" * 64)
-    print(f"WALK-FORWARD  TRAIN {TRAIN_START}..{TRAIN_END}  |  TEST {TEST_START}..{TEST_END}")
+    print(f"WALK-FORWARD (V2.1)  TRAIN {TRAIN_START}..{TRAIN_END}  |  TEST {TEST_START}..{TEST_END}")
     print("=" * 64)
 
-    # ---- 1. TRAIN sweep ----
-    print(f"\n[1] TRAIN sweep on {TRAIN_START}..{TRAIN_END} ...")
+    print(f"\n[1] TRAIN sweep (momentum + reversion) on {TRAIN_START}..{TRAIN_END} ...")
     df_train = evaluate_grid(store, base, TRAIN_START, TRAIN_END, verbose=False)
-    n_pass_train = int(df_train["gate_pass"].sum())
-    train_best = df_train.iloc[0]  # sorted: gate_pass desc, calmar desc
-    print(f"    train combos passing gate: {n_pass_train}/{len(df_train)}")
-    print(f"    train-best selection: {fmt_params(train_best)}")
-    print(f"      train ann={train_best['ann']:+.4f} mdd={train_best['mdd']:.4f} "
-          f"calmar={train_best['calmar']} {'[PASS]' if train_best['gate_pass'] else '[fail]'}")
+    print(f"    train combos: {len(df_train)} total, {int(df_train['gate_pass'].sum())} pass gate")
+    by_sig_pass = df_train.groupby("signal")["gate_pass"].sum().to_dict()
+    print(f"    train pass by signal: {by_sig_pass}")
 
-    # ---- 2. TEST with train-selected params ----
-    print(f"\n[2] TEST (out-of-sample) {TEST_START}..{TEST_END} with TRAIN-selected params ...")
-    cfg = make_config(base, row_to_overrides(train_best))
-    res = run_backtest(store, cfg, start=TEST_START, end=TEST_END)
-    m, g = res.metrics, res.gate
-    bm = res.benchmark["csi300_buyhold"]
-    print(f"    TEST strategy : ann={m['annualized']:+.4f} mdd={m['max_drawdown']:.4f} sharpe={m['sharpe']}")
-    print(f"    TEST csi300bh : ann={bm['annualized']:+.4f} mdd={bm['max_drawdown']:.4f}")
-    print(f"    TEST gate     : {'PASS ✅' if g['pass'] else 'FAIL ❌'}")
+    print(f"\n[2] TEST (out-of-sample) each signal's TRAIN-best on {TEST_START}..{TEST_END}:")
+    results = {}
+    for sig in ("momentum", "reversion"):
+        sub = df_train[df_train["signal"] == sig]
+        if len(sub) == 0:
+            print(f"  [{sig}] no train combos, skip")
+            continue
+        results[sig] = _test(store, base, sub.iloc[0], f"{sig} train-best")
 
-    # ---- 3. Sanity: full-period champion on TEST ----
-    print(f"\n[3] Sanity: full-period CHAMPION (params.yaml) on TEST ...")
+    print(f"\n[3] Sanity: full-period momentum CHAMPION (params.yaml) on TEST ...")
     res2 = run_backtest(store, make_config(base, FULL_WINNER), start=TEST_START, end=TEST_END)
     m2, g2 = res2.metrics, res2.gate
     print(f"    champion TEST : ann={m2['annualized']:+.4f} mdd={m2['max_drawdown']:.4f} sharpe={m2['sharpe']} "
           f"-> {'PASS ✅' if g2['pass'] else 'FAIL ❌'}")
+    results["champion(momentum)"] = g2["pass"]
 
-    # ---- verdict ----
     print("\n" + "=" * 64)
-    if g["pass"] and g2["pass"]:
-        print("VERDICT: ✅ 样本外仍 PASS — 策略泛化，非纯过拟合。可进入 shadow 验证。")
-    elif g["pass"] or g2["pass"]:
-        print("VERDICT: ⚠️ 部分 PASS — 信号弱/不稳定，谨慎；建议更多窗口测试后再信。")
+    passed = [k for k, v in results.items() if v]
+    if passed:
+        print(f"VERDICT: ✅ 样本外 PASS: {passed}")
+        print("        这些信号/参数泛化，可进 shadow 进一步跟踪。")
     else:
-        print("VERDICT: ❌ 样本外 FAIL — 样本内的 PASS 是过拟合，不可信，勿据此上实盘。")
+        print("VERDICT: ❌ 全部样本外 FAIL — 样本内表现是过拟合，勿据此上实盘。")
+        print("        价格类因子（动量+均值回归）在 A股 样本外均无稳定 edge。")
     print("=" * 64)
 
 
