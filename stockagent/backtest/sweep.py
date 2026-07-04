@@ -187,6 +187,8 @@ def row_to_overrides(row) -> dict:
         o[("rotation", "bb_macd", "long_ma")] = int(row["bb_long_ma"])
     elif sig == "share_flow":
         o[("rotation", "share_flow", "accum_threshold")] = float(row["accum_thr"])
+    elif sig == "momentum_sf":
+        o[("rotation", "share_flow", "accum_threshold")] = float(row["accum_thr"])
     else:  # reversion
         o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
         o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
@@ -248,19 +250,43 @@ def evaluate_bb_macd(store, base: Config, start: str, end: str) -> pd.DataFrame:
     return _ranked(rows)
 
 
+MOMENTUM_SF_GRID = {
+    ("portfolio", "k"): [3, 5],
+    ("regime", "ma_period"): [120, 200],
+    ("stop", "trailing_pct"): [0.08],
+    ("rotation", "share_flow", "accum_threshold"): [0.01, 0.02, 0.05],
+}
+
+
+def evaluate_momentum_sf(store, base: Config, start: str, end: str) -> pd.DataFrame:
+    """Sweep ONLY the momentum_sf combo signal's grid."""
+    rows = []
+    bkeys = list(MOMENTUM_SF_GRID.keys())
+    for vals in itertools.product(*[MOMENTUM_SF_GRID[k] for k in bkeys]):
+        overrides = dict(zip(bkeys, vals))
+        overrides[("rotation", "signal", "name")] = "momentum_sf"
+        extra = {"accum_thr": overrides[("rotation", "share_flow", "accum_threshold")]}
+        try:
+            rows.append(_run_one(store, base, overrides, start, end, "momentum_sf", extra))
+        except Exception:
+            continue
+    return _ranked(rows)
+
+
 def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = True) -> pd.DataFrame:
     """Run ALL signals' param grids over [start,end]. Returns ranked DataFrame with a `signal` column."""
     df_m = evaluate_momentum(store, base, start, end)
     df_r = evaluate_reversion(store, base, start, end)
     df_b = evaluate_bb_macd(store, base, start, end)
     df_s = evaluate_share_flow(store, base, start, end)
-    frames = [d for d in (df_m, df_r, df_b, df_s) if len(d)]
+    df_ms = evaluate_momentum_sf(store, base, start, end)
+    frames = [d for d in (df_m, df_r, df_b, df_s, df_ms) if len(d)]
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if len(df):
         df = df.sort_values(["gate_pass", "calmar"], ascending=[False, False]).reset_index(drop=True)
     if verbose:
-        nm, nr, nb, ns = len(df_m), len(df_r), len(df_b), len(df_s)
-        print(f"Evaluated {nm+nr+nb+ns} combos ({nm} momentum + {nr} reversion + {nb} bb_macd + {ns} share_flow) over {start}..{end}")
+        nm, nr, nb, ns, nms = len(df_m), len(df_r), len(df_b), len(df_s), len(df_ms)
+        print(f"Evaluated {nm+nr+nb+ns+nms} combos ({nm} mom + {nr} rev + {nb} bb_macd + {ns} sf + {nms} mom_sf) over {start}..{end}")
     return df
 
 

@@ -9,7 +9,7 @@ momentum at module-load time.
 """
 from __future__ import annotations
 
-SIGNAL_NAMES = ["momentum", "reversion", "bb_macd", "share_flow"]
+SIGNAL_NAMES = ["momentum", "reversion", "bb_macd", "share_flow", "momentum_sf"]
 
 
 def get_signal(name: str):
@@ -27,6 +27,9 @@ def get_signal(name: str):
     if name == "share_flow":
         from . import share_flow
         return share_flow
+    if name == "momentum_sf":
+        from . import momentum_sf
+        return momentum_sf
     raise ValueError(f"unknown signal '{name}'; available: {SIGNAL_NAMES}")
 
 
