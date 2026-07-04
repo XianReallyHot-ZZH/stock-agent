@@ -120,27 +120,53 @@ class DataManager:
 
     # ---- etf scale / shares (V2.3) ----
     def update_etf_scale(self) -> int:
-        """Daily: store today's ETF shares + premium for all pool symbols (via spot).
-        Covers SSE + SZSE; forward-accumulates history. Idempotent + degrades gracefully."""
+        """Daily: store today's ETF shares (基金份额) for all pool symbols.
+
+        Uses fund_etf_scale_sse (基金份额, same metric as backfill) for SSE ETFs.
+        Falls back to fund_etf_spot_em (流通份额) only for SZSE ETFs not in SSE data.
+        This ensures metric consistency across the entire etf_scale table.
+        """
         today = fetcher.today_str()
-        try:
-            spot = fetcher.fetch_etf_spot_premium()
-        except Exception as e:  # noqa: BLE001
-            log.warning("etf_scale spot fetch failed: %s", str(e)[:120])
-            return 0
         pool = set(self.config.all_symbols())
-        rows = []
-        for _, r in spot.iterrows():
-            code = str(r["code"])
-            if code not in pool:
-                continue
-            sh = r.get("shares")
-            if pd.notna(sh):
-                prem = r.get("premium")
-                rows.append((code, today, float(sh), float(prem) if pd.notna(prem) else None))
-        n = self.store.upsert_scale(rows, source="spot")
+
+        # primary: SSE 基金份额 (same metric as backfill)
+        sse_rows = []
+        try:
+            sse_df = fetcher.fetch_etf_scale_sse(today.replace("-", ""))
+            for _, r in sse_df.iterrows():
+                sym = str(r["symbol"])
+                if sym not in pool:
+                    continue
+                sh = r.get("shares")
+                if pd.notna(sh):
+                    sse_rows.append((sym, today, float(sh), None))
+        except Exception as e:  # noqa: BLE001
+            log.warning("etf_scale SSE fetch failed: %s", str(e)[:120])
+
+        sse_syms = {r[0] for r in sse_rows}
+        n = self.store.upsert_scale(sse_rows, source="sse_daily")
+
+        # fallback: SZSE ETFs not in SSE (use spot 流通份额, best available)
+        szse_missing = {s for s in pool if s.startswith("1") and s not in sse_syms}
+        if szse_missing:
+            try:
+                spot = fetcher.fetch_etf_spot_premium()
+                spot_rows = []
+                for _, r in spot.iterrows():
+                    code = str(r["code"])
+                    if code not in szse_missing:
+                        continue
+                    sh = r.get("shares")
+                    if pd.notna(sh):
+                        prem = r.get("premium")
+                        spot_rows.append((code, today, float(sh), float(prem) if pd.notna(prem) else None))
+                n += self.store.upsert_scale(spot_rows, source="spot_szse")
+                log.info("etf_scale SZSE fallback: +%d rows (流通份额, metric differs)", len(spot_rows))
+            except Exception as e:  # noqa: BLE001
+                log.warning("etf_scale SZSE fallback failed: %s", str(e)[:120])
+
         self.store.set_meta("last_scale_update", today)
-        log.info("etf_scale updated: +%d rows (to %s)", n, today)
+        log.info("etf_scale updated: +%d rows (to %s, primary=SSE 基金份额)", n, today)
         return n
 
     def backfill_etf_scale(self, start: str, end: str, step_days: int = 1) -> int:
