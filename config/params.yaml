@@ -29,10 +29,12 @@ rotation:
     pctb_high: 1.0        # trend mode: %B threshold (near/above upper band)
     long_ma: 250          # eligible only if close > MA(long_ma)
     mode: both            # dip | trend | both
-  share_flow:            # V2.3 smart-money signal: rank by ETF share trend (机构申赎)
-    trend_days: 60        # share change lookback (monthly trend suppresses arb noise)
-    long_ma: 120          # price trend gate: close > MA(long_ma)
-    min_share_change: 0.0 # eligible only if share_change > this (0 = any net creation)
+  share_flow:            # V2.4 pure-flow signal: rank by ETF share trend, flow-based exit
+    trend_days: 60        # share change lookback for entry scoring
+    min_share_change: 0.0 # eligible only if share_change > this (net inflow)
+    flow_stop_pct: 0.10   # exit: smoothed shares drop this much from peak = 机构 redeeming
+    price_backstop: 0.20  # exit: price drops this much from peak = tail-risk backstop
+    smooth_window: 20     # shares smoothing (rolling mean) to suppress daily noise
 
 # ---- Regime / market timing layer (daily) (Q7) ----
 regime:

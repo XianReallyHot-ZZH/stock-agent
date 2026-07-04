@@ -133,14 +133,14 @@ SHARE_FLOW_GRID = {
     ("stop", "trailing_pct"): [0.08],
     ("rotation", "share_flow", "trend_days"): [40, 60, 120],
     ("rotation", "share_flow", "min_share_change"): [0.0, 0.05],
-    ("rotation", "share_flow", "long_ma"): [120, 250],
+    ("rotation", "share_flow", "flow_stop_pct"): [0.05, 0.10, 0.20],
 }
 MOM_BY_NAME = {name: (wins, wts) for name, wins, wts in MOMENTUM}
 
 _ROW_COLS = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "windows",
              "rsi_period", "oversold", "long_ma",
              "bb_mode", "pctb_low", "pctb_high", "bb_long_ma",
-             "share_trend", "share_min_chg", "share_long_ma",
+             "share_trend", "share_min_chg", "flow_stop",
              "ann", "mdd", "calmar", "sharpe", "turnover", "gate_pass"]
 
 
@@ -190,7 +190,7 @@ def row_to_overrides(row) -> dict:
     elif sig == "share_flow":
         o[("rotation", "share_flow", "trend_days")] = int(row["share_trend"])
         o[("rotation", "share_flow", "min_share_change")] = float(row["share_min_chg"])
-        o[("rotation", "share_flow", "long_ma")] = int(row["share_long_ma"])
+        o[("rotation", "share_flow", "flow_stop_pct")] = float(row["flow_stop"])
     else:  # reversion
         o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
         o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
@@ -277,7 +277,7 @@ def evaluate_share_flow(store, base: Config, start: str, end: str) -> pd.DataFra
         overrides[("rotation", "signal", "name")] = "share_flow"
         extra = {"share_trend": overrides[("rotation", "share_flow", "trend_days")],
                  "share_min_chg": overrides[("rotation", "share_flow", "min_share_change")],
-                 "share_long_ma": overrides[("rotation", "share_flow", "long_ma")]}
+                 "flow_stop": overrides[("rotation", "share_flow", "flow_stop_pct")]}
         try:
             rows.append(_run_one(store, base, overrides, start, end, "share_flow", extra))
         except Exception:

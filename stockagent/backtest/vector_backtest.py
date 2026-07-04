@@ -77,6 +77,7 @@ def run_backtest(
     k = int(p["portfolio"]["k"])
     regime_ma = int(p["regime"]["ma_period"])
     stop_pct = float(p["stop"]["trailing_pct"])
+    sig = current_signal(p)  # V2.4: resolve once for signal-specific exits
     rebal_dow = int(p["rotation"].get("rebalance_weekday", 4))
     cost = float(p["backtest"]["single_side_cost"])
 
@@ -148,16 +149,30 @@ def run_backtest(
         regime = regime_state(bench_close, regime_ma)
 
         forced_sells = []
-        # stops on holdings (daily), skip same-day entries (T+1)
-        for sym in list(shares.keys()):
-            if shares.get(sym, 0) <= 0 or sym == risk_off:
-                continue
-            ed = entry_date.get(sym)
-            if not ed or ed >= d:
-                continue  # bought today or unknown -> T+1, can't stop yet
-            cs = closes[sym].loc[ed:d].dropna()
-            if len(cs) and stop_mod.stop_triggered(cs, stop_pct):
-                forced_sells.append(sym)
+        # V2.4: signal-specific exit via check_exits; fallback to price stop.
+        if hasattr(sig, "check_exits"):
+            positions = {
+                sym: {"entry_date": entry_date[sym]}
+                for sym in list(shares.keys())
+                if shares.get(sym, 0) > 0 and sym != risk_off
+                and entry_date.get(sym) and entry_date[sym] < d
+            }
+            ctx_stop = {
+                "close": {sym: closes[sym].loc[:d] for sym in positions if sym in closes.columns},
+                "share": {sym: shares_wide[sym].loc[:d] for sym in positions if sym in shares_wide.columns},
+            }
+            forced_sells = sig.check_exits(positions, ctx_stop, p)
+        else:
+            # stops on holdings (daily), skip same-day entries (T+1)
+            for sym in list(shares.keys()):
+                if shares.get(sym, 0) <= 0 or sym == risk_off:
+                    continue
+                ed = entry_date.get(sym)
+                if not ed or ed >= d:
+                    continue  # bought today or unknown -> T+1, can't stop yet
+                cs = closes[sym].loc[ed:d].dropna()
+                if len(cs) and stop_mod.stop_triggered(cs, stop_pct):
+                    forced_sells.append(sym)
 
         if regime == RISK_OFF:
             # liquidate everything to cash
@@ -173,7 +188,7 @@ def run_backtest(
             if dt.dayofweek == rebal_dow:
                 close_slice = {s: closes[s].loc[:d].dropna() for s in rot_syms}
                 share_slice = {s: shares_wide[s].loc[:d].dropna() for s in rot_syms if s in shares_wide.columns}
-                scored = current_signal(p).score_universe(close_slice, p, ctx={"share": share_slice})
+                scored = sig.score_universe(close_slice, p, ctx={"share": share_slice})
                 plan = decide_target(scored, RISK_ON, p, risk_off, stopped=forced_sells)
                 eq_ref = eq
                 for sym, w in plan.target.items():

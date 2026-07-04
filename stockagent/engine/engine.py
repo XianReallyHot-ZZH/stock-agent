@@ -64,28 +64,51 @@ class Engine:
         for s in self.config.rotation_symbols():
             sc = self.store.get_scale_series(s, end=decision_date)
             share_by_sym[s] = sc["shares"] if "shares" in sc.columns else pd.Series(dtype=float)
-        ctx = {"share": share_by_sym}
+        ctx = {"share": share_by_sym, "close": close_by_sym}
         scored = current_signal(params).score_universe(close_by_sym, params, ctx=ctx)
 
         # 3) stops on current holdings (daily protection layer)
+        # V2.4: signal-specific exit via check_exits (share_flow uses flow-stop);
+        # other signals fall back to price trailing_pct stop.
+        sig = current_signal(params)
         stopped = []
         stop_warnings = []
-        for sym, info in current_holdings.items():
-            if sym in (self.risk_off, self.benchmark):
-                continue
-            entry = info.get("entry_date") if isinstance(info, dict) else None
-            if not entry:
-                continue
-            cs = self._close_since(sym, entry, decision_date)
-            if len(cs) == 0:
-                continue
-            peak = stop_mod.peak_since_entry(cs)
-            last = float(cs.iloc[-1])
-            dd = (last / peak - 1.0) if peak > 0 else 0.0
-            if stop_mod.stop_triggered(cs, self.stop_pct):
-                stopped.append(sym)
-            elif dd <= -(self.stop_pct - 0.02):  # within 2pp of stop -> warn
-                stop_warnings.append({"symbol": sym, "drawdown_from_peak": round(dd, 4)})
+        if hasattr(sig, "check_exits"):
+            stopped = sig.check_exits(current_holdings, ctx, params)
+            # warnings: compute near-flow-stop for reporting (best-effort)
+            for sym, info in current_holdings.items():
+                if sym in stopped:
+                    continue
+                if sym in (self.risk_off, self.benchmark):
+                    continue
+                entry = info.get("entry_date") if isinstance(info, dict) else None
+                if not entry:
+                    continue
+                cs = self._close_since(sym, entry, decision_date)
+                if len(cs) == 0:
+                    continue
+                peak = stop_mod.peak_since_entry(cs)
+                last = float(cs.iloc[-1])
+                dd = (last / peak - 1.0) if peak > 0 else 0.0
+                if dd <= -(0.20 - 0.02):  # near price backstop
+                    stop_warnings.append({"symbol": sym, "drawdown_from_peak": round(dd, 4)})
+        else:
+            for sym, info in current_holdings.items():
+                if sym in (self.risk_off, self.benchmark):
+                    continue
+                entry = info.get("entry_date") if isinstance(info, dict) else None
+                if not entry:
+                    continue
+                cs = self._close_since(sym, entry, decision_date)
+                if len(cs) == 0:
+                    continue
+                peak = stop_mod.peak_since_entry(cs)
+                last = float(cs.iloc[-1])
+                dd = (last / peak - 1.0) if peak > 0 else 0.0
+                if stop_mod.stop_triggered(cs, self.stop_pct):
+                    stopped.append(sym)
+                elif dd <= -(self.stop_pct - 0.02):
+                    stop_warnings.append({"symbol": sym, "drawdown_from_peak": round(dd, 4)})
 
         # 4) target plan (priority: stop > rotation > regime, applied inside)
         plan: TargetPlan = decide_target(scored, regime, params, self.risk_off, stopped=stopped)
