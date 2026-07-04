@@ -209,6 +209,11 @@ def run_backtest(
                 _held_set = {sym for sym, sh in shares.items() if sh > 0 and sym != risk_off}
                 _held = _held_set if getattr(sig, "STICKY", False) else None
                 plan = decide_target(scored, RISK_ON, p, risk_off, stopped=forced_sells, held=_held)
+                # BUGFIX: sell currently-held symbols that rotated OUT of target
+                _target_syms = set(plan.target.keys()) - {risk_off}
+                _rotate_out = _held_set - _target_syms
+                for sym in _rotate_out:
+                    pending.append({"type": "sell_all", "symbol": sym})
                 eq_ref = eq
                 for sym, w in plan.target.items():
                     if sym == risk_off:
