@@ -19,6 +19,16 @@ rotation:
     rsi_period: 14
     oversold_threshold: 30      # train-best (walk-forward OOS: +5.5% / -9.4% mdd)
     long_ma: 250          # eligible only if close > MA(long_ma)
+  bb_macd:               # V2.2 Bollinger + MACD signal (dip recovery / trend ride)
+    bb_period: 20
+    bb_std: 2.0
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    pctb_low: 0.1         # dip mode: %B threshold (near lower band)
+    pctb_high: 1.0        # trend mode: %B threshold (near/above upper band)
+    long_ma: 250          # eligible only if close > MA(long_ma)
+    mode: both            # dip | trend | both
 
 # ---- Regime / market timing layer (daily) (Q7) ----
 regime:

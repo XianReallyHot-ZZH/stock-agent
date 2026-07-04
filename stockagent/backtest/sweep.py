@@ -118,10 +118,20 @@ REVERSION_GRID = {
     ("rotation", "reversion", "oversold_threshold"): [30, 40],
     ("rotation", "reversion", "long_ma"): [120, 250],
 }
+BB_MACD_GRID = {
+    ("portfolio", "k"): [3, 5],
+    ("regime", "ma_period"): [120, 200],
+    ("stop", "trailing_pct"): [0.08],
+    ("rotation", "bb_macd", "mode"): ["dip", "trend", "both"],
+    ("rotation", "bb_macd", "pctb_low"): [0.1, 0.2],
+    ("rotation", "bb_macd", "pctb_high"): [1.0],
+    ("rotation", "bb_macd", "long_ma"): [120, 250],
+}
 MOM_BY_NAME = {name: (wins, wts) for name, wins, wts in MOMENTUM}
 
 _ROW_COLS = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "windows",
              "rsi_period", "oversold", "long_ma",
+             "bb_mode", "pctb_low", "pctb_high", "bb_long_ma",
              "ann", "mdd", "calmar", "sharpe", "turnover", "gate_pass"]
 
 
@@ -163,6 +173,11 @@ def row_to_overrides(row) -> dict:
         o[("rotation", "trend_gate_ma")] = int(row["gate_ma"])
         o[("rotation", "momentum", "windows")] = wins
         o[("rotation", "momentum", "weights")] = wts
+    elif sig == "bb_macd":
+        o[("rotation", "bb_macd", "mode")] = row["bb_mode"]
+        o[("rotation", "bb_macd", "pctb_low")] = float(row["pctb_low"])
+        o[("rotation", "bb_macd", "pctb_high")] = float(row["pctb_high"])
+        o[("rotation", "bb_macd", "long_ma")] = int(row["bb_long_ma"])
     else:  # reversion
         o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
         o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
@@ -206,16 +221,36 @@ def evaluate_reversion(store, base: Config, start: str, end: str) -> pd.DataFram
     return _ranked(rows)
 
 
+def evaluate_bb_macd(store, base: Config, start: str, end: str) -> pd.DataFrame:
+    """Sweep ONLY the bb_macd signal's grid over [start,end]."""
+    rows = []
+    bkeys = list(BB_MACD_GRID.keys())
+    for vals in itertools.product(*[BB_MACD_GRID[k] for k in bkeys]):
+        overrides = dict(zip(bkeys, vals))
+        overrides[("rotation", "signal", "name")] = "bb_macd"
+        extra = {"bb_mode": overrides[("rotation", "bb_macd", "mode")],
+                 "pctb_low": overrides[("rotation", "bb_macd", "pctb_low")],
+                 "pctb_high": overrides[("rotation", "bb_macd", "pctb_high")],
+                 "bb_long_ma": overrides[("rotation", "bb_macd", "long_ma")]}
+        try:
+            rows.append(_run_one(store, base, overrides, start, end, "bb_macd", extra))
+        except Exception:
+            continue
+    return _ranked(rows)
+
+
 def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = True) -> pd.DataFrame:
-    """Run BOTH signals' param grids over [start,end]. Returns ranked DataFrame with a `signal` column."""
+    """Run ALL signals' param grids over [start,end]. Returns ranked DataFrame with a `signal` column."""
     df_m = evaluate_momentum(store, base, start, end)
     df_r = evaluate_reversion(store, base, start, end)
-    df = pd.concat([df_m, df_r], ignore_index=True) if (len(df_m) or len(df_r)) else pd.DataFrame()
+    df_b = evaluate_bb_macd(store, base, start, end)
+    frames = [d for d in (df_m, df_r, df_b) if len(d)]
+    df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if len(df):
         df = df.sort_values(["gate_pass", "calmar"], ascending=[False, False]).reset_index(drop=True)
     if verbose:
-        nm, nr = len(df_m), len(df_r)
-        print(f"Evaluated {nm + nr} combos ({nm} momentum + {nr} reversion) over {start}..{end}")
+        nm, nr, nb = len(df_m), len(df_r), len(df_b)
+        print(f"Evaluated {nm + nr + nb} combos ({nm} momentum + {nr} reversion + {nb} bb_macd) over {start}..{end}")
     return df
 
 
@@ -238,11 +273,12 @@ def main():
     out = Path("data/sweep_results.csv")
     df.to_csv(out, index=False)
     show = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "rsi_period", "oversold", "long_ma",
+            "bb_mode", "pctb_low", "pctb_high", "bb_long_ma",
             "ann", "mdd", "calmar", "sharpe", "gate_pass"]
     print("\n=== TOP 10 by gate-pass then Calmar ===")
     print(df[show].head(10).to_string(index=False))
     print("\n=== best per signal (by Calmar) ===")
-    for sig in ("momentum", "reversion"):
+    for sig in ("momentum", "reversion", "bb_macd"):
         sub = df[df["signal"] == sig]
         if len(sub):
             print(f"  [{sig}] {dict(sub.sort_values('calmar', ascending=False).iloc[0][show])}")

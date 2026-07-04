@@ -68,3 +68,36 @@ def test_rsi_mixed_in_range():
     close = pd.Series(100 + np.cumsum(rng.normal(0, 1, 60)), dtype=float)
     val = ind.rsi(close, 14)
     assert 0.0 < val < 100.0
+
+
+def test_bollinger_bands_basic():
+    upper, mid, lower = ind.bollinger_bands(s([1, 2, 3, 4, 5]), 5, 2.0)
+    assert mid == 3.0
+    assert round(upper, 4) == round(3 + 2 * (10 / 5) ** 0.5, 4)   # 5.8284
+    assert round(lower, 4) == round(3 - 2 * (10 / 5) ** 0.5, 4)   # 0.1716
+
+
+def test_bollinger_short_nan():
+    u, m, l = ind.bollinger_bands(s([1, 2, 3]), 5, 2.0)
+    assert np.isnan(u)
+
+
+def test_pctb_flat_is_midline():
+    assert ind.pctb(s([3, 3, 3, 3, 3]), 5, 2.0) == 0.5  # zero-width bands
+
+
+def test_pctb_high_when_price_high():
+    # last value (9) is in the upper part of the band => %B high (near 1)
+    close = pd.Series([1, 2, 3, 4, 5, 9], dtype=float)
+    assert ind.pctb(close, 5, 2.0) > 0.9
+
+
+def test_macd_rising_positive_line():
+    close = pd.Series(np.linspace(10, 30, 60), dtype=float)
+    ml, sl, hist = ind.macd(close, 12, 26, 9)
+    assert ml > 0  # fast EMA above slow EMA in an uptrend
+
+
+def test_macd_short_nan():
+    ml, sl, hist = ind.macd(s([1, 2, 3, 4]), 12, 26, 9)
+    assert np.isnan(ml) and np.isnan(hist)

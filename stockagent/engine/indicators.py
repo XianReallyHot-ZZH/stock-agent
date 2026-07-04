@@ -88,3 +88,49 @@ def rsi(close: pd.Series, period: int) -> float:
         return 100.0
     rs = avg_gain / avg_loss
     return float(100.0 - 100.0 / (1.0 + rs))
+
+
+def bollinger_bands(close: pd.Series, period: int, n_std: float) -> tuple[float, float, float]:
+    """Bollinger Bands at the last bar -> (upper, mid, lower). NaN if too short.
+
+    mid = SMA(period); bands = mid ± n_std * population_std(period).
+    """
+    if close is None or len(close) < period:
+        return (np.nan, np.nan, np.nan)
+    window = close.iloc[-period:].astype(float)
+    mid = float(window.mean())
+    sd = float(window.std(ddof=0))
+    return (mid + n_std * sd, mid, mid - n_std * sd)
+
+
+def pctb(close: pd.Series, period: int, n_std: float) -> float:
+    """Bollinger %B at the last bar: (close-lower)/(upper-lower).
+
+    <0 = below lower band, >1 = above upper band, 0.5 = at midline.
+    Returns 0.5 when bands are flat (zero width); NaN if too short.
+    """
+    upper, mid, lower = bollinger_bands(close, period, n_std)
+    if np.isnan(upper):
+        return np.nan
+    if upper == lower:
+        return 0.5
+    last = float(close.iloc[-1])
+    return (last - lower) / (upper - lower)
+
+
+def macd(close: pd.Series, fast: int, slow: int, signal: int) -> tuple[float, float, float]:
+    """MACD at the last bar -> (macd_line, signal_line, histogram).
+
+    EMA-based (adjust=False, span smoothing). hist = macd_line - signal_line.
+    NaN tuple if series shorter than slow+signal.
+    """
+    if close is None or len(close) < slow + signal:
+        return (np.nan, np.nan, np.nan)
+    c = close.astype(float) if not isinstance(close, pd.Series) else close.astype(float)
+    ema_fast = c.ewm(span=fast, adjust=False).mean()
+    ema_slow = c.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    ml = float(macd_line.iloc[-1])
+    sl = float(signal_line.iloc[-1])
+    return (ml, sl, ml - sl)

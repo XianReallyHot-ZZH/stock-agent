@@ -16,8 +16,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from stockagent.backtest import run_backtest
-from stockagent.backtest.sweep import (evaluate_momentum, evaluate_reversion,
-                                       make_config, row_to_overrides)
+from stockagent.backtest.sweep import (evaluate_bb_macd, evaluate_momentum,
+                                       evaluate_reversion, make_config, row_to_overrides)
 from stockagent.config import get_config
 from stockagent.data import Store
 from stockagent.utils.logging_setup import setup_logging
@@ -34,6 +34,8 @@ WINDOWS = [
 def _best_str(row) -> str:
     if row["signal"] == "reversion":
         return f"K={int(row['K'])} regime={int(row['regime_ma'])} rsi={row['rsi_period']} oversold={row['oversold']} long_ma={row['long_ma']}"
+    if row["signal"] == "bb_macd":
+        return f"K={int(row['K'])} regime={int(row['regime_ma'])} mode={row['bb_mode']} pctb_low={row['pctb_low']} pctb_high={row['pctb_high']} long_ma={row['bb_long_ma']}"
     return f"K={int(row['K'])} regime={int(row['regime_ma'])} mom={row['momentum']}({row['windows']})"
 
 
@@ -85,6 +87,9 @@ def main():
 
     print("\n--- reversion ---")
     summarize("reversion", run_signal(store, base, evaluate_reversion, "reversion"))
+
+    print("\n--- bb_macd ---")
+    summarize("bb_macd", run_signal(store, base, evaluate_bb_macd, "bb_macd"))
 
     if args.with_momentum:
         print("\n--- momentum (baseline) ---")

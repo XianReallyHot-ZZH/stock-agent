@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from stockagent.backtest import run_backtest
-from stockagent.backtest.sweep import MOMENTUM, evaluate_grid, make_config
+from stockagent.backtest.sweep import MOMENTUM, evaluate_grid, make_config, row_to_overrides
 from stockagent.config import get_config
 from stockagent.data import Store
 from stockagent.utils.logging_setup import setup_logging
@@ -38,30 +38,13 @@ FULL_WINNER = {
 }
 
 
-def row_to_overrides(row) -> dict:
-    sig = row["signal"]
-    o = {
-        ("rotation", "signal", "name"): sig,
-        ("portfolio", "k"): int(row["K"]),
-        ("regime", "ma_period"): int(row["regime_ma"]),
-        ("stop", "trailing_pct"): float(row["stop%"]),
-    }
-    if sig == "momentum":
-        wins, wts = MOM_BY_NAME[row["momentum"]]
-        o[("rotation", "trend_gate_ma")] = int(row["gate_ma"])
-        o[("rotation", "momentum", "windows")] = wins
-        o[("rotation", "momentum", "weights")] = wts
-    else:  # reversion
-        o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
-        o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
-        o[("rotation", "reversion", "long_ma")] = int(row["long_ma"])
-    return o
-
-
 def fmt_params(row) -> str:
     if row["signal"] == "momentum":
         return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
                 f"gate_ma={int(row['gate_ma'])} mom={row['momentum']}({row['windows']})")
+    if row["signal"] == "bb_macd":
+        return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
+                f"mode={row['bb_mode']} pctb_low={row['pctb_low']} pctb_high={row['pctb_high']} long_ma={row['bb_long_ma']}")
     return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
             f"rsi={row['rsi_period']} oversold={row['oversold']} long_ma={row['long_ma']}")
 
@@ -93,7 +76,7 @@ def main():
 
     print(f"\n[2] TEST (out-of-sample) each signal's TRAIN-best on {TEST_START}..{TEST_END}:")
     results = {}
-    for sig in ("momentum", "reversion"):
+    for sig in ("momentum", "reversion", "bb_macd"):
         sub = df_train[df_train["signal"] == sig]
         if len(sub) == 0:
             print(f"  [{sig}] no train combos, skip")
@@ -114,7 +97,7 @@ def main():
         print("        这些信号/参数泛化，可进 shadow 进一步跟踪。")
     else:
         print("VERDICT: ❌ 全部样本外 FAIL — 样本内表现是过拟合，勿据此上实盘。")
-        print("        价格类因子（动量+均值回归）在 A股 样本外均无稳定 edge。")
+        print("        价格类因子（动量/均值回归/BB+MACD）在 A股 样本外均无稳定 edge。")
     print("=" * 64)
 
 

@@ -9,7 +9,7 @@ momentum at module-load time.
 """
 from __future__ import annotations
 
-SIGNAL_NAMES = ["momentum", "reversion"]
+SIGNAL_NAMES = ["momentum", "reversion", "bb_macd"]
 
 
 def get_signal(name: str):
@@ -21,6 +21,9 @@ def get_signal(name: str):
     if name == "reversion":
         from . import reversion
         return reversion
+    if name == "bb_macd":
+        from . import bb_macd
+        return bb_macd
     raise ValueError(f"unknown signal '{name}'; available: {SIGNAL_NAMES}")
 
 
