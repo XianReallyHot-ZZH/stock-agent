@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from stockagent.backtest import run_backtest
 from stockagent.backtest.sweep import (evaluate_bb_macd, evaluate_momentum,
-                                       evaluate_reversion, make_config, row_to_overrides)
+                                       evaluate_reversion, evaluate_share_flow,
+                                       make_config, row_to_overrides)
 from stockagent.config import get_config
 from stockagent.data import Store
 from stockagent.utils.logging_setup import setup_logging
@@ -36,6 +37,8 @@ def _best_str(row) -> str:
         return f"K={int(row['K'])} regime={int(row['regime_ma'])} rsi={row['rsi_period']} oversold={row['oversold']} long_ma={row['long_ma']}"
     if row["signal"] == "bb_macd":
         return f"K={int(row['K'])} regime={int(row['regime_ma'])} mode={row['bb_mode']} pctb_low={row['pctb_low']} pctb_high={row['pctb_high']} long_ma={row['bb_long_ma']}"
+    if row["signal"] == "share_flow":
+        return f"K={int(row['K'])} regime={int(row['regime_ma'])} trend={row['share_trend']} min_chg={row['share_min_chg']} long_ma={row['share_long_ma']}"
     return f"K={int(row['K'])} regime={int(row['regime_ma'])} mom={row['momentum']}({row['windows']})"
 
 
@@ -90,6 +93,9 @@ def main():
 
     print("\n--- bb_macd ---")
     summarize("bb_macd", run_signal(store, base, evaluate_bb_macd, "bb_macd"))
+
+    print("\n--- share_flow ---")
+    summarize("share_flow", run_signal(store, base, evaluate_share_flow, "share_flow"))
 
     if args.with_momentum:
         print("\n--- momentum (baseline) ---")

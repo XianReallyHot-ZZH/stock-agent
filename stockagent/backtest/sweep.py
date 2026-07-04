@@ -127,11 +127,20 @@ BB_MACD_GRID = {
     ("rotation", "bb_macd", "pctb_high"): [1.0],
     ("rotation", "bb_macd", "long_ma"): [120, 250],
 }
+SHARE_FLOW_GRID = {
+    ("portfolio", "k"): [3, 5],
+    ("regime", "ma_period"): [120, 200],
+    ("stop", "trailing_pct"): [0.08],
+    ("rotation", "share_flow", "trend_days"): [40, 60, 120],
+    ("rotation", "share_flow", "min_share_change"): [0.0, 0.05],
+    ("rotation", "share_flow", "long_ma"): [120, 250],
+}
 MOM_BY_NAME = {name: (wins, wts) for name, wins, wts in MOMENTUM}
 
 _ROW_COLS = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "windows",
              "rsi_period", "oversold", "long_ma",
              "bb_mode", "pctb_low", "pctb_high", "bb_long_ma",
+             "share_trend", "share_min_chg", "share_long_ma",
              "ann", "mdd", "calmar", "sharpe", "turnover", "gate_pass"]
 
 
@@ -178,6 +187,10 @@ def row_to_overrides(row) -> dict:
         o[("rotation", "bb_macd", "pctb_low")] = float(row["pctb_low"])
         o[("rotation", "bb_macd", "pctb_high")] = float(row["pctb_high"])
         o[("rotation", "bb_macd", "long_ma")] = int(row["bb_long_ma"])
+    elif sig == "share_flow":
+        o[("rotation", "share_flow", "trend_days")] = int(row["share_trend"])
+        o[("rotation", "share_flow", "min_share_change")] = float(row["share_min_chg"])
+        o[("rotation", "share_flow", "long_ma")] = int(row["share_long_ma"])
     else:  # reversion
         o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
         o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
@@ -244,14 +257,32 @@ def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = Tru
     df_m = evaluate_momentum(store, base, start, end)
     df_r = evaluate_reversion(store, base, start, end)
     df_b = evaluate_bb_macd(store, base, start, end)
-    frames = [d for d in (df_m, df_r, df_b) if len(d)]
+    df_s = evaluate_share_flow(store, base, start, end)
+    frames = [d for d in (df_m, df_r, df_b, df_s) if len(d)]
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if len(df):
         df = df.sort_values(["gate_pass", "calmar"], ascending=[False, False]).reset_index(drop=True)
     if verbose:
-        nm, nr, nb = len(df_m), len(df_r), len(df_b)
-        print(f"Evaluated {nm + nr + nb} combos ({nm} momentum + {nr} reversion + {nb} bb_macd) over {start}..{end}")
+        nm, nr, nb, ns = len(df_m), len(df_r), len(df_b), len(df_s)
+        print(f"Evaluated {nm+nr+nb+ns} combos ({nm} momentum + {nr} reversion + {nb} bb_macd + {ns} share_flow) over {start}..{end}")
     return df
+
+
+def evaluate_share_flow(store, base: Config, start: str, end: str) -> pd.DataFrame:
+    """Sweep ONLY the share_flow signal's grid over [start,end]."""
+    rows = []
+    skeys = list(SHARE_FLOW_GRID.keys())
+    for vals in itertools.product(*[SHARE_FLOW_GRID[k] for k in skeys]):
+        overrides = dict(zip(skeys, vals))
+        overrides[("rotation", "signal", "name")] = "share_flow"
+        extra = {"share_trend": overrides[("rotation", "share_flow", "trend_days")],
+                 "share_min_chg": overrides[("rotation", "share_flow", "min_share_change")],
+                 "share_long_ma": overrides[("rotation", "share_flow", "long_ma")]}
+        try:
+            rows.append(_run_one(store, base, overrides, start, end, "share_flow", extra))
+        except Exception:
+            continue
+    return _ranked(rows)
 
 
 def main():
@@ -274,11 +305,12 @@ def main():
     df.to_csv(out, index=False)
     show = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "rsi_period", "oversold", "long_ma",
             "bb_mode", "pctb_low", "pctb_high", "bb_long_ma",
+            "share_trend", "share_min_chg", "share_long_ma",
             "ann", "mdd", "calmar", "sharpe", "gate_pass"]
     print("\n=== TOP 10 by gate-pass then Calmar ===")
     print(df[show].head(10).to_string(index=False))
     print("\n=== best per signal (by Calmar) ===")
-    for sig in ("momentum", "reversion", "bb_macd"):
+    for sig in ("momentum", "reversion", "bb_macd", "share_flow"):
         sub = df[df["signal"] == sig]
         if len(sub):
             print(f"  [{sig}] {dict(sub.sort_values('calmar', ascending=False).iloc[0][show])}")

@@ -29,6 +29,10 @@ rotation:
     pctb_high: 1.0        # trend mode: %B threshold (near/above upper band)
     long_ma: 250          # eligible only if close > MA(long_ma)
     mode: both            # dip | trend | both
+  share_flow:            # V2.3 smart-money signal: rank by ETF share trend (机构申赎)
+    trend_days: 60        # share change lookback (monthly trend suppresses arb noise)
+    long_ma: 120          # price trend gate: close > MA(long_ma)
+    min_share_change: 0.0 # eligible only if share_change > this (0 = any net creation)
 
 # ---- Regime / market timing layer (daily) (Q7) ----
 regime:

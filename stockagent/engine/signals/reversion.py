@@ -51,7 +51,7 @@ def score_symbol(close: pd.Series, params: dict) -> dict:
     }
 
 
-def score_universe(close_by_symbol: dict, params: dict) -> pd.DataFrame:
+def score_universe(close_by_symbol: dict, params: dict, ctx: dict | None = None) -> pd.DataFrame:
     rows = []
     for sym, s in close_by_symbol.items():
         info = score_symbol(s, params)
@@ -60,7 +60,7 @@ def score_universe(close_by_symbol: dict, params: dict) -> pd.DataFrame:
     return build_frame(rows)
 
 
-def describe_symbol(close: pd.Series, params: dict) -> dict:
+def describe_symbol(close: pd.Series, params: dict, ctx: dict | None = None) -> dict:
     """Human-facing indicator snapshot for the report (reversion-specific)."""
     p = _rev_params(params)
     rsi_p, oversold, long_ma = int(p["rsi_period"]), float(p["oversold_threshold"]), int(p["long_ma"])

@@ -88,7 +88,7 @@ def score_symbol(close: pd.Series, params: dict) -> dict:
     }
 
 
-def score_universe(close_by_symbol: dict, params: dict) -> pd.DataFrame:
+def score_universe(close_by_symbol: dict, params: dict, ctx: dict | None = None) -> pd.DataFrame:
     rows = []
     for sym, s in close_by_symbol.items():
         info = score_symbol(s, params)
@@ -97,7 +97,7 @@ def score_universe(close_by_symbol: dict, params: dict) -> pd.DataFrame:
     return build_frame(rows)
 
 
-def describe_symbol(close: pd.Series, params: dict) -> dict:
+def describe_symbol(close: pd.Series, params: dict, ctx: dict | None = None) -> dict:
     p = _bb_params(params)
     bb_period, bb_std = int(p["bb_period"]), float(p["bb_std"])
     mf, ms, msig = int(p["macd_fast"]), int(p["macd_slow"]), int(p["macd_signal"])

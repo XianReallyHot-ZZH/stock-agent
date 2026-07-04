@@ -34,7 +34,7 @@ def score_symbol(close: pd.Series, params: dict) -> dict:
     }
 
 
-def score_universe(close_by_symbol: dict[str, pd.Series], params: dict) -> pd.DataFrame:
+def score_universe(close_by_symbol: dict[str, pd.Series], params: dict, ctx: dict | None = None) -> pd.DataFrame:
     """Score every symbol. Returns DataFrame sorted by score desc.
 
     Columns: symbol, score, above_ma, eligible, last_close, len
@@ -50,7 +50,7 @@ def score_universe(close_by_symbol: dict[str, pd.Series], params: dict) -> pd.Da
     return df
 
 
-def describe_symbol(close: pd.Series, params: dict) -> dict:
+def describe_symbol(close: pd.Series, params: dict, ctx: dict | None = None) -> dict:
     """Human-facing indicator snapshot for the report (momentum-specific)."""
     rot = params.get("rotation", {})
     win = rot.get("momentum", {}).get("windows", [20, 60, 120])

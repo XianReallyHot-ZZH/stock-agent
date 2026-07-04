@@ -58,9 +58,14 @@ class Engine:
         bench_ma = float(bench_close.tail(self.regime_ma).mean()) if len(bench_close) >= self.regime_ma else float("nan")
         bench_last = float(bench_close.iloc[-1]) if len(bench_close) else float("nan")
 
-        # 2) rotation scores (V2.1: pluggable signal — momentum or reversion)
+        # 2) rotation scores (V2.1: pluggable signal; V2.3: ctx carries share data)
         close_by_sym = {s: self._close(s, decision_date) for s in self.config.rotation_symbols()}
-        scored = current_signal(params).score_universe(close_by_sym, params)
+        share_by_sym = {}
+        for s in self.config.rotation_symbols():
+            sc = self.store.get_scale_series(s, end=decision_date)
+            share_by_sym[s] = sc["shares"] if "shares" in sc.columns else pd.Series(dtype=float)
+        ctx = {"share": share_by_sym}
+        scored = current_signal(params).score_universe(close_by_sym, params, ctx=ctx)
 
         # 3) stops on current holdings (daily protection layer)
         stopped = []
@@ -99,7 +104,7 @@ class Engine:
         details = []
         for _, row in ranking_top.iterrows():
             sym = row["symbol"]
-            desc = sig.describe_symbol(self._close(sym, decision_date), params)
+            desc = sig.describe_symbol(self._close(sym, decision_date), params, ctx={**ctx, "symbol": sym})
             details.append({"symbol": sym, "score": row["score"], "eligible": bool(row["eligible"]), "summary": desc["summary"]})
 
         holdings_detail = []
@@ -113,7 +118,7 @@ class Engine:
                 cs = self._close_since(sym, entry, decision_date)
                 if len(cs):
                     dd = round(float(ind.drawdown_from_peak(cs)), 4)
-            desc = sig.describe_symbol(self._close(sym, decision_date), params)
+            desc = sig.describe_symbol(self._close(sym, decision_date), params, ctx={**ctx, "symbol": sym})
             holdings_detail.append({"symbol": sym, "weight": round(w, 4), "drawdown_from_peak": dd, "summary": desc["summary"]})
 
         bench_dist = (bench_last / bench_ma - 1.0) if (not pd.isna(bench_ma) and bench_ma > 0) else None

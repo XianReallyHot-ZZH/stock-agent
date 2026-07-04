@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Optional
 
 import akshare as ak
+import numpy as np
 import pandas as pd
 
 _ETF_COL_MAP = {
@@ -210,4 +211,47 @@ def fetch_sector_fund_flow_hist(symbol: str, timeout: float = 40.0) -> pd.DataFr
     if inflow_col is not None:
         out["net_inflow"] = pd.to_numeric(df[inflow_col], errors="coerce")
     out = out.dropna(subset=["date"]).drop_duplicates("date").set_index("date").sort_index()
+    return out
+
+
+# ---- ETF scale / shares (V2.3) — SSE-sourced, not throttled, backtestable ----
+def fetch_etf_scale_sse(date: str, timeout: float = 40.0) -> pd.DataFrame:
+    """SSE ETF fund-shares snapshot for a given date (YYYYMMDD).
+
+    Returns DataFrame[symbol, shares]. Works for any trading day (history back
+    to ~2015), SSE-listed ETFs only (5xxxxx).
+    """
+    df = _run_with_timeout(ak.fund_etf_scale_sse, timeout, date=date)
+    if df is None or len(df) == 0:
+        raise FetchError(f"empty etf_scale_sse {date}")
+    code_col = next((c for c in df.columns if "代码" in str(c)), df.columns[1])
+    share_col = next((c for c in df.columns if "份额" in str(c)), None)
+    out = pd.DataFrame({"symbol": df[code_col].astype(str)})
+    if share_col is not None:
+        out["shares"] = pd.to_numeric(df[share_col], errors="coerce")
+    return out
+
+
+def fetch_etf_spot_premium(timeout: float = 60.0) -> pd.DataFrame:
+    """Today's ETF spot with shares + IOPV-implied premium, ALL ETFs (incl SZSE).
+
+    Returns DataFrame[code, shares, premium]. premium = price/IOPV - 1 (NaN if IOPV<=0).
+    Used for SZSE share forward-accumulation + live premium filter.
+    """
+    df = _run_with_timeout(ak.fund_etf_spot_em, timeout)
+    if df is None or len(df) == 0:
+        raise FetchError("empty etf_spot")
+    code_col = next((c for c in df.columns if str(c) in ("代码", "code")), df.columns[0])
+    share_col = next((c for c in df.columns if "份额" in str(c)), None)
+    iopv_col = next((c for c in df.columns if "IOPV" in str(c) or "实时估值" in str(c)), None)
+    price_col = next((c for c in df.columns if str(c) in ("最新价", "最新价额")), None)
+    out = pd.DataFrame({"code": df[code_col].astype(str)})
+    if share_col is not None:
+        out["shares"] = pd.to_numeric(df[share_col], errors="coerce")
+    if iopv_col is not None and price_col is not None:
+        px = pd.to_numeric(df[price_col], errors="coerce")
+        iopv = pd.to_numeric(df[iopv_col], errors="coerce")
+        out["premium"] = np.where(iopv > 0, px / iopv - 1.0, np.nan)
+    else:
+        out["premium"] = np.nan
     return out

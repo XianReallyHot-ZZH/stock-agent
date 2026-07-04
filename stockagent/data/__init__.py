@@ -1,6 +1,7 @@
 """Data layer: fetch (AkShare) + store (SQLite) + calendar + manager."""
 from .fetcher import (FetchError, fetch_etf_daily, fetch_etf_spot, fetch_trade_dates,
-                      fetch_sector_fund_flow_rank, fetch_sector_fund_flow_hist)
+                      fetch_sector_fund_flow_rank, fetch_sector_fund_flow_hist,
+                      fetch_etf_scale_sse, fetch_etf_spot_premium)
 from .store import Store
 from .calendar import Calendar
 from .manager import DataManager
@@ -12,6 +13,8 @@ __all__ = [
     "fetch_trade_dates",
     "fetch_sector_fund_flow_rank",
     "fetch_sector_fund_flow_hist",
+    "fetch_etf_scale_sse",
+    "fetch_etf_spot_premium",
     "Store",
     "Calendar",
     "DataManager",

@@ -17,6 +17,8 @@ _DOMESTIC_HOSTS = ",".join(
         "sina.com.cn",
         "sina.com",
         "akshare.xyz",
+        "sse.com.cn",
+        "szse.cn",
         # Notifiers
         "weixin.qq.com",
         "feishu.cn",

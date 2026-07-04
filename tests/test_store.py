@@ -49,3 +49,22 @@ def test_prices_roundtrip():
     got = st.get_series("512480")
     assert len(got) == 1 and float(got["close"].iloc[0]) == 10.5
     assert st.last_date("512480") == "2026-07-02"
+
+
+def test_scale_roundtrip():
+    st = _store()
+    rows = [
+        ("510300", "2026-07-02", 1.99e10, 0.001),
+        ("510300", "2026-07-03", 1.71e10, -0.002),
+        ("512480", "2026-07-03", 5.0e8, None),
+    ]
+    n = st.upsert_scale(rows, source="sse")
+    assert n == 3
+    s = st.get_scale_series("510300")
+    assert len(s) == 2
+    assert st.last_scale_date("510300") == "2026-07-03"
+    # idempotent update
+    st.upsert_scale([("510300", "2026-07-03", 1.80e10, None)], source="sse")
+    s2 = st.get_scale_series("510300")
+    assert len(s2) == 2  # no dup
+    assert float(s2["shares"].iloc[-1]) == 1.80e10  # updated

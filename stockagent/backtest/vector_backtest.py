@@ -51,7 +51,15 @@ def _load_panel(store: Store, symbols: list[str], benchmark: str, risk_off: str)
         df = store.get_series(s).reindex(timeline)
         closes[s] = df["close"] if "close" in df else np.nan
         opens[s] = df["open"] if "open" in df else np.nan
-    return timeline, closes, opens
+    # V2.3: ETF shares (for share_flow signal). Rotation symbols only; SSE has history,
+    # SZSE sparse/empty (signal handles NaN). Reindex to price timeline (forward-fill
+    # within gaps so share trend is continuous across non-reporting days).
+    shares_wide = pd.DataFrame(index=timeline)
+    for s in symbols:
+        sc = store.get_scale_series(s)
+        if len(sc) and "shares" in sc.columns:
+            shares_wide[s] = sc["shares"].reindex(timeline).ffill()
+    return timeline, closes, opens, shares_wide
 
 
 def run_backtest(
@@ -72,7 +80,7 @@ def run_backtest(
     rebal_dow = int(p["rotation"].get("rebalance_weekday", 4))
     cost = float(p["backtest"]["single_side_cost"])
 
-    timeline, closes, opens = _load_panel(store, rot_syms, bench, risk_off)
+    timeline, closes, opens, shares_wide = _load_panel(store, rot_syms, bench, risk_off)
     ro_ret = closes[risk_off].pct_change().fillna(0.0)
 
     days = timeline[(timeline >= (start or timeline[0])) & (timeline <= (end or timeline[-1]))]
@@ -164,7 +172,8 @@ def run_backtest(
             # rotation only on the chosen weekday
             if dt.dayofweek == rebal_dow:
                 close_slice = {s: closes[s].loc[:d].dropna() for s in rot_syms}
-                scored = current_signal(p).score_universe(close_slice, p)
+                share_slice = {s: shares_wide[s].loc[:d].dropna() for s in rot_syms if s in shares_wide.columns}
+                scored = current_signal(p).score_universe(close_slice, p, ctx={"share": share_slice})
                 plan = decide_target(scored, RISK_ON, p, risk_off, stopped=forced_sells)
                 eq_ref = eq
                 for sym, w in plan.target.items():

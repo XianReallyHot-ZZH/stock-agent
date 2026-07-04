@@ -33,8 +33,17 @@ CREATE TABLE IF NOT EXISTS fund_flow (
     source     TEXT,
     PRIMARY KEY (sector, date)
 );
+CREATE TABLE IF NOT EXISTS etf_scale (
+    symbol TEXT NOT NULL,
+    date   TEXT NOT NULL,
+    shares REAL,
+    premium REAL,
+    source TEXT,
+    PRIMARY KEY (symbol, date)
+);
 CREATE INDEX IF NOT EXISTS idx_prices_symbol ON daily_prices(symbol);
 CREATE INDEX IF NOT EXISTS idx_fund_flow_sector ON fund_flow(sector);
+CREATE INDEX IF NOT EXISTS idx_scale_symbol ON etf_scale(symbol);
 """
 
 
@@ -225,3 +234,37 @@ class Store:
         with self._conn() as c:
             rows = c.execute("SELECT DISTINCT sector FROM fund_flow").fetchall()
             return [r[0] for r in rows]
+
+    # ---- etf scale / shares (V2.3) ----
+    def upsert_scale(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (symbol, date, shares, premium). Idempotent upsert."""
+        if not rows:
+            return 0
+        payload = [(s, d, sh, pm, source) for (s, d, sh, pm) in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO etf_scale(symbol,date,shares,premium,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(symbol,date) DO UPDATE SET "
+                "shares=excluded.shares,premium=excluded.premium,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_scale_series(self, symbol: str, start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,shares,premium FROM etf_scale WHERE symbol=?"
+        params: list = [symbol]
+        if start:
+            q += " AND date>=?"; params.append(start)
+        if end:
+            q += " AND date<=?"; params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_scale_date(self, symbol: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(date) FROM etf_scale WHERE symbol=?", (symbol,)).fetchone()
+            return row[0] if row and row[0] else None
