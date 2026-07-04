@@ -47,7 +47,7 @@ def fmt_params(row) -> str:
                 f"mode={row['bb_mode']} pctb_low={row['pctb_low']} pctb_high={row['pctb_high']} long_ma={row['bb_long_ma']}")
     if row["signal"] == "share_flow":
         return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
-                f"trend={row['share_trend']} min_chg={row['share_min_chg']} flow_stop={row['flow_stop']}")
+                f"accum_thr={row['accum_thr']}")
     return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
             f"rsi={row['rsi_period']} oversold={row['oversold']} long_ma={row['long_ma']}")
 

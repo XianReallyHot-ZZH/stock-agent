@@ -38,7 +38,7 @@ def _best_str(row) -> str:
     if row["signal"] == "bb_macd":
         return f"K={int(row['K'])} regime={int(row['regime_ma'])} mode={row['bb_mode']} pctb_low={row['pctb_low']} pctb_high={row['pctb_high']} long_ma={row['bb_long_ma']}"
     if row["signal"] == "share_flow":
-        return f"K={int(row['K'])} regime={int(row['regime_ma'])} trend={row['share_trend']} min_chg={row['share_min_chg']} flow_stop={row['flow_stop']}"
+        return f"K={int(row['K'])} regime={int(row['regime_ma'])} accum_thr={row['accum_thr']}"
     return f"K={int(row['K'])} regime={int(row['regime_ma'])} mom={row['momentum']}({row['windows']})"
 
 

@@ -29,12 +29,13 @@ rotation:
     pctb_high: 1.0        # trend mode: %B threshold (near/above upper band)
     long_ma: 250          # eligible only if close > MA(long_ma)
     mode: both            # dip | trend | both
-  share_flow:            # V2.4 pure-flow signal: rank by ETF share trend, flow-based exit
-    trend_days: 60        # share change lookback for entry scoring
-    min_share_change: 0.0 # eligible only if share_change > this (net inflow)
-    flow_stop_pct: 0.10   # exit: smoothed shares drop this much from peak = 机构 redeeming
-    price_backstop: 0.20  # exit: price drops this much from peak = tail-risk backstop
-    smooth_window: 20     # shares smoothing (rolling mean) to suppress daily noise
+  share_flow:            # V2.6 multi-timeframe consensus: robust institutional flow
+    roc_short_days: 20    # short ROC window (~1 month)
+    roc_mid_days: 60      # mid ROC window (~3 months)
+    roc_long_days: 120    # long ROC window (~6 months)
+    accum_threshold: 0.02 # min ROC for an "accumulating" vote (sweep 0.01/0.02/0.05)
+    dist_threshold: 0.02  # min negative ROC for a "distributing" vote
+    price_backstop: 0.20  # tail-risk price stop (check_exits)
 
 # ---- Regime / market timing layer (daily) (Q7) ----
 regime:

@@ -131,16 +131,14 @@ SHARE_FLOW_GRID = {
     ("portfolio", "k"): [3, 5],
     ("regime", "ma_period"): [120, 200],
     ("stop", "trailing_pct"): [0.08],
-    ("rotation", "share_flow", "trend_days"): [40, 60, 120],
-    ("rotation", "share_flow", "min_share_change"): [0.0, 0.05],
-    ("rotation", "share_flow", "flow_stop_pct"): [0.05, 0.10, 0.20],
+    ("rotation", "share_flow", "accum_threshold"): [0.01, 0.02, 0.05],
 }
 MOM_BY_NAME = {name: (wins, wts) for name, wins, wts in MOMENTUM}
 
 _ROW_COLS = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "windows",
              "rsi_period", "oversold", "long_ma",
              "bb_mode", "pctb_low", "pctb_high", "bb_long_ma",
-             "share_trend", "share_min_chg", "flow_stop",
+             "share_trend", "share_min_chg", "accum_thr",
              "ann", "mdd", "calmar", "sharpe", "turnover", "gate_pass"]
 
 
@@ -188,9 +186,7 @@ def row_to_overrides(row) -> dict:
         o[("rotation", "bb_macd", "pctb_high")] = float(row["pctb_high"])
         o[("rotation", "bb_macd", "long_ma")] = int(row["bb_long_ma"])
     elif sig == "share_flow":
-        o[("rotation", "share_flow", "trend_days")] = int(row["share_trend"])
-        o[("rotation", "share_flow", "min_share_change")] = float(row["share_min_chg"])
-        o[("rotation", "share_flow", "flow_stop_pct")] = float(row["flow_stop"])
+        o[("rotation", "share_flow", "accum_threshold")] = float(row["accum_thr"])
     else:  # reversion
         o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
         o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
@@ -275,9 +271,7 @@ def evaluate_share_flow(store, base: Config, start: str, end: str) -> pd.DataFra
     for vals in itertools.product(*[SHARE_FLOW_GRID[k] for k in skeys]):
         overrides = dict(zip(skeys, vals))
         overrides[("rotation", "signal", "name")] = "share_flow"
-        extra = {"share_trend": overrides[("rotation", "share_flow", "trend_days")],
-                 "share_min_chg": overrides[("rotation", "share_flow", "min_share_change")],
-                 "flow_stop": overrides[("rotation", "share_flow", "flow_stop_pct")]}
+        extra = {"accum_thr": overrides[("rotation", "share_flow", "accum_threshold")]}
         try:
             rows.append(_run_one(store, base, overrides, start, end, "share_flow", extra))
         except Exception:

@@ -1,30 +1,37 @@
-"""Share-flow (smart-money) signal — V2.4: pure flow (no price gate, flow-based exit).
+"""Share-flow (smart-money) signal — V2.6: multi-timeframe consensus (robust).
 
-V2.4 changes from V2.3:
-- ENTRY: dropped the price>long_ma gate. 机构 accumulates BEFORE price confirms;
-  requiring price>MA filtered out the best early entries. Now: eligible = share
-  net inflow only (trust the flow).
-- EXIT: signal-specific check_exits — flow-stop (smoothed shares drop > pct from
-  peak = 机构 turning to redemption) + wide price backstop (-20%) for tail risk.
-  Other signals keep the default price -8% stop (no check_exits → fallback).
+V2.6 replaces the fragile single-ROC + daily-flow-stop with a ROBUST
+multi-timeframe consensus state classifier:
 
-score = share change rate over trend_days. eligible = share_change > min.
+- Compute share ROC over 3 windows (20/60/120 days).
+- Vote: ≥2 of 3 ROCs > +threshold → ACCUMULATING (institutions net buying).
+         ≥2 of 3 ROCs < -threshold → DISTRIBUTING (institutions net selling).
+         Otherwise → STABLE.
+- Entry: buy ACCUMULATING sectors (ranked by weighted ROC).
+- Exit: when state changes to DISTRIBUTING → naturally drops out of top-K at
+  weekly rotation. No daily flow-stop (eliminates churning).
+- Price backstop (-20%) via check_exits: tail-risk only.
+
+Why robust: 2-of-3 consensus + weekly-only evaluation → single noisy week on one
+timeframe can't flip the state → no churning → patient institutional-trend following.
 """
 from __future__ import annotations
 
 import pandas as pd
 
-from .. import indicators as ind
 from .. import stop as stop_mod
 from ._common import build_frame
 
 SHARE_PARAMS = {
-    "trend_days": 60,
-    "min_share_change": 0.0,
-    "flow_stop_pct": 0.10,
+    "roc_short_days": 20,
+    "roc_mid_days": 60,
+    "roc_long_days": 120,
+    "accum_threshold": 0.02,
+    "dist_threshold": 0.02,
     "price_backstop": 0.20,
-    "smooth_window": 20,
 }
+
+_ROC_WEIGHTS = (0.2, 0.3, 0.5)  # short, mid, long
 
 
 def _share_params(params: dict) -> dict:
@@ -32,23 +39,48 @@ def _share_params(params: dict) -> dict:
     return {**SHARE_PARAMS, **cfg}
 
 
-def _share_change(shares: pd.Series, trend_days: int) -> float:
-    if shares is None or len(shares) < trend_days + 1:
+def _share_change(shares: pd.Series, n: int) -> float:
+    if shares is None or len(shares) < n + 1:
         return float("nan")
-    a = float(shares.iloc[-1 - trend_days])
+    a = float(shares.iloc[-1 - n])
     b = float(shares.iloc[-1])
     if pd.isna(a) or pd.isna(b) or a <= 0:
         return float("nan")
     return b / a - 1.0
 
 
+def _classify_state(rocs: list[float], accum_thr: float, dist_thr: float) -> str:
+    """Multi-timeframe consensus vote → ACCUMULATING / DISTRIBUTING / STABLE."""
+    accum = sum(1 for r in rocs if not pd.isna(r) and r > accum_thr)
+    dist = sum(1 for r in rocs if not pd.isna(r) and r < -dist_thr)
+    if accum >= 2:
+        return "ACCUMULATING"
+    if dist >= 2:
+        return "DISTRIBUTING"
+    return "STABLE"
+
+
+def _weighted_score(rocs: list[float]) -> float:
+    """Weighted average of ROCs (long-term bias), renormalised for NaN."""
+    total_w, total = 0.0, 0.0
+    for w, r in zip(_ROC_WEIGHTS, rocs):
+        if not pd.isna(r):
+            total_w += w
+            total += w * r
+    return total / total_w if total_w > 0 else float("nan")
+
+
 def score_symbol(close: pd.Series, params: dict, shares: pd.Series | None = None) -> dict:
-    """V2.4: eligible = share net inflow only (no price gate)."""
     p = _share_params(params)
-    ch = _share_change(shares, int(p["trend_days"]))
+    rs, rm, rl = int(p["roc_short_days"]), int(p["roc_mid_days"]), int(p["roc_long_days"])
+    athr, dthr = float(p["accum_threshold"]), float(p["dist_threshold"])
+
+    rocs = [_share_change(shares, rs), _share_change(shares, rm), _share_change(shares, rl)]
+    state = _classify_state(rocs, athr, dthr)
+    eligible = state == "ACCUMULATING"
+    score = _weighted_score(rocs) if eligible else float("nan")
     last = float(close.iloc[-1]) if len(close) else float("nan")
-    eligible = bool(not pd.isna(ch) and ch > float(p["min_share_change"]))
-    return {"score": ch, "above_ma": True, "eligible": eligible, "last_close": last, "len": int(len(close))}
+    return {"score": score, "above_ma": True, "eligible": eligible, "last_close": last, "len": int(len(close))}
 
 
 def score_universe(close_by_symbol: dict, params: dict, ctx: dict | None = None) -> pd.DataFrame:
@@ -63,53 +95,35 @@ def score_universe(close_by_symbol: dict, params: dict, ctx: dict | None = None)
 
 def describe_symbol(close: pd.Series, params: dict, ctx: dict | None = None) -> dict:
     p = _share_params(params)
-    trend_days = int(p["trend_days"])
+    rs, rm, rl = int(p["roc_short_days"]), int(p["roc_mid_days"]), int(p["roc_long_days"])
     ctx = ctx or {}
     sym = ctx.get("symbol")
     shares = (ctx.get("share") or {}).get(sym) if sym is not None else None
-    ch = _share_change(shares, trend_days)
+    rocs = [_share_change(shares, rs), _share_change(shares, rm), _share_change(shares, rl)]
+    state = _classify_state(rocs, float(p["accum_threshold"]), float(p["dist_threshold"]))
     info = score_symbol(close, params, shares=shares)
-    ch_str = f"{ch:+.1%}" if not pd.isna(ch) else "NA"
-    direction = "机构加仓" if (not pd.isna(ch) and ch > 0) else ("机构减仓" if not pd.isna(ch) else "无份额数据")
-    summ = f"份额{trend_days}日 {ch_str}({direction})"
+    roc_str = "/".join(f"{r:+.0%}" if not pd.isna(r) else "NA" for r in rocs)
+    summ = f"[{state}] ROC {rs}/{rm}/{rl}d={roc_str}"
     return {"score": info["score"], "eligible": info["eligible"], "summary": summ}
 
 
 def check_exits(positions: dict, ctx: dict, params: dict) -> list[str]:
-    """V2.4 signal-specific exit: flow-stop + price backstop.
+    """Simplified V2.6: price backstop only (no flow-stop).
 
-    flow-stop: smoothed shares (rolling mean) drop > flow_stop_pct from peak
-    since entry → 机构 turning to redemption.
-    price backstop: close drops > price_backstop from peak → tail-risk exit.
-
-    Returns list of symbols to exit.
+    Multi-timeframe consensus handles normal exits via weekly rotation
+    (DISTRIBUTING → drops out of top-K). This is just tail-risk protection.
     """
     p = _share_params(params)
-    flow_pct = float(p["flow_stop_pct"])
-    price_backstop = float(p["price_backstop"])
-    smooth_win = int(p["smooth_window"])
-    share_map = (ctx or {}).get("share", {})
+    backstop = float(p["price_backstop"])
     close_map = (ctx or {}).get("close", {})
     exits = []
     for sym, info in positions.items():
         entry = info.get("entry_date") if isinstance(info, dict) else None
         if not entry:
             continue
-        # 1) flow-stop: smoothed shares from peak since entry
-        shares = share_map.get(sym)
-        if shares is not None and len(shares):
-            sh_since = shares.loc[entry:] if entry in shares.index else shares
-            if len(sh_since) >= smooth_win:
-                smoothed = sh_since.rolling(smooth_win, min_periods=max(3, smooth_win // 4)).mean().ffill()
-                peak = float(smoothed.max())
-                last = float(smoothed.iloc[-1])
-                if peak > 0 and (last / peak - 1.0) <= -flow_pct:
-                    exits.append(sym)
-                    continue
-        # 2) price backstop (tail risk)
         close = close_map.get(sym)
         if close is not None and len(close):
             cs = close.loc[entry:] if entry in close.index else close
-            if len(cs) and stop_mod.stop_triggered(cs, price_backstop):
+            if len(cs) and stop_mod.stop_triggered(cs, backstop):
                 exits.append(sym)
     return exits
