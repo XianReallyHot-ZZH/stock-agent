@@ -77,6 +77,9 @@ def run_backtest(
     k = int(p["portfolio"]["k"])
     regime_ma = int(p["regime"]["ma_period"])
     stop_pct = float(p["stop"]["trailing_pct"])
+    stop_method = p.get("stop", {}).get("method", "fixed")
+    atr_period = int(p.get("stop", {}).get("atr_period", 14))
+    atr_mult = float(p.get("stop", {}).get("atr_mult", 3.0))
     sig = current_signal(p)  # V2.4: resolve once for signal-specific exits
     rebal_dow = int(p["rotation"].get("rebalance_weekday", 4))
     cost = float(p["backtest"]["single_side_cost"])
@@ -169,9 +172,13 @@ def run_backtest(
                     continue
                 ed = entry_date.get(sym)
                 if not ed or ed >= d:
-                    continue  # bought today or unknown -> T+1, can't stop yet
+                    continue
                 cs = closes[sym].loc[ed:d].dropna()
-                if len(cs) and stop_mod.stop_triggered(cs, stop_pct):
+                if stop_method == "atr":
+                    _hit = len(cs) and stop_mod.stop_triggered_vol(cs, atr_period, atr_mult)
+                else:
+                    _hit = len(cs) and stop_mod.stop_triggered(cs, stop_pct)
+                if _hit:
                     forced_sells.append(sym)
 
         if regime == RISK_OFF:

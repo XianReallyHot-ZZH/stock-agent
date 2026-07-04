@@ -66,15 +66,11 @@ def momentum_score(close: pd.Series, windows: list[int], weights: list[float]) -
 
 
 def rsi(close: pd.Series, period: int) -> float:
-    """Wilders RSI at the last bar, in [0, 100]. NaN if series too short.
-
-    Standard Wilders smoothing: seed avg gain/loss with the simple mean of the
-    first `period` changes, then exponentially smooth with alpha = 1/period.
-    """
+    """Wilders RSI at the last bar, in [0, 100]. NaN if series too short."""
     if close is None or len(close) < period + 1:
         return np.nan
     s = close.astype(float).reset_index(drop=True)
-    delta = s.diff().dropna()  # length len(close)-1
+    delta = s.diff().dropna()
     if len(delta) < period:
         return np.nan
     gain = delta.clip(lower=0.0).to_numpy()
@@ -88,6 +84,19 @@ def rsi(close: pd.Series, period: int) -> float:
         return 100.0
     rs = avg_gain / avg_loss
     return float(100.0 - 100.0 / (1.0 + rs))
+
+
+def mean_abs_return(close: pd.Series, period: int) -> float:
+    """Mean absolute daily return over last `period` bars — a close-based ATR proxy.
+
+    Measures recent volatility without needing high/low. E.g., 0.02 = avg 2% daily move.
+    """
+    if close is None or len(close) < period + 1:
+        return np.nan
+    rets = close.pct_change().dropna()
+    if len(rets) < 1:
+        return np.nan
+    return float(rets.iloc[-period:].abs().mean())
 
 
 def bollinger_bands(close: pd.Series, period: int, n_std: float) -> tuple[float, float, float]:

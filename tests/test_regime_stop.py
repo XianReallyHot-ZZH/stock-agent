@@ -35,3 +35,14 @@ def test_stop_triggered_large_pullback():
 
 def test_stop_peak_since_entry():
     assert stop_mod.peak_since_entry(s([95, 100, 97, 91])) == 100.0
+
+
+def test_stop_vol_mult_scales_threshold():
+    """Higher mult → wider stop → harder to trigger for same drawdown."""
+    close = pd.Series(list(np.linspace(100, 110, 20)) + [99.0], dtype=float)  # peak 110, last 99, dd=-10%
+    assert stop_mod.stop_triggered_vol(close, 14, 2.0)     # narrow: triggered
+    assert not stop_mod.stop_triggered_vol(close, 14, 20.0)  # very wide: not triggered
+
+
+def test_stop_vol_short_history_not_triggered():
+    assert not stop_mod.stop_triggered_vol(s([1, 2, 3]), 14, 3.0)

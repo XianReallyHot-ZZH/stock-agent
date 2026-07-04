@@ -42,9 +42,12 @@ regime:
   ma_period: 120               # close below MA(120) => risk-off
   risk_off_symbol: "511990"    # 货币ETF (华宝添益) — parking spot when risk-off
 
-# ---- Per-position stop loss (daily) (Q8) ----
+# ---- Per-position stop loss (daily) (Q8, V2.5 ATR-adaptive) ----
 stop:
-  trailing_pct: 0.08   # exit if price falls 8% from peak since entry
+  trailing_pct: 0.08   # fixed % stop (used when method=fixed)
+  method: atr           # "fixed" | "atr" — vol-adaptive or fixed percentage
+  atr_period: 14        # volatility lookback for ATR proxy (close-based)
+  atr_mult: 3.0         # stop distance = mult × avg daily vol (sweep 2/3/4/5)
 
 # ---- Engine priority hard rule (Q13) ----
 priority: ["stop", "rotation", "regime"]  # stop > rotation > regime on conflicts

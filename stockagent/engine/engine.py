@@ -93,6 +93,9 @@ class Engine:
                 if dd <= -(0.20 - 0.02):  # near price backstop
                     stop_warnings.append({"symbol": sym, "drawdown_from_peak": round(dd, 4)})
         else:
+            stop_method = params.get("stop", {}).get("method", "fixed")
+            atr_p = int(params.get("stop", {}).get("atr_period", 14))
+            atr_m = float(params.get("stop", {}).get("atr_mult", 3.0))
             for sym, info in current_holdings.items():
                 if sym in (self.risk_off, self.benchmark):
                     continue
@@ -105,7 +108,11 @@ class Engine:
                 peak = stop_mod.peak_since_entry(cs)
                 last = float(cs.iloc[-1])
                 dd = (last / peak - 1.0) if peak > 0 else 0.0
-                if stop_mod.stop_triggered(cs, self.stop_pct):
+                if stop_method == "atr":
+                    triggered = stop_mod.stop_triggered_vol(cs, atr_p, atr_m)
+                else:
+                    triggered = stop_mod.stop_triggered(cs, self.stop_pct)
+                if triggered:
                     stopped.append(sym)
                 elif dd <= -(self.stop_pct - 0.02):
                     stop_warnings.append({"symbol": sym, "drawdown_from_peak": round(dd, 4)})
