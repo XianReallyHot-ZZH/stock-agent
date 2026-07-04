@@ -88,14 +88,14 @@ def main():
         fig.add_trace(
             go.Scatter(
                 x=dates, y=m_price.values,
-                name="价格", line=dict(color="#f97316", width=2),
-                hovertemplate="<b>%{x}</b><br>价格: %{y:.4f}<extra></extra>",
+                name="净值", line=dict(color="#f97316", width=2),
+                hovertemplate="<b>%{x}</b><br>净值: %{y:.4f}<extra></extra>",
             ),
             row=idx, col=1, secondary_y=True,
         )
         fig.update_yaxes(title_text="份额(亿份)", title_font=dict(color="#2563eb"),
                          row=idx, col=1, secondary_y=False)
-        fig.update_yaxes(title_text="价格", title_font=dict(color="#f97316"),
+        fig.update_yaxes(title_text="净值", title_font=dict(color="#f97316"),
                          row=idx, col=1, secondary_y=True)
 
     height = max(600, n * 220)
@@ -112,7 +112,7 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.write_html(str(out), include_plotlyjs="cdn")
     print(f"\n📈 {n} ETFs plotted -> {out}")
-    print(f"   blue = 份额(亿份)  orange = 价格  | 鼠标悬停查看精确数值")
+    print(f"   blue = 份额(亿份)  orange = 净值  | 鼠标悬停查看精确数值")
     print(f"   open in browser: file:///{out.resolve()}")
 
 
