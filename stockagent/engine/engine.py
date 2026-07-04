@@ -16,7 +16,7 @@ from . import indicators as ind
 from . import stop as stop_mod
 from .portfolio import TargetPlan, decide_target, diff
 from .regime import regime_state
-from .signals import current_signal
+from .signals import current_signal, get_signal
 
 
 class Engine:
@@ -118,6 +118,17 @@ class Engine:
 
         bench_dist = (bench_last / bench_ma - 1.0) if (not pd.isna(bench_ma) and bench_ma > 0) else None
 
+        # 7) strength board — ALWAYS momentum (60/120/250-day returns), observational,
+        #    independent of the active trading signal. Shown in the report as "what's
+        #    hot now", NOT a trade signal.
+        mom_sig = get_signal("momentum")
+        mom_scored = mom_sig.score_universe(close_by_sym, params)
+        strength_board = []
+        for _, row in mom_scored.head(6).iterrows():
+            sym = row["symbol"]
+            desc = mom_sig.describe_symbol(self._close(sym, decision_date), params)
+            strength_board.append({"symbol": sym, "score": row["score"], "summary": desc["summary"]})
+
         return {
             "decision_date": decision_date,
             "signal_name": signal_name,
@@ -133,6 +144,7 @@ class Engine:
             "ranking": scored[["symbol", "score", "eligible"]].to_dict("records"),
             "details": details,
             "holdings_detail": holdings_detail,
+            "strength_board": strength_board,
             "top_k": plan.picks,
             "target": plan.target,
             "cash_weight": round(plan.cash_weight, 4),

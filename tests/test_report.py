@@ -51,3 +51,26 @@ def test_report_risk_off():
     syn["actions"] = [{"type": "to_cash", "symbol": "511990", "weight": 1.0}]
     txt = compose_report(syn, cfg, use_llm=False)
     assert "风险关" in txt or "货币ETF避险" in txt
+
+
+def test_strength_board_shown_for_reversion():
+    cfg = get_config()
+    syn = dict(SYN)
+    syn["signal_name"] = "reversion"
+    syn["strength_board"] = [
+        {"symbol": "512480", "score": 0.8, "summary": "..."},
+        {"symbol": "159819", "score": 0.7, "summary": "..."},
+    ]
+    txt = compose_report(syn, cfg, use_llm=False)
+    assert "强势榜" in txt
+    assert "非买卖信号" in txt
+    assert "半导体ETF" in txt  # name resolved in the strength board
+
+
+def test_strength_board_hidden_for_momentum():
+    cfg = get_config()
+    syn = dict(SYN)
+    syn["signal_name"] = "momentum"
+    syn["strength_board"] = [{"symbol": "512480", "score": 0.8, "summary": "..."}]
+    txt = compose_report(syn, cfg, use_llm=False)
+    assert "强势榜" not in txt  # dedup: candidate board already shows the same ranking

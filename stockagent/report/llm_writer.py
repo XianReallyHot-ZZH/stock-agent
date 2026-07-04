@@ -107,6 +107,20 @@ def _candidates_line(signal: dict, meta: dict) -> str:
     return "\n".join(out)
 
 
+def _strength_line(signal: dict, meta: dict) -> str:
+    """Market-observation strength board (always momentum). NOT a trade signal."""
+    sb = signal.get("strength_board") or []
+    if not sb:
+        return "（无数据）"
+    out = []
+    for i, d in enumerate(sb, 1):
+        nm = _name(meta, d["symbol"])
+        sc = d.get("score")
+        sc_str = f"{sc:+.2f}" if isinstance(sc, (int, float)) else "NA"
+        out.append(f"  {i}. {nm}({d['symbol']}) 得分{sc_str} | {d.get('summary','')}")
+    return "\n".join(out)
+
+
 def _watch_line(signal: dict, meta: dict) -> str:
     ns = signal.get("warnings", {}).get("near_stop", [])
     if not ns:
@@ -174,6 +188,15 @@ def compose_report(signal: dict, cfg: Config, use_llm: bool = True) -> str:
 
     sig_name = signal.get("signal_name", "momentum")
     n_det = len(signal.get("details") or [])
+    # Strength board is hidden when the active signal is momentum (candidate board
+    # already shows the same ranking) to avoid redundancy.
+    strength_block: list[str] = []
+    if sig_name != "momentum":
+        strength_block = [
+            "━━━━━━━━━━━━",
+            "🔥 强势榜（仅市场观察·非买卖信号，按动量排名前6）：",
+            _strength_line(signal, meta),
+        ]
     lines = [
         f"📊 {d} {wd} 早盘报告 [{sig_name}]",
         "━━━━━━━━━━━━",
@@ -188,6 +211,7 @@ def compose_report(signal: dict, cfg: Config, use_llm: bool = True) -> str:
         _holdings_line(signal, meta),
         f"🏆 候选榜（{sig_name} 得分前{n_det}）：",
         _candidates_line(signal, meta),
+        *strength_block,
         "━━━━━━━━━━━━",
         f"🔍 简评：{commentary}",
         f"（数据截至 {d} 收盘 · 信号={sig_name} · 源：{('LLM' if (use_llm and llm_client.llm_available()) else '规则模板')}）",
