@@ -143,13 +143,38 @@ def _run_one(store, base, overrides, start, end, signal, extra):
     return row
 
 
-def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = True) -> pd.DataFrame:
-    """Run BOTH signals' param grids over [start,end]. Returns ranked DataFrame with a `signal` column."""
+def _ranked(rows: list[dict]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["gate_pass", "calmar"], ascending=[False, False]).reset_index(drop=True)
+
+
+def row_to_overrides(row) -> dict:
+    """Rebuild the make_config overrides dict from a sweep-result row (signal-aware)."""
+    sig = row["signal"]
+    o = {
+        ("rotation", "signal", "name"): sig,
+        ("portfolio", "k"): int(row["K"]),
+        ("regime", "ma_period"): int(row["regime_ma"]),
+        ("stop", "trailing_pct"): float(row["stop%"]),
+    }
+    if sig == "momentum":
+        wins, wts = MOM_BY_NAME[row["momentum"]]
+        o[("rotation", "trend_gate_ma")] = int(row["gate_ma"])
+        o[("rotation", "momentum", "windows")] = wins
+        o[("rotation", "momentum", "weights")] = wts
+    else:  # reversion
+        o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
+        o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
+        o[("rotation", "reversion", "long_ma")] = int(row["long_ma"])
+    return o
+
+
+def evaluate_momentum(store, base: Config, start: str, end: str) -> pd.DataFrame:
+    """Sweep the momentum signal's grid over [start,end]."""
     rows = []
-    # --- momentum combos ---
     mkeys = list(GRID.keys())
-    mcombos = list(itertools.product(*[GRID[k] for k in mkeys]))
-    for vals in mcombos:
+    for vals in itertools.product(*[GRID[k] for k in mkeys]):
         for mname, wins, wts in MOMENTUM:
             overrides = dict(zip(mkeys, vals))
             overrides[("rotation", "signal", "name")] = "momentum"
@@ -161,10 +186,14 @@ def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = Tru
                 rows.append(_run_one(store, base, overrides, start, end, "momentum", extra))
             except Exception:
                 continue
-    # --- reversion combos ---
+    return _ranked(rows)
+
+
+def evaluate_reversion(store, base: Config, start: str, end: str) -> pd.DataFrame:
+    """Sweep ONLY the reversion signal's grid over [start,end]. Faster than evaluate_grid."""
+    rows = []
     rkeys = list(REVERSION_GRID.keys())
-    rcombos = list(itertools.product(*[REVERSION_GRID[k] for k in rkeys]))
-    for vals in rcombos:
+    for vals in itertools.product(*[REVERSION_GRID[k] for k in rkeys]):
         overrides = dict(zip(rkeys, vals))
         overrides[("rotation", "signal", "name")] = "reversion"
         extra = {"rsi_period": overrides[("rotation", "reversion", "rsi_period")],
@@ -174,11 +203,19 @@ def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = Tru
             rows.append(_run_one(store, base, overrides, start, end, "reversion", extra))
         except Exception:
             continue
+    return _ranked(rows)
+
+
+def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = True) -> pd.DataFrame:
+    """Run BOTH signals' param grids over [start,end]. Returns ranked DataFrame with a `signal` column."""
+    df_m = evaluate_momentum(store, base, start, end)
+    df_r = evaluate_reversion(store, base, start, end)
+    df = pd.concat([df_m, df_r], ignore_index=True) if (len(df_m) or len(df_r)) else pd.DataFrame()
+    if len(df):
+        df = df.sort_values(["gate_pass", "calmar"], ascending=[False, False]).reset_index(drop=True)
     if verbose:
-        print(f"Evaluated {len(rows)} combos ({len(mcombos)*len(MOMENTUM)} momentum + {len(rcombos)} reversion) over {start}..{end}")
-    if not rows:
-        return pd.DataFrame()
-    df = pd.DataFrame(rows).sort_values(["gate_pass", "calmar"], ascending=[False, False]).reset_index(drop=True)
+        nm, nr = len(df_m), len(df_r)
+        print(f"Evaluated {nm + nr} combos ({nm} momentum + {nr} reversion) over {start}..{end}")
     return df
 
 
