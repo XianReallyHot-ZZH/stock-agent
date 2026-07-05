@@ -29,10 +29,10 @@ VALUE_PARAMS = {
     "entry_percentile": 0.30,      # buy when below 30th percentile
     "stabilize_lookback": 50,     # price stabilization lookback period
     "stabilize_recent": 20,       # no new low in last 20 days → stopped falling
-    "accum_trail_mult": 3.0,      # trailing multiplier when ACCUMULATING
+    "entry_stop": 0.12,          # Layer 1: max loss from entry price (always active)
+    "accum_trail_mult": 3.0,      # Layer 2: trailing from peak when ACCUMULATING (profits only)
     "stable_trail_mult": 2.0,     # when STABLE
     "dist_trail_mult": 1.0,       # when DISTRIBUTING (tight)
-    "catastrophic_stop": 0.25,    # -25% from entry
     "min_hold_days": 60,          # minimum holding period
 }
 
@@ -99,11 +99,16 @@ def describe_symbol(close: pd.Series, params: dict, ctx: dict | None = None) -> 
 
 
 def check_exits(positions: dict, ctx: dict, params: dict) -> list[str]:
-    """Adaptive trailing stop: distance depends on institutional state.
+    """Dual-layer exit: entry-based stop (always) + adaptive trailing (profits only).
 
-    ACCUMULATING → wide trailing (3×ATR): trust institutions, ride pullbacks.
-    DISTRIBUTING → tight trailing (1×ATR): be ready to run, but still let 最后疯狂 run.
-    Exit only when price actually reverses from peak (not when DISTRIBUTING starts).
+    Layer 1 (always active): if price drops > entry_stop from ENTRY PRICE → exit.
+      "I thought it was cheap. If it drops 12% more, I was wrong."
+      Does NOT depend on share state — don't死扛 with institutions when losing.
+
+    Layer 2 (profits only): adaptive trailing from PEAK.
+      ACCUMULATING → 3×ATR (let winners run, trust institutions on profits)
+      DISTRIBUTING → 1×ATR (tight, institutions leaving)
+      Only active when peak > entry (position has been profitable at some point).
     """
     p = _vf_params(params)
     sp = sf._share_params(params)
@@ -133,12 +138,17 @@ def check_exits(positions: dict, ctx: dict, params: dict) -> list[str]:
         last = float(cs.iloc[-1])
         entry_px = float(cs.iloc[0])
 
-        # catastrophic stop
-        if entry_px > 0 and (last / entry_px - 1.0) <= -float(p["catastrophic_stop"]):
+        # --- Layer 1: entry-based stop (always active, price is truth) ---
+        if entry_px > 0 and (last / entry_px - 1.0) <= -float(p["entry_stop"]):
             exits.append(sym)
             continue
 
-        # adaptive trailing: distance depends on share state
+        # --- Layer 2: adaptive trailing (only protects profits) ---
+        # Only relevant when position has been profitable (peak significantly above entry)
+        unrealized = last / entry_px - 1.0 if entry_px > 0 else 0.0
+        if unrealized <= 0:
+            continue  # underwater → Layer 1 handles risk, no trailing needed
+
         shares = share_map.get(sym)
         state = _share_state(shares, sp) if shares is not None and len(shares) else "STABLE"
 
@@ -153,7 +163,6 @@ def check_exits(positions: dict, ctx: dict, params: dict) -> list[str]:
         if pd.isna(atr) or atr <= 0 or peak <= 0:
             continue
 
-        # trailing line = peak − mult × ATR × peak (in price terms)
         trailing_line = peak * (1.0 - trail_mult * atr)
         if last <= trailing_line:
             exits.append(sym)
