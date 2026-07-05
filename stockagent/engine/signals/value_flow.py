@@ -22,6 +22,7 @@ from . import share_flow as sf
 from ._common import build_frame
 
 STICKY = True
+SUPER_STICKY = True  # V3.0: held positions kept regardless of eligibility; only check_exits can remove
 
 VALUE_PARAMS = {
     "percentile_window": 500,      # ~2 years lookback for "historical low"

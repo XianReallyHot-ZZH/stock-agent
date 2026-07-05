@@ -124,7 +124,8 @@ class Engine:
         # V2.8: sticky positions for signals that opt in (share_flow)
         held_set = {sym for sym in current_holdings if sym not in (self.risk_off, self.benchmark)}
         _held = held_set if getattr(sig, "STICKY", False) else None
-        plan: TargetPlan = decide_target(scored, regime, params, self.risk_off, stopped=stopped, held=_held)
+        _super = getattr(sig, "SUPER_STICKY", False)
+        plan: TargetPlan = decide_target(scored, regime, params, self.risk_off, stopped=stopped, held=_held, super_sticky=_super)
 
         # 5) actions vs current holdings
         current_w = {

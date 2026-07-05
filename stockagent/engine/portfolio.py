@@ -31,6 +31,7 @@ def decide_target(
     risk_off_symbol: str,
     stopped: list[str] | None = None,
     held: set | None = None,
+    super_sticky: bool = False,
 ) -> TargetPlan:
     """Compute target holdings applying priority stop > rotation > regime."""
     stopped = stopped or []
@@ -42,7 +43,7 @@ def decide_target(
         plan.target = {risk_off_symbol: 1.0}
         plan.cash_weight = 1.0
     else:
-        picks = select_top_k(scored, k, held=held)
+        picks = select_top_k(scored, k, held=held, super_sticky=super_sticky)
         plan.picks = picks
         if not picks:
             plan.target = {risk_off_symbol: 1.0}  # nothing eligible -> cash

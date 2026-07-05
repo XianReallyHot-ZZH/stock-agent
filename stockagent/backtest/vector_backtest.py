@@ -208,7 +208,8 @@ def run_backtest(
                 # V2.8: sticky positions for STICKY signals (share_flow)
                 _held_set = {sym for sym, sh in shares.items() if sh > 0 and sym != risk_off}
                 _held = _held_set if getattr(sig, "STICKY", False) else None
-                plan = decide_target(scored, RISK_ON, p, risk_off, stopped=forced_sells, held=_held)
+                _super = getattr(sig, "SUPER_STICKY", False)
+                plan = decide_target(scored, RISK_ON, p, risk_off, stopped=forced_sells, held=_held, super_sticky=_super)
                 # BUGFIX: sell currently-held symbols that rotated OUT of target
                 _target_syms = set(plan.target.keys()) - {risk_off}
                 _rotate_out = _held_set - _target_syms

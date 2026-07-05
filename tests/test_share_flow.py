@@ -115,3 +115,16 @@ def test_select_top_k_sticky_drops_ineligible_held():
     picks = select_top_k(scored, 2, held={"A"})
     assert "A" not in picks  # A dropped (ineligible)
     assert picks == ["C", "B"]  # filled by top non-held
+
+
+def test_select_top_k_super_sticky_keeps_ineligible_held():
+    """Super sticky: held symbols kept even if ineligible."""
+    import pandas as pd
+    scored = pd.DataFrame([
+        {"symbol": "A", "score": 0.01, "eligible": False},  # held, ineligible
+        {"symbol": "B", "score": 0.10, "eligible": True},
+        {"symbol": "C", "score": 0.50, "eligible": True},
+    ])
+    picks = select_top_k(scored, 2, held={"A"}, super_sticky=True)
+    assert "A" in picks  # A KEPT even though ineligible
+    assert picks == ["A", "C"]  # A + best eligible non-held
