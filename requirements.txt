@@ -6,6 +6,7 @@ requests>=2.31
 python-dateutil>=2.8
 pyyaml>=6.0
 python-dotenv>=1.0
+plotly>=5.0      # interactive HTML reports (research dashboard + backtest report)
 pytest>=7.4
 
 # LLM (optional; report writer works without it via template fallback)
