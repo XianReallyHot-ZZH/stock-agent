@@ -40,7 +40,6 @@ rotation:
   value_flow:            # V3.0 value + smart money + adaptive trailing
     percentile_window: 500  # ~2yr lookback for "historical low"
     entry_percentile: 0.30  # buy when below 30th percentile
-    trend_gate_ma: 250      # must be above MA(250) to enter
     accum_trail_mult: 3.0   # trailing distance when ACCUMULATING (wide)
     stable_trail_mult: 2.0  # when STABLE
     dist_trail_mult: 1.0    # when DISTRIBUTING (tight — catch reversal)

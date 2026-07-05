@@ -50,7 +50,6 @@ def _share_state(shares: pd.Series, sp: dict) -> str:
 def score_symbol(close: pd.Series, params: dict, shares: pd.Series | None = None) -> dict:
     p = _vf_params(params)
     pct = ind.percentile_rank(close, int(p["percentile_window"]))
-    ma250 = ind.sma(close, int(p["trend_gate_ma"]))
     last = float(close.iloc[-1]) if len(close) else float("nan")
 
     # share state
@@ -59,15 +58,14 @@ def score_symbol(close: pd.Series, params: dict, shares: pd.Series | None = None
         sp = sf._share_params(params)
         state = _share_state(shares, sp)
 
-    above_trend = (not pd.isna(ma250)) and (last > ma250)
     cheap = (not pd.isna(pct)) and (pct < float(p["entry_percentile"]))
-    eligible = bool(state == "ACCUMULATING" and cheap and above_trend)
+    eligible = bool(state == "ACCUMULATING" and cheap)
 
     # score: deeper discount = higher score (buy cheapest first)
     score = (float(p["entry_percentile"]) - pct) / float(p["entry_percentile"]) if eligible else float("nan")
 
     return {
-        "score": score, "above_ma": above_trend, "eligible": eligible,
+        "score": score, "above_ma": True, "eligible": eligible,
         "last_close": last, "len": int(len(close)),
     }
 
@@ -92,7 +90,7 @@ def describe_symbol(close: pd.Series, params: dict, ctx: dict | None = None) -> 
     pct = ind.percentile_rank(close, int(p["percentile_window"]))
     pct_str = f"{pct:.0%}" if not pd.isna(pct) else "NA"
     state = _share_state(shares, sf._share_params(params)) if shares is not None and len(shares) else "STABLE"
-    summ = f"[{state}] 分位{pct_str} | {'在250日线上' if info['above_ma'] else '破250日线'}"
+    summ = f"[{state}] 分位{pct_str}"
     return {"score": info["score"], "eligible": info["eligible"], "summary": summ}
 
 
