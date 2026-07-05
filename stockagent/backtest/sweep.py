@@ -138,7 +138,7 @@ MOM_BY_NAME = {name: (wins, wts) for name, wins, wts in MOMENTUM}
 _ROW_COLS = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "windows",
              "rsi_period", "oversold", "long_ma",
              "bb_mode", "pctb_low", "pctb_high", "bb_long_ma",
-             "share_trend", "share_min_chg", "accum_thr",
+             "share_trend", "share_min_chg", "accum_thr", "dist_thr",
              "ann", "mdd", "calmar", "sharpe", "turnover", "gate_pass"]
 
 
@@ -189,6 +189,7 @@ def row_to_overrides(row) -> dict:
         o[("rotation", "share_flow", "accum_threshold")] = float(row["accum_thr"])
     elif sig == "momentum_sf":
         o[("rotation", "share_flow", "accum_threshold")] = float(row["accum_thr"])
+        o[("rotation", "share_flow", "dist_threshold")] = float(row.get("dist_thr") or 0.02)
     else:  # reversion
         o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
         o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
@@ -254,7 +255,8 @@ MOMENTUM_SF_GRID = {
     ("portfolio", "k"): [3, 5],
     ("regime", "ma_period"): [120, 200],
     ("stop", "trailing_pct"): [0.08],
-    ("rotation", "share_flow", "accum_threshold"): [0.01, 0.02, 0.05],
+    ("rotation", "share_flow", "accum_threshold"): [0.01, 0.02, 0.05, 0.10],
+    ("rotation", "share_flow", "dist_threshold"): [0.01, 0.02, 0.05],
 }
 
 
@@ -265,7 +267,8 @@ def evaluate_momentum_sf(store, base: Config, start: str, end: str) -> pd.DataFr
     for vals in itertools.product(*[MOMENTUM_SF_GRID[k] for k in bkeys]):
         overrides = dict(zip(bkeys, vals))
         overrides[("rotation", "signal", "name")] = "momentum_sf"
-        extra = {"accum_thr": overrides[("rotation", "share_flow", "accum_threshold")]}
+        extra = {"accum_thr": overrides[("rotation", "share_flow", "accum_threshold")],
+                 "dist_thr": overrides[("rotation", "share_flow", "dist_threshold")]}
         try:
             rows.append(_run_one(store, base, overrides, start, end, "momentum_sf", extra))
         except Exception:
@@ -323,10 +326,12 @@ def main():
     df = evaluate_grid(store, base, args.start, args.end, verbose=True)
     out = Path("data/sweep_results.csv")
     df.to_csv(out, index=False)
-    show = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum", "rsi_period", "oversold", "long_ma",
+    show = ["signal", "K", "regime_ma", "stop%", "gate_ma", "momentum",
+            "rsi_period", "oversold", "long_ma",
             "bb_mode", "pctb_low", "pctb_high", "bb_long_ma",
-            "share_trend", "share_min_chg", "share_long_ma",
+            "accum_thr", "dist_thr",
             "ann", "mdd", "calmar", "sharpe", "gate_pass"]
+    show = [c for c in show if c in df.columns]
     print("\n=== TOP 10 by gate-pass then Calmar ===")
     print(df[show].head(10).to_string(index=False))
     print("\n=== best per signal (by Calmar) ===")
