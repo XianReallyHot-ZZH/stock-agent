@@ -255,3 +255,143 @@ def fetch_etf_spot_premium(timeout: float = 60.0) -> pd.DataFrame:
     else:
         out["premium"] = np.nan
     return out
+
+
+def fetch_etf_spot_shares(symbols: list[str], timeout: float = 60.0) -> dict[str, float]:
+    """Current share count for the given symbols (one batched fund_etf_spot_em call).
+
+    For ETFs whose historical shares are unavailable via fund_etf_scale_sse (e.g. 515880 not
+    in the SSE 基金份额 list), this at least gives the current level to draw as a reference.
+    Returns {symbol: shares_in_units}.
+    """
+    df = _run_with_timeout(ak.fund_etf_spot_em, timeout)
+    if df is None or len(df) == 0:
+        return {}
+    code_col = next((c for c in df.columns if str(c) in ("代码", "code")), df.columns[0])
+    share_col = next((c for c in df.columns if "份额" in str(c)), None)
+    if share_col is None:
+        return {}
+    want = set(str(s) for s in symbols)
+    out: dict[str, float] = {}
+    for _, r in df.iterrows():
+        code = str(r[code_col])
+        if code in want:
+            sh = r.get(share_col)
+            if pd.notna(sh):
+                out[code] = float(sh)
+    return out
+
+
+# ---- ETF NAV (V3.1 research) — fund-published unit/accumulated NAV, inherently correct ----
+def fetch_etf_nav(symbol: str, start_date: str = "20000101", end_date: str = "20500101",
+                  timeout: float = 40.0) -> pd.DataFrame:
+    """Fund-published NAV history for an ETF (天天基金网).
+
+    Returns DataFrame indexed by date(str): unit_nav, acc_nav. This is the authoritative
+    fund value (NOT the exchange trading price) — inherently correct & continuous, so no
+    前复权/后复权 needed (split/dividend handling is the fund company's job). Use this for
+    fair 规模=份额×净值 and valuation work; do NOT misuse daily_prices.close as NAV.
+
+    Primary: fund_etf_fund_info_em (unit+acc in one call). Some ETF codes aren't in that
+    table (e.g. 512980, 159819) → fall back to fund_open_fund_info_em (单位净值走势 + 累计净值走势).
+    """
+    try:
+        df = _run_with_timeout(ak.fund_etf_fund_info_em, timeout,
+                               fund=symbol, start_date=start_date, end_date=end_date)
+        if df is not None and len(df) > 0 and "单位净值" in df.columns:
+            out = pd.DataFrame({
+                "date": pd.to_datetime(df["净值日期"], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "unit_nav": pd.to_numeric(df["单位净值"], errors="coerce"),
+                "acc_nav": pd.to_numeric(df["累计净值"], errors="coerce"),
+            })
+            return out.dropna(subset=["date", "unit_nav"]).drop_duplicates("date").set_index("date").sort_index()
+    except Exception:  # noqa: BLE001
+        pass  # fall through to alternative endpoint
+
+    # Fallback: fund_open_fund_info_em (works for codes the primary table rejects)
+    unit = _run_with_timeout(ak.fund_open_fund_info_em, timeout, symbol=symbol, indicator="单位净值走势")
+    acc = _run_with_timeout(ak.fund_open_fund_info_em, timeout, symbol=symbol, indicator="累计净值走势")
+    if (unit is None or len(unit) == 0) and (acc is None or len(acc) == 0):
+        raise FetchError(f"empty nav {symbol}")
+    out = pd.DataFrame({"date": []})
+    if unit is not None and len(unit) and "单位净值" in unit.columns:
+        out = pd.DataFrame({
+            "date": pd.to_datetime(unit["净值日期"], errors="coerce").dt.strftime("%Y-%m-%d"),
+            "unit_nav": pd.to_numeric(unit["单位净值"], errors="coerce"),
+        }).dropna(subset=["date"]).drop_duplicates("date")
+    if acc is not None and len(acc) and "累计净值" in acc.columns:
+        acc_df = pd.DataFrame({
+            "date": pd.to_datetime(acc["净值日期"], errors="coerce").dt.strftime("%Y-%m-%d"),
+            "acc_nav": pd.to_numeric(acc["累计净值"], errors="coerce"),
+        }).dropna(subset=["date"]).drop_duplicates("date")
+        out = out.merge(acc_df, on="date", how="outer") if len(out) else acc_df
+    if not len(out):
+        raise FetchError(f"empty nav {symbol}")
+    return out.sort_values("date").set_index("date")
+
+
+def fetch_etf_scale_szse_range(start: str, end: str, timeout: float = 60.0) -> pd.DataFrame:
+    """SZSE ETF shares for a date range via fund_scale_daily_szse (date-range native).
+
+    Returns DataFrame[symbol, date, shares] for ALL SZSE ETFs in [start,end]. Caller should
+    chunk (e.g. month-by-month) to keep payloads small + upsert incrementally. This is the
+    deep-market counterpart to fund_etf_scale_sse (SSE-only, per-date). Note: fund_etf_scale_szse()
+    with NO args is only a CURRENT spot snapshot (no history) — fund_scale_daily_szse has history.
+    """
+    s = str(start).replace("-", "")
+    e = str(end).replace("-", "")
+    df = _run_with_timeout(ak.fund_scale_daily_szse, timeout,
+                           start_date=s, end_date=e, symbol="ETF")
+    if df is None or len(df) == 0:
+        raise FetchError(f"empty szse range {start}..{end}")
+    code_col = next((c for c in df.columns if "代码" in str(c)), None)
+    date_col = next((c for c in df.columns if "日期" in str(c) or "date" in str(c).lower()), None)
+    share_col = next((c for c in df.columns if "份额" in str(c)), None)
+    if code_col is None or date_col is None or share_col is None:
+        raise FetchError(f"szse range unexpected cols {list(df.columns)}")
+    res = pd.DataFrame({
+        "symbol": df[code_col].astype(str),
+        "date": pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d"),
+        "shares": pd.to_numeric(df[share_col], errors="coerce"),
+    })
+    return res.dropna(subset=["symbol", "date", "shares"])
+
+
+# ---- Industry PE (V3.1 research) — cninfo, per-date snapshot of all CSRC industries ----
+def fetch_industry_pe(date: str, timeout: float = 40.0, retries: int = 3) -> pd.DataFrame:
+    """All CSRC 证监会行业 static-PE for a given date (YYYYMMDD). One call covers every
+    industry, so backfill is one-fetch-per-trading-day (mirrors fund_etf_scale_sse pattern).
+
+    Returns DataFrame[industry, pe, pe_median]. PE = 静态市盈率-加权平均 (中位数 as cross-check).
+    Static PE uses last annual earnings (lags within-year), acceptable for历史分位 in v1.
+
+    cninfo is throttle-prone (intermittent empty/HTML responses on valid dates) AND has no
+    data before ~2023. We retry to ride through throttling; pre-2023 dates stay empty
+    (raised as FetchError, which the manager logs + skips).
+    """
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(2.0)
+        try:
+            df = _run_with_timeout(ak.stock_industry_pe_ratio_cninfo, timeout,
+                                   symbol="证监会行业分类", date=date)
+            if df is not None and len(df) > 0 and any("行业名称" in str(c) for c in df.columns):
+                break
+            last_err = "empty"
+        except Exception as e:  # noqa: BLE001
+            last_err = str(e)[:80]
+    else:
+        raise FetchError(f"empty industry_pe {date} ({last_err})")
+
+    name_col = next((c for c in df.columns if "行业名称" in str(c)), None)
+    pe_col = next((c for c in df.columns if "加权平均" in str(c) and "市盈率" in str(c)), None)
+    med_col = next((c for c in df.columns if "中位数" in str(c) and "市盈率" in str(c)), None)
+    if name_col is None or pe_col is None:
+        raise FetchError(f"industry_pe {date}: missing cols {list(df.columns)}")
+    out = pd.DataFrame({
+        "industry": df[name_col].astype(str),
+        "pe": pd.to_numeric(df[pe_col], errors="coerce"),
+        "pe_median": pd.to_numeric(df[med_col], errors="coerce") if med_col else pd.NA,
+    })
+    return out.dropna(subset=["industry"])

@@ -169,38 +169,168 @@ class DataManager:
         log.info("etf_scale updated: +%d rows (to %s, primary=SSE 基金份额)", n, today)
         return n
 
-    def backfill_etf_scale(self, start: str, end: str, step_days: int = 1) -> int:
-        """One-time historical backfill of SSE ETF shares (SZSE has no history via akshare).
+    def backfill_etf_scale(self, start: str, end: str, step_days: int = 1,
+                           source: str = "all") -> int:
+        """One-time historical backfill of ETF shares. source: 'all' | 'sse' | 'szse'.
 
-        Uses the benchmark's stored price dates as the trading-day timeline (robust — no
-        calendar-table dependency). Fetches fund_etf_scale_sse(date) for pool SSE symbols.
-        ~0.4s/date. step_days>1 (e.g. 5 = weekly) speeds it up for monthly trends.
+        SSE via fund_etf_scale_sse (per-date, benchmark timeline). SZSE via
+        fund_scale_daily_szse (date-range native → ONE batched fetch, far faster than
+        per-date). source='szse' skips already-backfilled SSE to fill only the deep-market gap.
         """
-        bench = self.store.get_series(self.config.benchmark_symbol, start=start, end=end)
-        days = list(bench.index)
-        if not days:
-            log.warning("backfill_etf_scale: no benchmark price dates in [%s,%s]", start, end)
-            return 0
-        pool_sse = {s for s in self.config.all_symbols() if str(s).startswith("5")}
-        sampled = days[::max(1, step_days)]
+        want_sse = source in ("all", "sse")
+        want_szse = source in ("all", "szse")
+        pool_szse = {s for s in self.config.all_symbols() if str(s).startswith("1")} if want_szse else set()
         total = 0
-        for i, d in enumerate(sampled):
+
+        # --- SSE: per-date (benchmark price dates as the trading-day timeline) ---
+        if want_sse:
+            bench = self.store.get_series(self.config.benchmark_symbol, start=start, end=end)
+            days = list(bench.index)
+            if not days:
+                log.warning("backfill_etf_scale SSE: no benchmark dates in [%s,%s]", start, end)
+            else:
+                pool_sse = {s for s in self.config.all_symbols() if str(s).startswith("5")}
+                sampled = days[::max(1, step_days)]
+                for i, d in enumerate(sampled):
+                    if i > 0:
+                        time.sleep(0.4)
+                    try:
+                        df = fetcher.fetch_etf_scale_sse(d.replace("-", ""))
+                    except Exception as e:  # noqa: BLE001
+                        log.warning("scale sse %s failed: %s", d, str(e)[:80])
+                        df = None
+                    rows = []
+                    if df is not None:
+                        for _, r in df.iterrows():
+                            sym = str(r["symbol"])
+                            if sym not in pool_sse:
+                                continue
+                            sh = r.get("shares")
+                            if pd.notna(sh):
+                                rows.append((sym, d, float(sh), None))
+                    total += self.store.upsert_scale(rows, source="sse")
+                log.info("etf_scale SSE backfill: %d dates sampled, +%d rows", len(sampled), total)
+
+        # --- SZSE: month-by-month range fetch + incremental upsert (survives interruption) ---
+        if want_szse and pool_szse:
+            from datetime import datetime, timedelta
+            cur = datetime.strptime(str(start).replace("-", "")[:6] + "01", "%Y%m%d")
+            end_dt = datetime.strptime(str(end).replace("-", "")[:6] + "01", "%Y%m%d")
+            months = 0
+            n_szse = 0
+            while cur <= end_dt:
+                ms = cur.strftime("%Y%m%d")
+                nxt = cur.replace(year=cur.year + 1, month=1, day=1) if cur.month == 12 \
+                    else cur.replace(month=cur.month + 1, day=1)
+                me = (nxt - timedelta(days=1)).strftime("%Y%m%d")
+                try:
+                    df = fetcher.fetch_etf_scale_szse_range(ms, me)
+                    rows = [(str(r["symbol"]), str(r["date"]), float(r["shares"]), None)
+                            for _, r in df.iterrows() if str(r["symbol"]) in pool_szse]
+                    if rows:
+                        n_szse += self.store.upsert_scale(rows, source="szse")
+                    months += 1
+                except Exception as e:  # noqa: BLE001
+                    log.warning("szse %s..%s failed: %s", ms, me, str(e)[:80])
+                cur = nxt
+            total += n_szse
+            log.info("etf_scale SZSE backfill: %d months, +%d rows (%d pool symbols)",
+                     months, n_szse, len(pool_szse))
+
+        if total:
+            self.store.set_meta("last_scale_backfill", fetcher.today_str())
+        return total
+
+    # ---- ETF NAV (V3.1 research) ----
+    def _nav_start(self, symbol: str, last: Optional[str]) -> str:
+        if last:
+            return (datetime.strptime(last, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y%m%d")
+        years = int(self.config.params.get("data", {}).get("history_years", 6))
+        return (datetime.now() - timedelta(days=365 * years)).strftime("%Y%m%d")
+
+    def update_etf_nav(self, symbols: Optional[list[str]] = None) -> dict:
+        """Daily incremental NAV per ETF. Returns {symbol: rows_added}."""
+        syms = symbols or self.config.rotation_symbols()
+        results: dict[str, int] = {}
+        end = fetcher.today_str().replace("-", "")
+        for i, sym in enumerate(syms):
+            start = self._nav_start(sym, self.store.last_nav_date(sym))
             if i > 0:
                 time.sleep(0.4)
             try:
-                df = fetcher.fetch_etf_scale_sse(d.replace("-", ""))
+                df = fetcher.fetch_etf_nav(sym, start_date=start, end_date=end)
             except Exception as e:  # noqa: BLE001
-                log.warning("scale %s failed: %s", d, str(e)[:80])
+                log.warning("nav fetch %s failed: %s", sym, str(e)[:120])
+                results[sym] = 0
                 continue
-            rows = []
-            for _, r in df.iterrows():
-                sym = str(r["symbol"])
-                if sym not in pool_sse:
-                    continue
-                sh = r.get("shares")
-                if pd.notna(sh):
-                    rows.append((sym, d, float(sh), None))
-            total += self.store.upsert_scale(rows, source="sse")
-        self.store.set_meta("last_scale_backfill", fetcher.today_str())
-        log.info("etf_scale backfill: %d dates sampled, +%d rows", len(sampled), total)
+            n = self.store.upsert_nav(sym, df, source="em")
+            log.info("nav %s: +%d rows (to %s)", sym, n, df.index[-1] if len(df) else "?")
+            results[sym] = n
+        if any(results.values()):
+            self.store.set_meta("last_nav_update", fetcher.today_str())
+        return results
+
+    def backfill_etf_nav(self, start: str, end: str) -> int:
+        """One-time historical NAV backfill (fund_etf_fund_info_em takes a date range natively)."""
+        pool = self.config.all_symbols()
+        s, e = start.replace("-", ""), end.replace("-", "")
+        total = 0
+        for i, sym in enumerate(pool):
+            if i > 0:
+                time.sleep(0.4)
+            try:
+                df = fetcher.fetch_etf_nav(sym, start_date=s, end_date=e)
+            except Exception as ex:  # noqa: BLE001
+                log.warning("nav backfill %s failed: %s", sym, str(ex)[:100])
+                continue
+            total += self.store.upsert_nav(sym, df, source="em")
+        self.store.set_meta("last_nav_backfill", fetcher.today_str())
+        log.info("nav backfill: +%d rows across %d symbols", total, len(pool))
+        return total
+
+    # ---- Industry PE (V3.1 research) ----
+    def update_industry_pe(self, date: Optional[str] = None) -> int:
+        """Daily: store all CSRC industries' PE for one date. One fetch covers every sector."""
+        date = date or fetcher.today_str()
+        try:
+            df = fetcher.fetch_industry_pe(date.replace("-", ""))
+        except Exception as e:  # noqa: BLE001
+            log.warning("industry_pe fetch failed: %s", str(e)[:120])
+            return 0
+        rows = [(r["industry"], date, r.get("pe"), r.get("pe_median"))
+                for _, r in df.iterrows() if pd.notna(r.get("pe"))]
+        n = self.store.upsert_industry_pe(rows, source="cninfo")
+        self.store.set_meta("last_industry_pe_update", date)
+        log.info("industry_pe %s: +%d rows (%d industries)", date, n, len(rows))
+        return n
+
+    def backfill_industry_pe(self, start: str, end: str, step_days: int = 1,
+                             sleep: float = 1.5) -> int:
+        """One-time historical backfill; uses benchmark's stored price dates as the timeline.
+
+        cninfo is throttle-prone under sustained calling — raise `sleep` (e.g. 8s) and
+        `step_days` (e.g. 30=monthly) for a gentler pace that gets through. History ~2023+."""
+        bench = self.store.get_series(self.config.benchmark_symbol, start=start, end=end)
+        days = list(bench.index)
+        if not days:
+            log.warning("backfill_industry_pe: no benchmark dates in [%s,%s]", start, end)
+            return 0
+        sampled = days[::max(1, step_days)]
+        total = 0
+        ok = 0
+        for i, d in enumerate(sampled):
+            if i > 0:
+                time.sleep(sleep)
+            try:
+                df = fetcher.fetch_industry_pe(d.replace("-", ""))
+            except Exception as e:  # noqa: BLE001
+                log.warning("industry_pe %s failed: %s", d, str(e)[:80])
+                continue
+            rows = [(r["industry"], d, r.get("pe"), r.get("pe_median"))
+                    for _, r in df.iterrows() if pd.notna(r.get("pe"))]
+            if rows:
+                ok += 1
+            total += self.store.upsert_industry_pe(rows, source="cninfo")
+        self.store.set_meta("last_industry_pe_backfill", fetcher.today_str())
+        log.info("industry_pe backfill: %d/%d dates ok, +%d rows", ok, len(sampled), total)
         return total

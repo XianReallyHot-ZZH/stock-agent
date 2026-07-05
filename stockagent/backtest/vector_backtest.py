@@ -29,6 +29,20 @@ from . import metrics as M
 
 log = logging.getLogger(__name__)
 
+# Process-local cache for the loaded price+shares panel. The panel depends only
+# on the store's data + symbol set + benchmark/risk_off — none of which change
+# across a param sweep — so reusing it across run_backtest calls is correct and
+# removes hundreds of redundant SQLite round-trips during sweeps/walk-forward
+# (the dominant cost: previously every combo reloaded ~29 symbols' series).
+# The store is read-only during a script run; if you mutate it in-process and
+# need a fresh panel, call clear_panel_cache().
+_PANEL_CACHE: dict[tuple, tuple] = {}
+
+
+def clear_panel_cache() -> None:
+    """Drop the cached price/share panel (use after mutating the store in-process)."""
+    _PANEL_CACHE.clear()
+
 
 @dataclass
 class BacktestResult:
@@ -42,6 +56,13 @@ class BacktestResult:
 
 
 def _load_panel(store: Store, symbols: list[str], benchmark: str, risk_off: str):
+    # Cache key: store path + pool signature. Panel is independent of swept params
+    # and of start/end (slicing happens after load), so one panel serves a whole sweep.
+    key = (str(store.db_path), benchmark, risk_off, tuple(symbols))
+    cached = _PANEL_CACHE.get(key)
+    if cached is not None:
+        return cached
+
     bench = store.get_series(benchmark)
     timeline = bench.index
     all_syms = list(dict.fromkeys(symbols + [benchmark, risk_off]))
@@ -59,7 +80,9 @@ def _load_panel(store: Store, symbols: list[str], benchmark: str, risk_off: str)
         sc = store.get_scale_series(s)
         if len(sc) and "shares" in sc.columns:
             shares_wide[s] = sc["shares"].reindex(timeline).ffill()
-    return timeline, closes, opens, shares_wide
+    panel = (timeline, closes, opens, shares_wide)
+    _PANEL_CACHE[key] = panel
+    return panel
 
 
 def run_backtest(

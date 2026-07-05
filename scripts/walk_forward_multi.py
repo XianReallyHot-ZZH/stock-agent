@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from stockagent.backtest import run_backtest
 from stockagent.backtest.sweep import (evaluate_bb_macd, evaluate_momentum,
                                        evaluate_reversion, evaluate_share_flow,
-                                       make_config, row_to_overrides)
+                                       evaluate_value_flow, make_config,
+                                       row_to_overrides)
 from stockagent.config import get_config
 from stockagent.data import Store
 from stockagent.utils.logging_setup import setup_logging
@@ -39,6 +40,9 @@ def _best_str(row) -> str:
         return f"K={int(row['K'])} regime={int(row['regime_ma'])} mode={row['bb_mode']} pctb_low={row['pctb_low']} pctb_high={row['pctb_high']} long_ma={row['bb_long_ma']}"
     if row["signal"] == "share_flow":
         return f"K={int(row['K'])} regime={int(row['regime_ma'])} accum_thr={row['accum_thr']}"
+    if row["signal"] == "value_flow":
+        return (f"K={int(row['K'])} regime={int(row['regime_ma'])} "
+                f"pct={row['accum_thr']} trail_a={row.get('dist_thr')} trail_d={row.get('share_trend')}")
     return f"K={int(row['K'])} regime={int(row['regime_ma'])} mom={row['momentum']}({row['windows']})"
 
 
@@ -79,30 +83,39 @@ def summarize(signal, rows):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--with-momentum", action="store_true", help="also run momentum for comparison (slow)")
+    ap.add_argument("--only", default=None,
+                    help="run only this signal (value_flow|reversion|bb_macd|share_flow); default = all four")
     args = ap.parse_args()
     setup_logging()
     base = get_config()
     store = Store(base.db_path)
 
+    # (label, eval_fn); value_flow first as the V3.0 headline signal.
+    signals = [
+        ("value_flow", evaluate_value_flow),
+        ("reversion", evaluate_reversion),
+        ("bb_macd", evaluate_bb_macd),
+        ("share_flow", evaluate_share_flow),
+    ]
+    if args.only:
+        signals = [(n, fn) for n, fn in signals if n == args.only]
+        if not signals:
+            print(f"unknown signal '{args.only}'; available: value_flow|reversion|bb_macd|share_flow")
+            return
+    if args.with_momentum:
+        signals.append(("momentum", evaluate_momentum))
+
     print("=" * 64)
     print("MULTI-WINDOW WALK-FORWARD (expanding, anchored 2021-01-01)")
     print("=" * 64)
 
-    print("\n--- reversion ---")
-    summarize("reversion", run_signal(store, base, evaluate_reversion, "reversion"))
-
-    print("\n--- bb_macd ---")
-    summarize("bb_macd", run_signal(store, base, evaluate_bb_macd, "bb_macd"))
-
-    print("\n--- share_flow ---")
-    summarize("share_flow", run_signal(store, base, evaluate_share_flow, "share_flow"))
-
-    if args.with_momentum:
-        print("\n--- momentum (baseline) ---")
-        summarize("momentum", run_signal(store, base, evaluate_momentum, "momentum"))
+    for name, fn in signals:
+        print(f"\n--- {name} ---")
+        summarize(name, run_signal(store, base, fn, name))
 
     print("\n" + "=" * 64)
-    print("判定：reversion 若 gate PASS 过半 或 drawdown<基准 过半 => 防御性稳健，可作 shadow 主信号。")
+    print("判定：某信号若 gate PASS 过半 或 drawdown<基准 过半 => 防御性稳健，可作 shadow 主信号。")
+    print("     value_flow 为 V3.0 推荐信号，此处给其与 reversion 同等的多窗口稳健性检验。")
     print("=" * 64)
 
 

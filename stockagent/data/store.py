@@ -41,9 +41,27 @@ CREATE TABLE IF NOT EXISTS etf_scale (
     source TEXT,
     PRIMARY KEY (symbol, date)
 );
+CREATE TABLE IF NOT EXISTS etf_nav (
+    symbol   TEXT NOT NULL,
+    date     TEXT NOT NULL,
+    unit_nav REAL,
+    acc_nav  REAL,
+    source   TEXT,
+    PRIMARY KEY (symbol, date)
+);
+CREATE TABLE IF NOT EXISTS industry_pe (
+    industry  TEXT NOT NULL,
+    date      TEXT NOT NULL,
+    pe        REAL,
+    pe_median REAL,
+    source    TEXT,
+    PRIMARY KEY (industry, date)
+);
 CREATE INDEX IF NOT EXISTS idx_prices_symbol ON daily_prices(symbol);
 CREATE INDEX IF NOT EXISTS idx_fund_flow_sector ON fund_flow(sector);
 CREATE INDEX IF NOT EXISTS idx_scale_symbol ON etf_scale(symbol);
+CREATE INDEX IF NOT EXISTS idx_nav_symbol ON etf_nav(symbol);
+CREATE INDEX IF NOT EXISTS idx_industry_pe ON industry_pe(industry);
 """
 
 
@@ -267,4 +285,90 @@ class Store:
     def last_scale_date(self, symbol: str) -> Optional[str]:
         with self._conn() as c:
             row = c.execute("SELECT MAX(date) FROM etf_scale WHERE symbol=?", (symbol,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- etf nav (V3.1 research) ----
+    def upsert_nav(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with unit_nav, acc_nav."""
+        if df is None or len(df) == 0:
+            return 0
+        rows = [
+            (symbol, str(d),
+             float(r.get("unit_nav", 0) or 0),
+             float(r.get("acc_nav", 0) or 0),
+             source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO etf_nav(symbol,date,unit_nav,acc_nav,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(symbol,date) DO UPDATE SET "
+                "unit_nav=excluded.unit_nav,acc_nav=excluded.acc_nav,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_nav_series(self, symbol: str, start: Optional[str] = None,
+                       end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,unit_nav,acc_nav FROM etf_nav WHERE symbol=?"
+        params: list = [symbol]
+        if start:
+            q += " AND date>=?"; params.append(start)
+        if end:
+            q += " AND date<=?"; params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_nav_date(self, symbol: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(date) FROM etf_nav WHERE symbol=?", (symbol,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- industry PE (V3.1 research) ----
+    def upsert_industry_pe(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (industry, date, pe, pe_median). Idempotent upsert."""
+        if not rows:
+            return 0
+        payload = [
+            (ind, d,
+             float(pe) if pe is not None and not pd.isna(pe) else None,
+             float(pm) if pm is not None and not pd.isna(pm) else None,
+             source)
+            for (ind, d, pe, pm) in rows
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO industry_pe(industry,date,pe,pe_median,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(industry,date) DO UPDATE SET "
+                "pe=excluded.pe,pe_median=excluded.pe_median,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_industry_pe_series(self, industry: str, start: Optional[str] = None,
+                               end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,pe,pe_median FROM industry_pe WHERE industry=?"
+        params: list = [industry]
+        if start:
+            q += " AND date>=?"; params.append(start)
+        if end:
+            q += " AND date<=?"; params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_industry_pe_date(self, industry: Optional[str] = None) -> Optional[str]:
+        with self._conn() as c:
+            if industry:
+                row = c.execute(
+                    "SELECT MAX(date) FROM industry_pe WHERE industry=?", (industry,)).fetchone()
+            else:
+                row = c.execute("SELECT MAX(date) FROM industry_pe").fetchone()
             return row[0] if row and row[0] else None

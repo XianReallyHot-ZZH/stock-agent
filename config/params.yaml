@@ -11,7 +11,7 @@ portfolio:
 rotation:
   rebalance_weekday: 4  # 0=Mon .. 4=Fri
   signal:
-    name: reversion     # V2.1 default = reversion (OOS-validated defensive signal); "momentum" available
+    name: value_flow    # V3.0 default — multi-window validated (gate 2/4, drawdown<bm 4/4, params stable)
   trend_gate_ma: 60     # candidate must have close > MA(60) to be eligible (momentum)
   momentum:
     windows: [60, 120, 250]     # lookback days (slow momentum — sweep winner)
@@ -43,7 +43,7 @@ rotation:
     stabilize_lookback: 50  # price stabilization lookback
     stabilize_recent: 20    # no new low in last 20 days = stopped falling
     entry_stop: 0.15        # Layer 1: max loss from entry (always active, price is truth)
-    accum_trail_mult: 3.0   # Layer 2: trailing from peak when ACCUMULATING (profits only)
+    accum_trail_mult: 2.0   # Layer 2: trailing from peak when ACCUMULATING (walk-forward winner, 3/4 windows)
     stable_trail_mult: 2.0  # when STABLE
     dist_trail_mult: 1.0    # when DISTRIBUTING (tight)
     min_hold_days: 60       # minimum holding period
@@ -51,7 +51,7 @@ rotation:
 # ---- Regime / market timing layer (daily) (Q7) ----
 regime:
   benchmark_symbol: "510300"   # 沪深300 ETF (also used as backtest benchmark)
-  ma_period: 120               # regime MA period
+  ma_period: 200               # regime MA period (value_flow walk-forward winner; reversion preferred 120)
   band_pct: 0.02               # V2.7: deadband around MA (±2%); 0 = legacy
   confirm_days: 3              # V2.7: consecutive days beyond band to confirm flip; 1 = legacy
   risk_off_symbol: "511990"    # 货币ETF (华宝添益) — parking spot when risk-off
@@ -77,3 +77,30 @@ backtest:
 data:
   adjust: "hfq"             # store 后复权 for math (returns identical to qfq; history stable)
   history_years: 6          # how much history to backfill on init
+
+# ---- Research module (V3.1 行业研究·性价比三因子) ----
+# Read-only research report (does NOT feed the trading engine). See plans/breezy-jumping-pond.md.
+# Composite = valuation(PE分位) + chip(筹码动向·含文章末期见底逻辑) + trend(价格趋势).
+research:
+  v1_symbols: ["512800", "512880", "512480", "512690", "512010", "510300"]
+  pe_lookback_years: 3      # PE历史分位窗口（cninfo 行业PE历史~2023起，约3年）
+  ma_period: 60             # 趋势因子均线
+  weights:                  # 三因子复合权重（权益类）
+    valuation: 0.40
+    chip: 0.30
+    trend: 0.30
+  chip:
+    # 方向分类复用 share_flow._classify_state（2-of-3 共识, 阈值取自 rotation.share_flow 段）
+    # 位置 = reduction_from_peak = 1 - now/peak（基于各ETF自身历史份额峰值，自动检测）
+    pos_deep: 0.50          # reduction >= 此值 = 深回撤（底部区域）
+    pos_low: 0.20           # reduction <= 此值 = 近峰值（高位区域）
+  chip_score:               # 6 相位分值 (position × 筹码状态)；含文章"末期见底"非单调逻辑
+    deep_distributing: 50   # 下跌末段：深回撤+仍减（未确认见底）
+    deep_stable: 85         # 🎯见底：深回撤+卖盘枯竭（斜率转平）
+    deep_accumulating: 90   # 🎯低位加仓：深回撤+聪明钱重新进场（最看多）
+    mid_distributing: 20    # ⚠️兑现中段：机构持续减仓·当下无性价比（文章主线·最看空）
+    mid_stable: 50          # 观望
+    mid_accumulating: 75    # 加仓
+    low_distributing: 30    # 高位减仓
+    low_stable: 40          # 见顶预警：份额加满·加仓停滞
+    low_accumulating: 60    # 高位加仓：仍涨但风险积聚
