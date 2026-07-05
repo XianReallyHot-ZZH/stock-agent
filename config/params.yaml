@@ -40,6 +40,8 @@ rotation:
   value_flow:            # V3.0 value + smart money + adaptive trailing
     percentile_window: 500  # ~2yr lookback for "historical low"
     entry_percentile: 0.30  # buy when below 30th percentile
+    stabilize_lookback: 50  # price stabilization lookback
+    stabilize_recent: 20    # no new low in last 20 days = stopped falling
     accum_trail_mult: 3.0   # trailing distance when ACCUMULATING (wide)
     stable_trail_mult: 2.0  # when STABLE
     dist_trail_mult: 1.0    # when DISTRIBUTING (tight — catch reversal)

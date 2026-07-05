@@ -157,3 +157,19 @@ def percentile_rank(close: pd.Series, window: int) -> float:
     recent = close.iloc[-w:].astype(float)
     last = float(close.iloc[-1])
     return float((recent < last).sum()) / w
+
+
+def price_stabilized(close: pd.Series, lookback: int = 50, recent: int = 20) -> bool:
+    """True if the price has stopped making new lows (light trend filter).
+
+    Compares the minimum of the last `recent` bars to the minimum of the
+    `lookback - recent` bars before that. If recent min > prior min → the
+    price is not in free-fall (bottom forming). If recent min ≤ prior min →
+    still making new lows (falling knife), don't buy.
+    """
+    if close is None or len(close) < lookback:
+        return True  # insufficient data → don't block entry
+    prior = close.iloc[-lookback:-recent].astype(float)
+    recent_min = float(close.iloc[-recent:].min())
+    prior_min = float(prior.min())
+    return recent_min > prior_min

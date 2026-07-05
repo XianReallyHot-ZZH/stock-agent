@@ -27,7 +27,8 @@ SUPER_STICKY = True  # V3.0: held positions kept regardless of eligibility; only
 VALUE_PARAMS = {
     "percentile_window": 500,      # ~2 years lookback for "historical low"
     "entry_percentile": 0.30,      # buy when below 30th percentile
-    "trend_gate_ma": 250,          # must be above MA(250) to enter
+    "stabilize_lookback": 50,     # price stabilization lookback period
+    "stabilize_recent": 20,       # no new low in last 20 days → stopped falling
     "accum_trail_mult": 3.0,      # trailing multiplier when ACCUMULATING
     "stable_trail_mult": 2.0,     # when STABLE
     "dist_trail_mult": 1.0,       # when DISTRIBUTING (tight)
@@ -60,7 +61,8 @@ def score_symbol(close: pd.Series, params: dict, shares: pd.Series | None = None
         state = _share_state(shares, sp)
 
     cheap = (not pd.isna(pct)) and (pct < float(p["entry_percentile"]))
-    eligible = bool(state == "ACCUMULATING" and cheap)
+    stabilized = ind.price_stabilized(close, int(p["stabilize_lookback"]), int(p["stabilize_recent"]))
+    eligible = bool(state == "ACCUMULATING" and cheap and stabilized)
 
     # score: deeper discount = higher score (buy cheapest first)
     score = (float(p["entry_percentile"]) - pct) / float(p["entry_percentile"]) if eligible else float("nan")
@@ -91,7 +93,8 @@ def describe_symbol(close: pd.Series, params: dict, ctx: dict | None = None) -> 
     pct = ind.percentile_rank(close, int(p["percentile_window"]))
     pct_str = f"{pct:.0%}" if not pd.isna(pct) else "NA"
     state = _share_state(shares, sf._share_params(params)) if shares is not None and len(shares) else "STABLE"
-    summ = f"[{state}] 分位{pct_str}"
+    stab = ind.price_stabilized(close, int(p["stabilize_lookback"]), int(p["stabilize_recent"]))
+    summ = f"[{state}] 分位{pct_str} | {'企稳' if stab else '仍创新低'}"
     return {"score": info["score"], "eligible": info["eligible"], "summary": summ}
 
 

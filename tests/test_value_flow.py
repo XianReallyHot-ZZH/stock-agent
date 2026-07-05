@@ -5,7 +5,8 @@ import pandas as pd
 from stockagent.engine import indicators as ind
 from stockagent.engine.signals import value_flow as vf
 
-PARAMS = {"rotation": {"value_flow": {"trend_gate_ma": 20, "entry_percentile": 0.50, "min_hold_days": 0}, "share_flow": {}}}
+PARAMS = {"rotation": {"value_flow": {"entry_percentile": 0.50, "min_hold_days": 0,
+    "stabilize_lookback": 50, "stabilize_recent": 20}, "share_flow": {}}}
 
 
 def test_percentile_rank_basic():
