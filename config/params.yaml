@@ -39,10 +39,10 @@ rotation:
     price_backstop: 0.20  # tail-risk price stop (check_exits)
   value_flow:            # V3.0 value + smart money + dual-layer exit
     percentile_window: 500  # ~2yr lookback for "historical low"
-    entry_percentile: 0.30  # buy when below 30th percentile
+    entry_percentile: 0.20  # buy when below 20th percentile (sweep winner)
     stabilize_lookback: 50  # price stabilization lookback
     stabilize_recent: 20    # no new low in last 20 days = stopped falling
-    entry_stop: 0.12        # Layer 1: max loss from entry (always active, price is truth)
+    entry_stop: 0.15        # Layer 1: max loss from entry (always active, price is truth)
     accum_trail_mult: 3.0   # Layer 2: trailing from peak when ACCUMULATING (profits only)
     stable_trail_mult: 2.0  # when STABLE
     dist_trail_mult: 1.0    # when DISTRIBUTING (tight)
