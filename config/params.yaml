@@ -37,6 +37,15 @@ rotation:
     accum_threshold: 0.02 # min ROC for an "accumulating" vote (sweep 0.01/0.02/0.05)
     dist_threshold: 0.02  # min negative ROC for a "distributing" vote
     price_backstop: 0.20  # tail-risk price stop (check_exits)
+  value_flow:            # V3.0 value + smart money + adaptive trailing
+    percentile_window: 500  # ~2yr lookback for "historical low"
+    entry_percentile: 0.30  # buy when below 30th percentile
+    trend_gate_ma: 250      # must be above MA(250) to enter
+    accum_trail_mult: 3.0   # trailing distance when ACCUMULATING (wide)
+    stable_trail_mult: 2.0  # when STABLE
+    dist_trail_mult: 1.0    # when DISTRIBUTING (tight — catch reversal)
+    catastrophic_stop: 0.25 # -25% from entry
+    min_hold_days: 60       # minimum holding period
 
 # ---- Regime / market timing layer (daily) (Q7) ----
 regime:

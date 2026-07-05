@@ -143,3 +143,17 @@ def macd(close: pd.Series, fast: int, slow: int, signal: int) -> tuple[float, fl
     ml = float(macd_line.iloc[-1])
     sl = float(signal_line.iloc[-1])
     return (ml, sl, ml - sl)
+
+
+def percentile_rank(close: pd.Series, window: int) -> float:
+    """Where does the last close sit within the last `window` closes?
+
+    Returns 0.0 = lowest (cheapest), 1.0 = highest (most expensive).
+    NaN if series too short.
+    """
+    if close is None or len(close) < 2:
+        return np.nan
+    w = min(window, len(close))
+    recent = close.iloc[-w:].astype(float)
+    last = float(close.iloc[-1])
+    return float((recent < last).sum()) / w

@@ -190,6 +190,10 @@ def row_to_overrides(row) -> dict:
     elif sig == "momentum_sf":
         o[("rotation", "share_flow", "accum_threshold")] = float(row["accum_thr"])
         o[("rotation", "share_flow", "dist_threshold")] = float(row.get("dist_thr") or 0.02)
+    elif sig == "value_flow":
+        o[("rotation", "value_flow", "entry_percentile")] = float(row["accum_thr"])
+        o[("rotation", "value_flow", "accum_trail_mult")] = float(row.get("dist_thr") or 3.0)
+        o[("rotation", "value_flow", "dist_trail_mult")] = float(row.get("share_trend") or 1.0)
     else:  # reversion
         o[("rotation", "reversion", "rsi_period")] = int(row["rsi_period"])
         o[("rotation", "reversion", "oversold_threshold")] = float(row["oversold"])
@@ -276,6 +280,33 @@ def evaluate_momentum_sf(store, base: Config, start: str, end: str) -> pd.DataFr
     return _ranked(rows)
 
 
+VALUE_FLOW_GRID = {
+    ("portfolio", "k"): [3, 5],
+    ("regime", "ma_period"): [120, 200],
+    ("stop", "trailing_pct"): [0.08],
+    ("rotation", "value_flow", "entry_percentile"): [0.20, 0.30, 0.40],
+    ("rotation", "value_flow", "accum_trail_mult"): [2.0, 3.0],
+    ("rotation", "value_flow", "dist_trail_mult"): [1.0, 1.5],
+}
+
+
+def evaluate_value_flow(store, base: Config, start: str, end: str) -> pd.DataFrame:
+    """Sweep ONLY the value_flow signal's grid."""
+    rows = []
+    vkeys = list(VALUE_FLOW_GRID.keys())
+    for vals in itertools.product(*[VALUE_FLOW_GRID[k] for k in vkeys]):
+        overrides = dict(zip(vkeys, vals))
+        overrides[("rotation", "signal", "name")] = "value_flow"
+        extra = {"accum_thr": overrides[("rotation", "value_flow", "entry_percentile")],
+                 "dist_thr": overrides[("rotation", "value_flow", "accum_trail_mult")],
+                 "share_trend": overrides[("rotation", "value_flow", "dist_trail_mult")]}
+        try:
+            rows.append(_run_one(store, base, overrides, start, end, "value_flow", extra))
+        except Exception:
+            continue
+    return _ranked(rows)
+
+
 def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = True) -> pd.DataFrame:
     """Run ALL signals' param grids over [start,end]. Returns ranked DataFrame with a `signal` column."""
     df_m = evaluate_momentum(store, base, start, end)
@@ -283,13 +314,16 @@ def evaluate_grid(store, base: Config, start: str, end: str, verbose: bool = Tru
     df_b = evaluate_bb_macd(store, base, start, end)
     df_s = evaluate_share_flow(store, base, start, end)
     df_ms = evaluate_momentum_sf(store, base, start, end)
-    frames = [d for d in (df_m, df_r, df_b, df_s, df_ms) if len(d)]
+    df_vf = evaluate_value_flow(store, base, start, end)
+    frames = [d for d in (df_m, df_r, df_b, df_s, df_ms, df_vf) if len(d)]
     df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if len(df):
         df = df.sort_values(["gate_pass", "calmar"], ascending=[False, False]).reset_index(drop=True)
     if verbose:
-        nm, nr, nb, ns, nms = len(df_m), len(df_r), len(df_b), len(df_s), len(df_ms)
-        print(f"Evaluated {nm+nr+nb+ns+nms} combos ({nm} mom + {nr} rev + {nb} bb_macd + {ns} sf + {nms} mom_sf) over {start}..{end}")
+        counts = [len(d) for d in (df_m, df_r, df_b, df_s, df_ms, df_vf)]
+        labels = ["mom", "rev", "bb_macd", "sf", "mom_sf", "vf"]
+        parts = " + ".join(f"{n} {l}" for n, l in zip(counts, labels) if n)
+        print(f"Evaluated {sum(counts)} combos ({parts}) over {start}..{end}")
     return df
 
 

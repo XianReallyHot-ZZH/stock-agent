@@ -51,6 +51,9 @@ def fmt_params(row) -> str:
     if row["signal"] == "momentum_sf":
         return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
                 f"accum_thr={row['accum_thr']}")
+    if row["signal"] == "value_flow":
+        return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
+                f"pct={row['accum_thr']} trail_a={row['dist_thr']} trail_d={row['share_trend']}")
     return (f"K={int(row['K'])} regime_ma={int(row['regime_ma'])} stop={row['stop%']} "
             f"rsi={row['rsi_period']} oversold={row['oversold']} long_ma={row['long_ma']}")
 
@@ -82,7 +85,7 @@ def main():
 
     print(f"\n[2] TEST (out-of-sample) each signal's TRAIN-best on {TEST_START}..{TEST_END}:")
     results = {}
-    for sig in ("momentum", "reversion", "bb_macd", "share_flow", "momentum_sf"):
+    for sig in ("momentum", "reversion", "bb_macd", "share_flow", "momentum_sf", "value_flow"):
         sub = df_train[df_train["signal"] == sig]
         if len(sub) == 0:
             print(f"  [{sig}] no train combos, skip")
