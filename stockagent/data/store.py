@@ -167,7 +167,8 @@ class Store:
 
     # ---- calendar ----
     def upsert_calendar(self, dates_open: Iterable[str]):
-        rows = [(d, 1) for d in dates_open]
+        # SQL hardcodes is_open=1 (only one `?` placeholder for date), so rows carry just the date.
+        rows = [(d,) for d in dates_open]
         with self._conn() as c:
             c.executemany(
                 "INSERT INTO trade_calendar(date,is_open) VALUES(?,1) "
