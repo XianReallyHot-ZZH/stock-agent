@@ -45,8 +45,15 @@ def provider_name() -> str:
     return r[3] if r else "none"
 
 
-def chat(prompt: str, system: str = "", max_tokens: int = 400) -> str | None:
-    """Call the LLM. Returns text or None on any failure (caller falls back)."""
+def chat(prompt: str, system: str = "", max_tokens: int = 4000) -> str | None:
+    """Call the LLM. Returns text or None on any failure (caller falls back).
+
+    Default max_tokens is generous because reasoning models (deepseek-v4-pro,
+    deepseek-reasoner, …) emit reasoning_content that shares the budget — a small
+    cap starves the actual answer (content comes back ''). 4000 leaves room for
+    ~3k reasoning + content. Non-reasoning models just stop early, so the high
+    cap costs nothing extra (you pay per generated token, not per cap).
+    """
     res = _resolve()
     if not res:
         return None

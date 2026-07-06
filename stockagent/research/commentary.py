@@ -168,9 +168,9 @@ def pool_summary_llm(snapshots: dict, meta: dict) -> str | None:
     prompt = ("基于以下全池评分事实写一段「全池格局」综合（3-5句，归纳跨标的特征，不预测、不建议、不逐只复述）：\n"
               + json.dumps(facts, ensure_ascii=False, indent=2))
     try:
-        # Chinese tokenizes ~2 tokens/char; a rich 3-5 sentence summary can hit ~700 tokens,
-        # so allow headroom to avoid mid-sentence truncation.
-        txt = llm_client.chat(prompt, system=_SUMMARY_SYSTEM, max_tokens=1500)
+        # Reasoning models burn ~1-3k reasoning tokens before the answer, so budget for
+        # reasoning + a 3-5 sentence Chinese summary (~700 content tokens) to avoid '' content.
+        txt = llm_client.chat(prompt, system=_SUMMARY_SYSTEM, max_tokens=6000)
     except Exception:  # noqa: BLE001
         return None
     if not txt:
