@@ -99,13 +99,18 @@ def is_basis_consistent(fetched_tag: str, existing_tag: Optional[str]) -> bool:
 
 
 # ---------- source adapters ----------
+def _eastmoney_adjust(adjust: str) -> str:
+    """akshare fund_etf_hist_em uses '' for 不复权; map our 'raw'/'' token to it, else passthrough."""
+    return "" if adjust in ("", "raw", None) else adjust
+
+
 def _fetch_eastmoney(symbol, adjust, start, end, timeout):
     df = _run_with_timeout(
         ak.fund_etf_hist_em, timeout,
         symbol=symbol, period="daily",
         start_date=start.replace("-", "") if start else "20100101",
         end_date=(end or "").replace("-", "") or "20991231",
-        adjust=adjust,
+        adjust=_eastmoney_adjust(adjust),
     )
     if df is None or len(df) == 0:
         raise FetchError("empty")

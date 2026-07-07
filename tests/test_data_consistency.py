@@ -14,6 +14,7 @@ import pytest
 from stockagent.data import Store
 from stockagent.data.fetcher import (
     _adapter_plan,
+    _eastmoney_adjust,
     _fetch_baostock,
     _fetch_eastmoney,
     _fetch_sina,
@@ -53,6 +54,18 @@ def test_inconsistent_cross_family():
 def test_consistent_when_no_history():
     assert is_basis_consistent("eastmoney_hfq", None) is True
     assert is_basis_consistent("eastmoney_hfq", "") is True  # fresh symbol
+
+
+# ---------- _eastmoney_adjust (raw token -> akshare '') ----------
+@pytest.mark.parametrize("adj,expected", [
+    ("raw", ""),   # our 不复权 token -> akshare ''
+    ("", ""),
+    (None, ""),
+    ("hfq", "hfq"),
+    ("qfq", "qfq"),
+])
+def test_eastmoney_adjust_translation(adj, expected):
+    assert _eastmoney_adjust(adj) == expected
 
 
 # ---------- _adapter_plan ----------
