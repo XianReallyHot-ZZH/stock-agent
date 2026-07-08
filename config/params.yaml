@@ -75,7 +75,8 @@ backtest:
 
 # ---- Live data (Q10) ----
 data:
-  adjust: "hfq"             # store 后复权 for math (returns identical to qfq; history stable)
+  adjust: "raw"             # 不复权 (sina 原始价)；与 DB 实际 + fix_splits.py 一致。
+                            # 增量更新按各 ETF 已有 source 族锁定基准 (fetcher.price_basis_family)，禁止 hfq 混入 raw
   history_years: 6          # how much history to backfill on init
 
 # ---- Research module (V3.1 行业研究·性价比三因子) ----

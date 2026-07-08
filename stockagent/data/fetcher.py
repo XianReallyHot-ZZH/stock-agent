@@ -66,18 +66,55 @@ def _normalize(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
     return df.set_index("date")
 
 
+def price_basis_family(source_tag: Optional[str]) -> str:
+    """Classify a price source tag by its 复权 basis: 'raw' | 'hfq' | 'qfq' | 'unknown'.
+
+    A daily-price series must stay on ONE basis — mixing raw (sina 不复权) with hfq
+    (eastmoney 后复权) creates artificial multi-x jumps (e.g. 0.396 -> 1.502 overnight)
+    that corrupt trend/MOM signals. Families: sina_raw/eastmoney_raw/baostock_raw -> 'raw';
+    *_hfq -> 'hfq'; *_qfq -> 'qfq'.
+    """
+    t = (source_tag or "").lower()
+    if not t:
+        return "unknown"
+    if "hfq" in t:
+        return "hfq"
+    if "qfq" in t:
+        return "qfq"
+    if "raw" in t or "sina" in t:
+        return "raw"
+    return "unknown"
+
+
+def is_basis_consistent(fetched_tag: str, existing_tag: Optional[str]) -> bool:
+    """Would upserting a batch tagged `fetched_tag` keep the series on the same basis as
+    the existing history (`existing_tag`)? True if families match (or no history yet).
+
+    Safety net for incremental updates against cross-source basis contamination — e.g. an
+    hfq point sneaking into a raw series when sina fails and eastmoney wins on the latest day.
+    """
+    if not existing_tag:
+        return True  # fresh symbol — anything is consistent
+    return price_basis_family(fetched_tag) == price_basis_family(existing_tag)
+
+
 # ---------- source adapters ----------
+def _eastmoney_adjust(adjust: str) -> str:
+    """akshare fund_etf_hist_em uses '' for 不复权; map our 'raw'/'' token to it, else passthrough."""
+    return "" if adjust in ("", "raw", None) else adjust
+
+
 def _fetch_eastmoney(symbol, adjust, start, end, timeout):
     df = _run_with_timeout(
         ak.fund_etf_hist_em, timeout,
         symbol=symbol, period="daily",
         start_date=start.replace("-", "") if start else "20100101",
         end_date=(end or "").replace("-", "") or "20991231",
-        adjust=adjust,
+        adjust=_eastmoney_adjust(adjust),
     )
     if df is None or len(df) == 0:
         raise FetchError("empty")
-    return _normalize(df.rename(columns=_ETF_COL_MAP)), f"eastmoney_{adjust}"
+    return _normalize(df.rename(columns=_ETF_COL_MAP)), f"eastmoney_{adjust or 'raw'}"
 
 
 def _fetch_sina(symbol, adjust, start, end, timeout):
@@ -121,6 +158,32 @@ def _fetch_baostock(symbol, adjust, start, end, timeout):
 _SOURCES = [_fetch_eastmoney, _fetch_sina, _fetch_baostock]
 
 
+def _adapter_plan(default_adjust: str, want_family: Optional[str]) -> list[tuple]:
+    """Ordered (adapter_fn, adjust_to_pass) pairs for fetch_etf_daily.
+
+    If `want_family` is set (incremental update keeping an existing basis), each adapter is
+    given the adjust that makes it PRODUCE that family, and is dropped if it can't — sina can
+    only emit raw, so it's excluded when matching an hfq/qfq history. If None (fresh symbol),
+    all adapters use `default_adjust` in preference order.
+    """
+    plan: list[tuple] = []
+    for fn in _SOURCES:
+        if want_family is None:
+            plan.append((fn, default_adjust))
+            continue
+        if want_family == "raw":
+            # sina ignores adjust (always raw); eastmoney 不复权 via adjust=''; baostock flag '3' via 'raw'
+            adj = "" if fn is _fetch_eastmoney else ("raw" if fn is _fetch_baostock else "")
+            plan.append((fn, adj))
+        elif want_family in ("hfq", "qfq"):
+            if fn is _fetch_sina:
+                continue  # sina has no 复权 — would emit raw, wrong family
+            plan.append((fn, want_family))
+        else:  # unknown family — don't constrain
+            plan.append((fn, default_adjust))
+    return plan
+
+
 def fetch_etf_daily(
     symbol: str,
     adjust: str = "hfq",
@@ -128,19 +191,29 @@ def fetch_etf_daily(
     end_date: Optional[str] = None,
     retries: int = 2,
     timeout: float = 40.0,
+    prefer_source: Optional[str] = None,
 ) -> tuple[pd.DataFrame, str]:
     """Fetch ETF daily OHLCV. Returns (DataFrame indexed by date, source_tag).
 
     DataFrame columns: open, high, low, close, volume, amount (floats).
     Tries eastmoney -> sina -> baostock; first success wins.
+
+    prefer_source: the existing series' source tag (e.g. 'sina_raw'). When set, adapters are
+    constrained to produce the SAME 复权 basis as the history, so an incremental update can't
+    mix a 后复权 point into a 不复权 series (which would create fake multi-x jumps). Sina can
+    only emit raw, so it's dropped when matching an hfq/qfq history. Callers should still guard
+    with is_basis_consistent() as a belt-and-suspenders safety net.
     """
+    want_family = price_basis_family(prefer_source) if prefer_source else None
+    if want_family == "unknown":
+        want_family = None  # ambiguous legacy tag — can't enforce, leave unconstrained
     last_err = None
-    for source_fn in _SOURCES:
+    for source_fn, eff_adjust in _adapter_plan(adjust, want_family):
         for attempt in range(retries):
             if attempt > 0:
                 time.sleep(1.5 * attempt)
             try:
-                df, tag = source_fn(symbol, adjust, start_date, end_date, timeout)
+                df, tag = source_fn(symbol, eff_adjust, start_date, end_date, timeout)
                 if len(df) > 0:
                     return df, tag
             except FetchError as e:

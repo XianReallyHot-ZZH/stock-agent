@@ -51,12 +51,24 @@ class DataManager:
 
     def update_symbol(self, symbol: str, adjust: Optional[str] = None) -> int:
         adjust = adjust or self.config.params.get("data", {}).get("adjust", "hfq")
+        existing = self.store.dominant_price_source(symbol)  # keep basis consistent w/ history
         start = self._backfill_start(symbol)
         end = datetime.now().strftime("%Y%m%d")
         try:
-            df, source = fetcher.fetch_etf_daily(symbol, adjust=adjust, start_date=start, end_date=end)
+            df, source = fetcher.fetch_etf_daily(
+                symbol, adjust=adjust, start_date=start, end_date=end,
+                prefer_source=existing,
+            )
         except Exception as e:  # noqa: BLE001
             log.warning("fetch %s failed (will use cached): %s", symbol, e)
+            return 0
+        if not fetcher.is_basis_consistent(source, existing):
+            # would mix 复权 bases (e.g. an hfq point into a raw history) → skip, keep cached
+            # clean. A 1-day gap is preferable to a fake multi-x jump corrupting trend/MOM.
+            log.warning(
+                "skip %s: fetched source=%s conflicts with history basis=%s (adjust-family mismatch)",
+                symbol, source, existing,
+            )
             return 0
         n = self.store.upsert_prices(symbol, df, source=source)
         log.info("updated %s: +%d rows (to %s, src=%s)", symbol, n, df.index[-1] if len(df) else "?", source)

@@ -108,6 +108,17 @@ class Store:
             ).fetchone()
             return row[0] if row and row[0] else None
 
+    def dominant_price_source(self, symbol: str) -> Optional[str]:
+        """Most common source tag in this symbol's daily_prices — its de-facto 复权 basis
+        (e.g. 'sina_raw'). Used to keep incremental updates on the same basis. None if no data."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT source FROM daily_prices WHERE symbol=? AND source IS NOT NULL "
+                "GROUP BY source ORDER BY count(*) DESC, source ASC LIMIT 1",
+                (symbol,),
+            ).fetchone()
+            return row[0] if row and row[0] else None
+
     # ---- prices ----
     def upsert_prices(self, symbol: str, df: pd.DataFrame, source: str = ""):
         """df indexed by date(str) with open/high/low/close/volume/amount."""
@@ -167,7 +178,8 @@ class Store:
 
     # ---- calendar ----
     def upsert_calendar(self, dates_open: Iterable[str]):
-        rows = [(d, 1) for d in dates_open]
+        # SQL hardcodes is_open=1 (only one `?` placeholder for date), so rows carry just the date.
+        rows = [(d,) for d in dates_open]
         with self._conn() as c:
             c.executemany(
                 "INSERT INTO trade_calendar(date,is_open) VALUES(?,1) "
