@@ -346,3 +346,49 @@ class DataManager:
         self.store.set_meta("last_industry_pe_backfill", fetcher.today_str())
         log.info("industry_pe backfill: %d/%d dates ok, +%d rows", ok, len(sampled), total)
         return total
+
+    # ---- ETF earnings expectation (V3.2 research; informational, not in composite) ----
+    def _latest_report_period(self) -> str:
+        """Most recent COMPLETE annual 业绩预告 period (YYYYMMDD). FY results are announced
+        ~Apr-May, so before May the prior FY isn't complete → use the year before that."""
+        now = datetime.now()
+        fy = now.year - 1 if now.month >= 5 else now.year - 2
+        return f"{fy}1231"
+
+    def update_etf_earnings(self, symbols: Optional[list[str]] = None,
+                            report_period: Optional[str] = None) -> int:
+        """Fetch each ETF's holdings + the 业绩预告 forecast, aggregate, store. Quarterly cadence.
+        One forecast fetch (all stocks) is reused across all ETFs; holdings fetched per ETF."""
+        from ..research import earnings
+        symbols = symbols or self.config.all_symbols()
+        period = report_period or self._latest_report_period()
+        try:
+            forecast = fetcher.fetch_earnings_forecast(period)
+        except Exception as e:  # noqa: BLE001
+            log.warning("earnings_forecast %s failed: %s", period, str(e)[:120])
+            return 0
+        if len(forecast) < 1000:
+            log.warning("earnings_forecast %s too thin (%d rows); skipping (try --period)", period, len(forecast))
+            return 0
+
+        rows = []
+        for i, sym in enumerate(symbols):
+            if i > 0:
+                time.sleep(0.4)  # be gentle to data.eastmoney
+            try:
+                holdings = fetcher.fetch_etf_holdings(sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning("holdings %s failed: %s", sym, str(e)[:80])
+                continue
+            sig = earnings.aggregate_earnings(holdings, forecast)
+            rows.append((sym, period, sig["weighted_yoy"], sig["median_yoy"],
+                         sig["bull_ratio"], sig["bear_ratio"], sig["coverage"],
+                         sig["n_holdings"], sig["n_matched"]))
+            wy = sig["weighted_yoy"]
+            log.info("earnings %s: cov=%.0f%% n=%d w_yoy=%+.0f%%",
+                     sym, sig["coverage"] * 100, sig["n_matched"],
+                     wy if not pd.isna(wy) else 0.0)
+        n = self.store.upsert_etf_earnings(rows, source="em_yjyg")
+        self.store.set_meta("last_earnings_update", period)
+        log.info("earnings update %s: %d ETFs", period, n)
+        return n

@@ -103,9 +103,13 @@ def report(conn, cfg, syms) -> dict:
     pe_stale = pe_last == "（无）" or (
         ref and (datetime.strptime(ref, "%Y-%m-%d")
                  - datetime.strptime(pe_last, "%Y-%m-%d")).days > PE_STALE_DAYS)
-    print(f"PE新鲜: {'旧(>' + str(PE_STALE_DAYS) + '天)' if pe_stale else 'OK'}\n")
+    print(f"PE新鲜: {'旧(>' + str(PE_STALE_DAYS) + '天)' if pe_stale else 'OK'}")
+    earn_period = _fetch(conn, "SELECT MAX(report_period) FROM etf_earnings")[0] or "（无）"
+    earn_n = _fetch(conn, "SELECT COUNT(DISTINCT symbol) FROM etf_earnings")[0]
+    print(f"业绩预期: 报告期 {earn_period}（{earn_n} 只ETF有信号）\n")
     return {"bench_last": bench_last, "target": target, "ref": ref,
             "pe_last": pe_last, "pe_stale": pe_stale,
+            "earn_period": earn_period,
             "rows": rows, "n_shares_zero": n_shares_zero}
 
 
@@ -158,6 +162,14 @@ def main():
         start = (datetime.strptime(info["pe_last"], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
         print(f"  行业PE补缺 {start}..{target} (step=7 sleep=8) ...")
         dm.backfill_industry_pe(start, target, step_days=7, sleep=8)
+
+    # 5) earnings expectation: refresh if missing or a newer complete report period exists.
+    #    Quarterly/annual cadence — usually a no-op except around report seasons.
+    want_period = dm._latest_report_period()
+    have_period = store.last_earnings_period()
+    if have_period != want_period:
+        print(f"  业绩预期更新 ({have_period or '无'} → {want_period}) ...")
+        dm.update_etf_earnings(report_period=want_period)
 
     print("\n=== 补齐后复查 ===")
     report(conn, cfg, syms)

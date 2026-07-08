@@ -57,11 +57,25 @@ CREATE TABLE IF NOT EXISTS industry_pe (
     source    TEXT,
     PRIMARY KEY (industry, date)
 );
+CREATE TABLE IF NOT EXISTS etf_earnings (
+    symbol        TEXT NOT NULL,
+    report_period TEXT NOT NULL,
+    weighted_yoy  REAL,
+    median_yoy    REAL,
+    bull_ratio    REAL,
+    bear_ratio    REAL,
+    coverage      REAL,
+    n_holdings    INTEGER,
+    n_matched     INTEGER,
+    source        TEXT,
+    PRIMARY KEY (symbol, report_period)
+);
 CREATE INDEX IF NOT EXISTS idx_prices_symbol ON daily_prices(symbol);
 CREATE INDEX IF NOT EXISTS idx_fund_flow_sector ON fund_flow(sector);
 CREATE INDEX IF NOT EXISTS idx_scale_symbol ON etf_scale(symbol);
 CREATE INDEX IF NOT EXISTS idx_nav_symbol ON etf_nav(symbol);
 CREATE INDEX IF NOT EXISTS idx_industry_pe ON industry_pe(industry);
+CREATE INDEX IF NOT EXISTS idx_etf_earnings_symbol ON etf_earnings(symbol);
 """
 
 
@@ -86,6 +100,7 @@ class Store:
         with self._conn() as c:
             c.executescript(SCHEMA)
             _ensure_column(c, "daily_prices", "source", "TEXT")
+            _ensure_column(c, "etf_earnings", "n_matched", "INTEGER")
 
     # ---- meta ----
     def get_meta(self, key: str, default=None):
@@ -383,4 +398,54 @@ class Store:
                     "SELECT MAX(date) FROM industry_pe WHERE industry=?", (industry,)).fetchone()
             else:
                 row = c.execute("SELECT MAX(date) FROM industry_pe").fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- ETF earnings expectation (V3.2 research; informational, not in composite) ----
+    def upsert_etf_earnings(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (symbol, report_period, weighted_yoy, median_yoy, bull_ratio,
+        bear_ratio, coverage, n_holdings, n_matched). Idempotent upsert keyed by
+        (symbol, report_period)."""
+        if not rows:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        def _i(x):
+            return int(x) if x is not None and not pd.isna(x) else None
+
+        payload = [
+            (sym, rp, _f(wy), _f(my), _f(br), _f(be), _f(cv), _i(nh), _i(nm), source)
+            for (sym, rp, wy, my, br, be, cv, nh, nm) in rows
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO etf_earnings(symbol,report_period,weighted_yoy,median_yoy,"
+                "bull_ratio,bear_ratio,coverage,n_holdings,n_matched,source) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(symbol,report_period) DO UPDATE SET "
+                "weighted_yoy=excluded.weighted_yoy,median_yoy=excluded.median_yoy,"
+                "bull_ratio=excluded.bull_ratio,bear_ratio=excluded.bear_ratio,"
+                "coverage=excluded.coverage,n_holdings=excluded.n_holdings,"
+                "n_matched=excluded.n_matched,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_etf_earnings(self, symbol: str) -> Optional[dict]:
+        """Latest report_period earnings signal for `symbol`, or None."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT report_period,weighted_yoy,median_yoy,bull_ratio,bear_ratio,"
+                "coverage,n_holdings,n_matched FROM etf_earnings WHERE symbol=? "
+                "ORDER BY report_period DESC LIMIT 1", (symbol,)).fetchone()
+        if not row:
+            return None
+        return {"report_period": row[0], "weighted_yoy": row[1], "median_yoy": row[2],
+                "bull_ratio": row[3], "bear_ratio": row[4], "coverage": row[5],
+                "n_holdings": row[6], "n_matched": row[7]}
+
+    def last_earnings_period(self) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(report_period) FROM etf_earnings").fetchone()
             return row[0] if row and row[0] else None
