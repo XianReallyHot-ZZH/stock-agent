@@ -56,6 +56,7 @@ def do_backfill(dm: DataManager, kind: str, start: str, end: str, step: int, sle
 
 def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     from stockagent.data import fetcher
+    from stockagent.research import earnings as ern
     meta = cfg.symbol_meta()
     snapshots: dict[str, dict] = {}
     series_map: dict[str, dict] = {}
@@ -75,6 +76,19 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
         snap = rs.analyze_etf(close, shares, pe, cfg.params, has_valuation=has_val)
         snap["name"] = m.get("name", sym)
         snap["csrc_industry"] = csrc or "(宽基/无单一行业)"
+
+        # 业绩预期 (informational — does NOT enter composite). Precomputed by update_etf_earnings.
+        earn = store.get_etf_earnings(sym)
+        if earn:
+            escore, elabel = ern.earnings_score(earn, cfg.params)
+            snap["earnings_label"] = elabel
+            snap["earnings_score"] = escore
+            snap["earnings_yoy"] = earn["weighted_yoy"]
+            snap["earnings_bull"] = earn["bull_ratio"]
+            snap["earnings_bear"] = earn["bear_ratio"]
+            snap["earnings_cov"] = earn["coverage"]
+            snap["earnings_period"] = earn["report_period"]
+
         snapshots[sym] = snap
         series_map[sym] = {"close": close, "shares": shares_df, "nav": nav_df, "pe": pe_df}
 
@@ -96,8 +110,10 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
 
 def main():
     ap = argparse.ArgumentParser(description="ETF 行业研究 dashboard (read-only)")
-    ap.add_argument("--backfill", choices=("nav", "pe", "scale", "all"), default=None,
+    ap.add_argument("--backfill", choices=("nav", "pe", "scale", "earnings", "all"), default=None,
                     help="run historical backfill instead of rendering")
+    ap.add_argument("--period", default=None,
+                    help="earnings backfill report period YYYYMMDD (default: latest complete FY)")
     ap.add_argument("--start", default="2021-01-01")
     ap.add_argument("--end", default=None)
     ap.add_argument("--step", type=int, default=1, help="backfill sampling step (days); 5=weekly, 30=monthly")
@@ -121,6 +137,11 @@ def main():
     end = args.end or datetime.now().strftime("%Y-%m-%d")
 
     if args.backfill:
+        if args.backfill in ("earnings", "all"):
+            n = dm.update_etf_earnings(report_period=args.period)
+            print(f"  earnings backfill: {n} ETFs updated")
+            if args.backfill == "earnings":
+                return
         do_backfill(dm, args.backfill, args.start, end, args.step, args.sleep, args.source)
         return
 

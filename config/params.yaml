@@ -105,3 +105,6 @@ research:
     low_distributing: 30    # 高位减仓
     low_stable: 40          # 见顶预警：份额加满·加仓停滞
     low_accumulating: 60    # 高位加仓：仍涨但风险积聚
+  earnings:                 # 业绩预期信号（V3.2，INFORMATIONAL 不计入 composite）
+    min_coverage: 0.30      # 持仓权重覆盖 < 30% → 数据不足
+    min_matched: 5          # 匹配到的持仓股票 < 5 只 → 数据不足

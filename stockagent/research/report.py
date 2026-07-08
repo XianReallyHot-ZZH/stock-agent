@@ -179,6 +179,28 @@ def factor_figure(name: str, snap: dict) -> go.Figure:
     return fig
 
 
+_EARN_COLOR = {
+    "业绩高增": "#16a34a", "业绩改善": "#65a30d", "业绩平稳": "#64748b",
+    "业绩承压": "#ea580c", "业绩恶化": "#dc2626", "数据不足": "#94a3b8",
+}
+
+
+def _earnings_cell(snap: dict) -> str:
+    """业绩预期 cell — informational (NOT in composite). Label + weighted YoY + bull/bear."""
+    label = snap.get("earnings_label")
+    if not label:
+        return "<td style='text-align:center;color:#cbd5e1'>—</td>"
+    color = _EARN_COLOR.get(label, "#64748b")
+    yoy = snap.get("earnings_yoy")
+    yoy_s = f"{yoy:+.0f}%" if isinstance(yoy, (int, float)) and not _nan(yoy) else "—"
+    bull, bear = snap.get("earnings_bull"), snap.get("earnings_bear")
+    bb = ""
+    if isinstance(bull, (int, float)) and not _nan(bull):
+        bb = (f"<br><span style='font-size:11px;color:#64748b'>归母YoY {yoy_s}"
+              f" · 多{bull:.0%}/空{bear:.0%}</span>")
+    return f"<td style='text-align:center;font-weight:bold;color:{color}'>{label}{bb}</td>"
+
+
 def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict) -> str:
     rows = sorted(snapshots.items(), key=lambda kv: (kv[1].get("composite") if not _nan(kv[1].get("composite")) else -1), reverse=True)
     out = ""
@@ -195,6 +217,7 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict) -> str:
             f"<td style='text-align:center'>{_fmt(snap.get('chip'))}<br>"
             f"<span style='font-size:11px;color:#64748b'>{snap.get('chip_phase','')}</span></td>"
             f"<td style='text-align:center'>{_fmt(snap.get('trend'))}</td>"
+            f"{_earnings_cell(snap)}"
             f"<td style='font-size:12px'>{commentaries.get(sym,'')}</td></tr>"
         )
     return out
@@ -278,7 +301,7 @@ tr:hover {{ background: #f8fafc; }}
 {summary_html}
 <h3>📊 性价比排名（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只数据不足未参与" or ""}）</h3>
 {excluded_note}
-<table><thead><tr><th style="text-align:left">ETF</th><th>综合性价比</th><th>估值(PE分位)</th><th>筹码(相位)</th><th>趋势</th><th style="text-align:left">解读</th></tr></thead>
+<table><thead><tr><th style="text-align:left">ETF</th><th>综合性价比</th><th>估值(PE分位)</th><th>筹码(相位)</th><th>趋势</th><th>业绩预期<sup style="font-size:9px">信息</sup></th><th style="text-align:left">解读</th></tr></thead>
 <tbody>{ranking}</tbody></table>
 <h3>📈 逐标的明细（份额·净值·估值·三因子）</h3>
 {charts_html}

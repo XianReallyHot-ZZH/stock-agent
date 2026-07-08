@@ -36,6 +36,7 @@ def _fmt(v, pct: bool = False) -> str:
 
 
 def _facts_for(snap: dict, name: str, symbol: str) -> dict:
+    ey = snap.get("earnings_yoy")
     return {
         "name": name,
         "symbol": symbol,
@@ -45,6 +46,8 @@ def _facts_for(snap: dict, name: str, symbol: str) -> dict:
         "chip_phase": snap.get("chip_phase"),
         "reduction_from_peak": _fmt(snap.get("reduction_from_peak"), pct=True),
         "trend_score": _fmt(snap.get("trend")),
+        "earnings_label": snap.get("earnings_label"),  # informational, not in composite
+        "earnings_yoy": f"{ey:+.0f}%" if not _is_nan(ey) else "NA",
     }
 
 
@@ -57,10 +60,17 @@ def _template(snap: dict, name: str) -> str:
     pe_s = _fmt(pe, pct=True)
     red_s = _fmt(red, pct=True)
     comp_s = _fmt(comp)
-    return (
-        f"{name} 估值PE处5年{pe_s}分位（越低越便宜）、机构筹码相位「{phase}」"
-        f"（距份额峰值{red_s}）、综合性价比{comp_s}。以上为规则输出，不含涨跌预测。"
-    )
+    base = (f"{name} 估值PE处5年{pe_s}分位（越低越便宜）、机构筹码相位「{phase}」"
+            f"（距份额峰值{red_s}）、综合性价比{comp_s}。")
+    elabel = snap.get("earnings_label")
+    eyoy = snap.get("earnings_yoy")
+    earn_s = ""
+    if elabel:
+        if not _is_nan(eyoy):
+            earn_s = f" 业绩预告（信息·未计入性价比）：归母净利润加权同比{eyoy:+.0f}%，{elabel}。"
+        else:
+            earn_s = f" 业绩预告（信息·未计入性价比）：{elabel}。"
+    return base + earn_s + "以上为规则输出，不含涨跌预测。"
 
 
 def commentary_llm(snapshots: dict, meta: dict) -> dict:
@@ -121,6 +131,7 @@ def _pool_facts(snapshots: dict, meta: dict) -> dict:
 
     from collections import Counter
     phases = Counter(sn.get("chip_phase", "NA") for _, sn in ranked)
+    earn_counts = Counter(sn.get("earnings_label") for _, sn in ranked if sn.get("earnings_label"))
 
     def _pe(sn):
         return _num(sn.get("pe_percentile"))
@@ -137,6 +148,7 @@ def _pool_facts(snapshots: dict, meta: dict) -> dict:
             "composite": round(_num(sn.get("composite")), 0) if _num(sn.get("composite")) else None,
             "pe_pct": round(_pe(sn) * 100) if _pe(sn) is not None else None,
             "phase": sn.get("chip_phase"),
+            "earnings": sn.get("earnings_label"),
         }
 
     by_comp = sorted(ranked, key=lambda kv: (_num(kv[1].get("composite")) or -1), reverse=True)
@@ -145,6 +157,7 @@ def _pool_facts(snapshots: dict, meta: dict) -> dict:
         "n_excluded": len(excluded),
         "excluded_names": excluded,
         "phase_counts": dict(phases),
+        "earnings_counts": dict(earn_counts),
         "valuation": {"cheap_lt20pct": cheap, "mid": mid_pe, "expensive_gt80pct": expensive, "no_pe": no_pe},
         "top3": [_row(s, sn) for s, sn in by_comp[:3]],
         "bottom3": [_row(s, sn) for s, sn in by_comp[-3:]],
@@ -192,7 +205,12 @@ def _pool_template(snapshots: dict, meta: dict) -> str:
     v = f["valuation"]
     excl = f"（{f['n_excluded']}只数据不足未参与）" if f["n_excluded"] else ""
     dom_str = f"筹码相位集中于「{dom[0]}」（{dom[1]}只）；" if dom[0] else "筹码相位分散；"
-    return (f"本池 {f['n_participating']} 只参与排名{excl}。{dom_str}"
+    ec = f.get("earnings_counts", {})
+    high = ec.get("业绩高增", 0) + ec.get("业绩改善", 0)
+    crash = ec.get("业绩恶化", 0) + ec.get("业绩承压", 0)
+    earn_str = (f"业绩预告（未计入性价比）：{high}只上行、{crash}只承压/恶化；"
+                if (high or crash) else "")
+    return (f"本池 {f['n_participating']} 只参与排名{excl}。{dom_str}{earn_str}"
             f"估值分布：便宜(<20%分位){v['cheap_lt20pct']}只、贵(>80%){v['expensive_gt80pct']}只、"
             f"无PE {v['no_pe']}只。性价比前三 {top}；后三 {bot}。以上为规则输出，不含涨跌预测。")
 

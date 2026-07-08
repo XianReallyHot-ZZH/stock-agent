@@ -468,3 +468,50 @@ def fetch_industry_pe(date: str, timeout: float = 40.0, retries: int = 3) -> pd.
         "pe_median": pd.to_numeric(df[med_col], errors="coerce") if med_col else pd.NA,
     })
     return out.dropna(subset=["industry"])
+
+
+# ---- ETF earnings expectation (V3.2 research) — holdings + 业绩预告, both data.eastmoney ----
+def fetch_etf_holdings(symbol: str, year: Optional[int] = None, timeout: float = 40.0) -> pd.DataFrame:
+    """An ETF's latest disclosed stock holdings (重仓股) via fund_portfolio_hold_em.
+
+    Returns DataFrame[code, weight, name, period] where weight = 占净值比例 (% of NAV).
+    Tries the given year (or current year), falling back to the prior year if empty.
+    Commodity / 宽基 / QDII ETFs with no stock holdings → empty DataFrame. Lives on
+    data.eastmoney.com (not the blocked push2 host).
+    """
+    years = [year] if year else [datetime.now().year, datetime.now().year - 1]
+    for y in years:
+        try:
+            df = _run_with_timeout(ak.fund_portfolio_hold_em, timeout, symbol=symbol, date=str(y))
+        except Exception:  # noqa: BLE001
+            df = None
+        if df is None or len(df) == 0:
+            continue
+        out = pd.DataFrame({
+            "code": df["股票代码"].astype(str),
+            "weight": pd.to_numeric(df["占净值比例"], errors="coerce"),
+            "name": df.get("股票名称", "").astype(str),
+            "period": df.get("季度", "").astype(str),
+        })
+        return out.dropna(subset=["weight"])
+    return pd.DataFrame(columns=["code", "weight", "name", "period"])
+
+
+def fetch_earnings_forecast(report_period: str, timeout: float = 60.0) -> pd.DataFrame:
+    """All A-share 业绩预告 for a report period (YYYYMMDD, e.g. '20251231').
+
+    Returns DataFrame indexed by code (6-digit str) with columns [yoy, type]:
+    yoy = 业绩变动幅度 (归母净利润同比 %), type = 预告类型. Filters to 归属于上市公司股东的
+    净利润 and dedupes by code (keeps the latest 公告日期). data.eastmoney.com, paginates
+    internally (~13s for the FY annual period).
+    """
+    df = _run_with_timeout(ak.stock_yjyg_em, timeout, date=report_period)
+    if df is None or len(df) == 0:
+        raise FetchError(f"empty earnings_forecast {report_period}")
+    df = df[df["预测指标"].astype(str).str.strip() == "归属于上市公司股东的净利润"].copy()
+    df["code"] = df["股票代码"].astype(str)
+    df["yoy"] = pd.to_numeric(df["业绩变动幅度"], errors="coerce")
+    df["type"] = df["预告类型"].astype(str)
+    df["_ann"] = pd.to_datetime(df["公告日期"], errors="coerce")
+    df = df.sort_values("_ann").drop_duplicates("code", keep="last")  # latest announcement per code
+    return df.set_index("code")[["yoy", "type"]]
