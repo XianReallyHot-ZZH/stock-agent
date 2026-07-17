@@ -349,11 +349,11 @@ class DataManager:
 
     # ---- ETF earnings expectation (V3.2 research; informational, not in composite) ----
     def _latest_report_period(self) -> str:
-        """Most recent COMPLETE annual 业绩预告 period (YYYYMMDD). FY results are announced
-        ~Apr-May, so before May the prior FY isn't complete → use the year before that."""
-        now = datetime.now()
-        fy = now.year - 1 if now.month >= 5 else now.year - 2
-        return f"{fy}1231"
+        """Most recent 业绩预告 report period (YYYYMMDD) whose disclosure window is open.
+        Pure logic lives in research.earnings.latest_report_period (tested there); this just
+        injects datetime.now()."""
+        from ..research import earnings
+        return earnings.latest_report_period(datetime.now())
 
     def update_etf_earnings(self, symbols: Optional[list[str]] = None,
                             report_period: Optional[str] = None) -> int:
@@ -367,8 +367,12 @@ class DataManager:
         except Exception as e:  # noqa: BLE001
             log.warning("earnings_forecast %s failed: %s", period, str(e)[:120])
             return 0
-        if len(forecast) < 1000:
-            log.warning("earnings_forecast %s too thin (%d rows); skipping (try --period)", period, len(forecast))
+        # Safety net against a broken/empty fetch. Annual (YYYY1231) returns ~3000 rows; interim
+        # periods return far fewer (一季报/中报/三季报 are 几百) — so floor by period type, not a flat 1000.
+        floor = 1000 if period.endswith("1231") else 100
+        if len(forecast) < floor:
+            log.warning("earnings_forecast %s too thin (%d rows <%d); skipping (try --period)",
+                        period, len(forecast), floor)
             return 0
 
         rows = []

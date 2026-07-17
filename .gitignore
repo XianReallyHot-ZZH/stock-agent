@@ -23,3 +23,7 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code agent-local state (transcripts/memory keyed to machine path).
+# .claude/skills/ IS tracked (project agent config); only projects/ is machine-local.
+.claude/projects/

@@ -1,9 +1,11 @@
 """业绩预期 signal: pure aggregation + score + store roundtrip."""
 import math
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from stockagent.research import earnings as er
 from stockagent.data import Store
@@ -121,3 +123,37 @@ def test_store_upsert_and_latest():
 
 def test_store_missing_returns_none():
     assert _store().get_etf_earnings("NOPE") is None
+
+
+# ---------- period_label ----------
+@pytest.mark.parametrize("period, want", [
+    ("20251231", "2025年报预告"), ("20260331", "2026一季报预告"),
+    ("20260630", "2026中报预告"), ("20260930", "2026三季报预告"),
+])
+def test_period_label_known_windows(period, want):
+    assert er.period_label(period) == want
+
+
+@pytest.mark.parametrize("period", [None, "", "abc", "2026", "20260713"])
+def test_period_label_malformed_falls_back(period):
+    out = er.period_label(period)
+    assert out == "—" or out.startswith("2026报告期(")   # unknown suffix → fallback, not blank
+
+
+# ---------- latest_report_period (interim-aware, B 方案) ----------
+@pytest.mark.parametrize("now, want", [
+    (datetime(2026, 7, 13), "20260630"),   # today: 中报窗口已开 → 中报(B 方案)
+    (datetime(2026, 6, 30), "20260331"),   # 中报窗口前夜 → 仍一季报
+    (datetime(2026, 7, 1), "20260630"),    # 中报窗口开 → 中报
+    (datetime(2026, 7, 15), "20260630"),   # 中报截止日 → 中报
+    (datetime(2026, 8, 20), "20260630"),   # 中报已完整 → 中报
+    (datetime(2026, 4, 14), "20251231"),   # 一季报窗口前夜 → 仍年报
+    (datetime(2026, 4, 15), "20260331"),   # 一季报窗口开 → 一季报
+    (datetime(2026, 9, 30), "20260630"),   # 三季报窗口前夜 → 仍中报
+    (datetime(2026, 10, 1), "20260930"),   # 三季报窗口开 → 三季报
+    (datetime(2026, 1, 1), "20251231"),    # 年报窗口(1/31 截止) → 上一年年报
+    (datetime(2026, 3, 31), "20251231"),   # 年报窗口内 → 上一年年报
+    (datetime(2026, 12, 31), "20260930"),  # 跨年前 → 仍三季报
+])
+def test_latest_report_period_interim_windows(now, want):
+    assert er.latest_report_period(now) == want

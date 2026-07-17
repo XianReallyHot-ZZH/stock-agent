@@ -13,6 +13,7 @@ Data shape contract:
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 import pandas as pd
@@ -28,6 +29,42 @@ LABEL_FLAT = "业绩平稳"
 LABEL_DOWN = "业绩承压"
 LABEL_CRASH = "业绩恶化"
 LABEL_INSUFF = "数据不足"
+
+# YYYYMMDD report-period suffix → Chinese 业绩预告 window name.
+_PERIOD_NAME = {"1231": "年报预告", "0331": "一季报预告",
+                "0630": "中报预告", "0930": "三季报预告"}
+
+
+def period_label(period: Optional[str]) -> str:
+    """Map a YYYYMMDD report_period to a Chinese label, e.g. '20260630' → '2026中报预告'.
+
+    Used to surface which disclosure window the earnings signal draws from (freshness). Unknown /
+    malformed periods fall back to 'YYYY报告期(MMDD)' so the dashboard never shows a blank.
+    """
+    if not period or not isinstance(period, str) or len(period) != 8 or not period.isdigit():
+        return "—"
+    y, tail = period[:4], period[4:]
+    return f"{y}{_PERIOD_NAME[tail]}" if tail in _PERIOD_NAME else f"{y}报告期({tail})"
+
+
+def latest_report_period(now: datetime) -> str:
+    """Most recent 业绩预告 report period (YYYYMMDD) whose disclosure window is open at `now`.
+
+    A-share 业绩预告 disclosure cutoffs: 年报 1/31, 一季报 4/15, 半年报 7/15, 三季报 10/15.
+    We switch to each period as its window OPENS (not at the cutoff), so the dashboard surfaces the
+    live disclosure season even before it's 100% complete — the per-ETF coverage then flags how far
+    along it is. Window-open dates:
+        年报 YYYY1231  → next year, from 1/1
+        一季报 YYYY0331 → from 4/15
+        半年报 YYYY0630 → from 7/1   (B 方案: 中报窗口即纳入, 不等 7/15 截止)
+        三季报 YYYY0930 → from 10/1
+    Pure (no I/O); DataManager._latest_report_period delegates here with datetime.now().
+    """
+    y, md = now.year, (now.month, now.day)
+    if md >= (10, 1):     return f"{y}0930"   # 三季报预告窗口
+    if md >= (7, 1):      return f"{y}0630"   # 半年报预告窗口(7/15 截止, 高峰即纳入)
+    if md >= (4, 15):     return f"{y}0331"   # 一季报预告窗口(4/15~4/30)
+    return f"{y - 1}1231"                      # 年报预告窗口(1/31 截止)
 
 
 def _empty_signal(n_holdings: int) -> dict:

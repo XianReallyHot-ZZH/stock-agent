@@ -41,6 +41,18 @@ def _series_to(df: pd.DataFrame, col: str, as_of: str | None):
     return s if len(s) else None
 
 
+def _latest_value(df: pd.DataFrame | None, cols: list[str]) -> float | None:
+    """Last non-NaN value across priority-ordered cols (e.g. unit_nav before acc_nav)."""
+    if df is None or len(df) == 0:
+        return None
+    for c in cols:
+        if c in df.columns:
+            s = pd.to_numeric(df[c], errors="coerce").dropna()
+            if len(s):
+                return float(s.iloc[-1])
+    return None
+
+
 def do_backfill(dm: DataManager, kind: str, start: str, end: str, step: int, sleep: float,
                 source: str = "all") -> None:
     if kind in ("nav", "all"):
@@ -77,6 +89,14 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
         snap["name"] = m.get("name", sym)
         snap["csrc_industry"] = csrc or "(宽基/无单一行业)"
 
+        # 当下规模(亿)=最新份额×最新单位净值; 近5日均成交额(亿) — 流动性参考, 不进性价比
+        amount = _series_to(price_df, "amount", None)
+        snap["turnover_5d_yi"] = (round(float(amount.tail(5).mean()) / 1e8, 2)
+                                  if amount is not None and len(amount) else None)
+        sh_now = _latest_value(shares_df, ["shares"])
+        nav_now = _latest_value(nav_df, ["unit_nav", "acc_nav"])
+        snap["aum_yi"] = round(sh_now * nav_now / 1e8, 2) if (sh_now and nav_now) else None
+
         # 业绩预期 (informational — does NOT enter composite). Precomputed by update_etf_earnings.
         earn = store.get_etf_earnings(sym)
         if earn:
@@ -102,6 +122,9 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
             for s in missing:
                 if s in spot:
                     series_map[s]["current_shares"] = spot[s]
+                    # 当下规模回退: 用 spot 份额 × 最新净值
+                    nav_now = _latest_value(series_map[s].get("nav"), ["unit_nav", "acc_nav"])
+                    snapshots[s]["aum_yi"] = round(spot[s] * nav_now / 1e8, 2) if nav_now else None
         except Exception as e:  # noqa: BLE001
             import logging
             logging.getLogger(__name__).warning("spot shares fetch failed: %s", str(e)[:100])

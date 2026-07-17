@@ -13,6 +13,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from . import earnings as ern
+
 CHART_HEIGHT = 520
 _TEMPLATE = "plotly_white"
 C_SHARES = "#2563eb"
@@ -184,9 +186,27 @@ _EARN_COLOR = {
     "业绩承压": "#ea580c", "业绩恶化": "#dc2626", "数据不足": "#94a3b8",
 }
 
+# Below this coverage the freshness line turns amber + flags 覆盖偏低 — typical when the report
+# period's disclosure window is still open (e.g. 中报 right after 7/1, before the 7/15 flood).
+_EARN_LOW_COV = 0.60
+
+
+def _earnings_freshness_line(snap: dict) -> str:
+    """报告期 + 覆盖度 sub-line — tells the user WHICH disclosure window the signal draws from
+    and HOW complete it is (coverage = weight of holdings that have issued a 业绩预告)."""
+    period = snap.get("earnings_period")
+    plabel = ern.period_label(period)
+    cov = snap.get("earnings_cov")
+    cov_s = f"{cov:.0%}" if isinstance(cov, (int, float)) and not _nan(cov) else "—"
+    low = isinstance(cov, (int, float)) and not _nan(cov) and cov < _EARN_LOW_COV
+    color = "#b45309" if low else "#94a3b8"           # amber when low, else muted
+    warn = " · ⚠覆盖偏低" if low else ""
+    return f"<br><span style='font-size:10px;color:{color}'>{plabel} · 覆盖 {cov_s}{warn}</span>"
+
 
 def _earnings_cell(snap: dict) -> str:
-    """业绩预期 cell — informational (NOT in composite). Label + weighted YoY + bull/bear."""
+    """业绩预期 cell — informational (NOT in composite). Label + weighted YoY + bull/bear
+    + a freshness line (report period + coverage) so the user sees which window / how complete."""
     label = snap.get("earnings_label")
     if not label:
         return "<td style='text-align:center;color:#cbd5e1'>—</td>"
@@ -198,7 +218,8 @@ def _earnings_cell(snap: dict) -> str:
     if isinstance(bull, (int, float)) and not _nan(bull):
         bb = (f"<br><span style='font-size:11px;color:#64748b'>归母YoY {yoy_s}"
               f" · 多{bull:.0%}/空{bear:.0%}</span>")
-    return f"<td style='text-align:center;font-weight:bold;color:{color}'>{label}{bb}</td>"
+    fresh = _earnings_freshness_line(snap)
+    return f"<td style='text-align:center;font-weight:bold;color:{color}'>{label}{bb}{fresh}</td>"
 
 
 def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict) -> str:
@@ -208,8 +229,15 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict) -> str:
         nm = meta.get(sym, {}).get("name", sym)
         comp = snap.get("composite")
         c = _composite_color(comp)
+        # 当下规模 = 最新份额×最新净值（流动性身份标签，挂 ETF 名下）
+        aum = snap.get("aum_yi")
+        aum_html = (f"<br><span style='color:#94a3b8;font-size:10px'>规模 {aum:.0f}亿</span>"
+                    if not _nan(aum) else "")
+        # 近5日均成交额 = 流动性/活跃度参考（信息列，不进性价比）
+        to = snap.get("turnover_5d_yi")
+        to_html = f"{to:.1f}亿" if not _nan(to) else "—"
         out += (
-            f"<tr><td><b>{nm}</b><br><span style='color:#64748b;font-size:11px'>{sym}</span></td>"
+            f"<tr><td><b>{nm}</b><br><span style='color:#64748b;font-size:11px'>{sym}</span>{aum_html}</td>"
             f"<td style='text-align:center;font-size:18px;color:{c};font-weight:bold'>{_fmt(comp)}<br>"
             f"<span style='font-size:11px'>{_rating(comp)}</span></td>"
             f"<td style='text-align:center'>{_fmt(snap.get('valuation'))}<br>"
@@ -218,6 +246,7 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict) -> str:
             f"<span style='font-size:11px;color:#64748b'>{snap.get('chip_phase','')}</span></td>"
             f"<td style='text-align:center'>{_fmt(snap.get('trend'))}</td>"
             f"{_earnings_cell(snap)}"
+            f"<td style='text-align:center;color:#475569'>{to_html}</td>"
             f"<td style='font-size:12px'>{commentaries.get(sym,'')}</td></tr>"
         )
     return out
@@ -226,7 +255,8 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict) -> str:
 def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int) -> list:
     """Build the 3 figures (shares+NAV, PE, factor) for one ETF."""
     nm = meta.get(sym, {}).get("name", sym)
-    label = f"{nm}({sym})"
+    aum = snap.get("aum_yi")
+    label = f"{nm}({sym})" + (f" · 规模{aum:.0f}亿" if not _nan(aum) else "")
     sm = series_map.get(sym, {})
     return [
         shares_nav_figure(label, sm.get("shares"), sm.get("nav"),
@@ -297,11 +327,13 @@ tr:hover {{ background: #f8fafc; }}
 <h2>🏭 ETF 行业研究 · 性价比看板</h2>
 <p class="sub">数据截至 {as_of} 收盘 · 纯研究视图（不构成买卖建议，不含涨跌预测）· {signal_note}</p>
 <div class="flag">读图：份额变动=机构真实意图（散户买卖只转手不改份额）；性价比=估值PE分位(0.40)+筹码动向(0.30)+价格趋势(0.30)。
-筹码相位含文章「末期见底」非单调逻辑：兑现中段最空，深回撤+卖盘枯竭(见底)最看多。</div>
+筹码相位含文章「末期见底」非单调逻辑：兑现中段最空，深回撤+卖盘枯竭(见底)最看多。
+业绩预期列=最新一期<b>业绩预告</b>口径（见各单元格报告期，如「2026中报预告」）；覆盖度=已发预告成分股权重占比，披露窗口初期覆盖偏低属正常（⚠标注）。
+规模(ETF名下)=当下份额×净值；成交5日=近5日均成交额——均为流动性参考，不进性价比。</div>
 {summary_html}
 <h3>📊 性价比排名（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只数据不足未参与" or ""}）</h3>
 {excluded_note}
-<table><thead><tr><th style="text-align:left">ETF</th><th>综合性价比</th><th>估值(PE分位)</th><th>筹码(相位)</th><th>趋势</th><th>业绩预期<sup style="font-size:9px">信息</sup></th><th style="text-align:left">解读</th></tr></thead>
+<table><thead><tr><th style="text-align:left">ETF</th><th>综合性价比</th><th>估值(PE分位)</th><th>筹码(相位)</th><th>趋势</th><th>业绩预期<sup style="font-size:9px">信息</sup></th><th>成交<sub style="font-size:9px">5日</sub><sup style="font-size:9px">信息</sup></th><th style="text-align:left">解读</th></tr></thead>
 <tbody>{ranking}</tbody></table>
 <h3>📈 逐标的明细（份额·净值·估值·三因子）</h3>
 {charts_html}
