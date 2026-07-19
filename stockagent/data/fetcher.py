@@ -72,7 +72,9 @@ def price_basis_family(source_tag: Optional[str]) -> str:
     A daily-price series must stay on ONE basis — mixing raw (sina 不复权) with hfq
     (eastmoney 后复权) creates artificial multi-x jumps (e.g. 0.396 -> 1.502 overnight)
     that corrupt trend/MOM signals. Families: sina_raw/eastmoney_raw/baostock_raw -> 'raw';
-    *_hfq -> 'hfq'; *_qfq -> 'qfq'.
+    *_hfq -> 'hfq'; *_qfq -> 'qfq'. split_adj (fix_splits.py output) is also 'raw' — it only
+    stitches rare split discontinuities and stays on the raw scale, so raw increments append
+    safely post-split (any genuinely new split is re-caught by re-running fix_splits.py).
     """
     t = (source_tag or "").lower()
     if not t:
@@ -81,7 +83,7 @@ def price_basis_family(source_tag: Optional[str]) -> str:
         return "hfq"
     if "qfq" in t:
         return "qfq"
-    if "raw" in t or "sina" in t:
+    if "raw" in t or "sina" in t or "split_adj" in t:
         return "raw"
     return "unknown"
 

@@ -28,6 +28,7 @@ from stockagent.data.fetcher import (
     ("sina_raw", "raw"),
     ("eastmoney_raw", "raw"),
     ("baostock_raw", "raw"),
+    ("split_adj", "raw"),   # fix_splits.py output stays on raw scale
     ("eastmoney_hfq", "hfq"),
     ("baostock_hfq", "hfq"),
     ("eastmoney_qfq", "qfq"),
@@ -160,3 +161,24 @@ def test_update_symbol_accepts_same_family(monkeypatch):
                         lambda *a, **k: (raw_df, "sina_raw"))
     assert dm.update_symbol("X") == 1                 # accepted
     assert st.last_date("X") == "2026-07-06"
+
+
+def test_update_symbol_accepts_raw_into_split_adj_history(monkeypatch):
+    """Regression: ETFs whose history was tagged split_adj by fix_splits.py must still
+    accept raw incremental updates — otherwise they freeze at their last fix_splits date
+    and the documented update_all -> fix_splits workflow can never land new raw points.
+    """
+    from stockagent.data import manager as mgr
+
+    st = _store()
+    st.upsert_prices("X", _row("2026-07-03"), source="split_adj")  # split-adjusted history
+    dm = mgr.DataManager(store=st)
+
+    raw_df = pd.DataFrame(
+        {"open": 0.4, "high": 0.4, "low": 0.4, "close": 0.4, "volume": 0.0, "amount": 0.0},
+        index=["2026-07-17"],
+    )
+    monkeypatch.setattr(mgr.fetcher, "fetch_etf_daily",
+                        lambda *a, **k: (raw_df, "sina_raw"))
+    assert dm.update_symbol("X") == 1                 # accepted (was skipped before fix)
+    assert st.last_date("X") == "2026-07-17"
