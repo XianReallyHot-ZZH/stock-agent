@@ -45,17 +45,18 @@ def _deviation_figure(sym: str, name: str, df: pd.DataFrame, period: int = ti.MA
     close = df["close"]
     ma = ti.ma_series(close, period)
     dev = ti.deviation_series(close, period)
+    idx = pd.to_datetime(close.index)   # 转 date 类型 → hover 显示完整日期
     dc = dev.dropna()
     mx = float(dc.max()) if len(dc) else float("nan")
     mn = float(dc.min()) if len(dc) else float("nan")
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.10,
         subplot_titles=(f"{name}({sym}) 收盘价 vs {period}日线", "偏离度 (价格−均线)÷均线"))
-    fig.add_trace(go.Scatter(x=close.index, y=close, name="收盘",
+    fig.add_trace(go.Scatter(x=idx, y=close, name="收盘",
                              line=dict(color=_PAL["series_1"], width=2)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=ma.index, y=ma, name=f"MA{period}",
+    fig.add_trace(go.Scatter(x=idx, y=ma, name=f"MA{period}",
                              line=dict(color=_PAL["muted"], width=1.5, dash="dash")), row=1, col=1)
-    fig.add_trace(go.Scatter(x=dev.index, y=dev, name="偏离度",
+    fig.add_trace(go.Scatter(x=idx, y=dev, name="偏离度",
                              line=dict(color=_PAL["ink_sec"], width=1.5)), row=2, col=1)
     if not pd.isna(mx):
         fig.add_hline(y=mx, row=2, col=1, line=dict(color=_PAL["pos_extreme"], width=1, dash="dot"),
@@ -64,16 +65,27 @@ def _deviation_figure(sym: str, name: str, df: pd.DataFrame, period: int = ti.MA
         fig.add_hline(y=mn, row=2, col=1, line=dict(color=_PAL["neg_extreme"], width=1, dash="dot"),
                       annotation_text=f"负极值 {mn:.0%}", annotation_position="bottom right")
     if not pd.isna(dev.iloc[-1]):
-        fig.add_trace(go.Scatter(x=[dev.index[-1]], y=[dev.iloc[-1]], mode="markers+text",
+        fig.add_trace(go.Scatter(x=[idx[-1]], y=[dev.iloc[-1]], mode="markers+text",
                                  marker=dict(size=10, color=_PAL["ink"]),
                                  text=[f"现在 {dev.iloc[-1]:.1%}"], textposition="top center",
                                  showlegend=False), row=2, col=1)
     fig.update_layout(
-        height=460, margin=dict(l=50, r=20, t=50, b=30),
+        height=540, margin=dict(l=50, r=20, t=50, b=30),
         paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
         font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=False)
-    fig.update_xaxes(gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"])
+    fig.update_xaxes(gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"],
+                     type="date", hoverformat="%Y-%m-%d")
     fig.update_yaxes(gridcolor=_PAL["grid"], zerolinecolor=_PAL["baseline"])
+    fig.update_xaxes(
+        rangeslider_visible=True,
+        rangeselector=dict(buttons=[
+            dict(count=1, label="1月", step="month", stepmode="backward"),
+            dict(count=6, label="6月", step="month", stepmode="backward"),
+            dict(count=1, label="1年", step="year", stepmode="backward"),
+            dict(count=3, label="3年", step="year", stepmode="backward"),
+            dict(label="全部", step="all"),
+        ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]),
+        row=2, col=1)
     return fig
 
 
@@ -208,10 +220,12 @@ def _signals_html(diag: dict) -> str:
 
 
 _CSS = """
-:root{--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink-sec:#52514e;--muted:#898781;--grid:#e1e0d9}
+:root{--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink-sec:#52514e;--muted:#898781;--grid:#e1e0d9;--hover:#f4f3ef}
+[data-theme="dark"]{--surface:#1a1a19;--plane:#0d0d0d;--ink:#ffffff;--ink-sec:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--hover:#262624}
 *{box-sizing:border-box}
 body{margin:0;background:var(--plane);color:var(--ink);font-family:system-ui,-apple-system,'Segoe UI',sans-serif;padding:24px;max-width:1200px;margin:0 auto}
-h1{font-size:22px;margin:0 0 4px}
+.topbar{display:flex;justify-content:space-between;align-items:center;margin:0 0 4px}
+h1{font-size:22px;margin:0}
 h2{font-size:16px;margin:0 0 10px;color:var(--ink-sec)}
 .meta{color:var(--ink-sec);font-size:13px;margin-bottom:16px}
 section{background:var(--surface);border:1px solid var(--grid);border-radius:10px;padding:16px;margin-bottom:16px}
@@ -219,7 +233,7 @@ section h2{margin-top:0}
 table.stat{border-collapse:collapse;width:100%;font-size:13px}
 table.stat th,table.stat td{padding:7px 10px;border-bottom:1px solid var(--grid);text-align:left}
 table.stat th{color:var(--muted);font-weight:600}
-table.stat tbody tr:hover{background:#f4f3ef}
+table.stat tbody tr:hover{background:var(--hover)}
 .tiles-row{display:flex;gap:16px;flex-wrap:wrap}
 .tile{flex:1;min-width:160px;background:var(--plane);border:1px solid var(--grid);border-radius:8px;padding:12px}
 .tile-label{color:var(--muted);font-size:12px;margin-bottom:4px}
@@ -229,6 +243,16 @@ table.stat tbody tr:hover{background:#f4f3ef}
 .meter-fill{height:100%;border-radius:3px}
 .hint{color:var(--muted);font-size:12px}
 .sig-list{margin:0;padding-left:20px;font-size:14px;line-height:2}
+#theme-btn{background:var(--surface);border:1px solid var(--grid);color:var(--ink-sec);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:15px;line-height:1}
+#theme-btn:hover{background:var(--hover)}
+"""
+
+
+_JS = """
+function _isDark(){return document.documentElement.getAttribute('data-theme')==='dark';}
+function _applyPlotly(dark){if(!window.Plotly)return;var u={'paper_bgcolor':dark?'#1a1a19':'#fcfcfb','plot_bgcolor':dark?'#1a1a19':'#fcfcfb','font.color':dark?'#ffffff':'#0b0b0b'};['xaxis','xaxis2','yaxis','yaxis2'].forEach(function(a){u[a+'.gridcolor']=dark?'#2c2c2a':'#e1e0d9';u[a+'.zerolinecolor']=dark?'#383835':'#c3c2b7';});document.querySelectorAll('.plotly-graph-div').forEach(function(gd){try{Plotly.relayout(gd,u);}catch(e){}});}
+function toggleTheme(){var cur=document.documentElement.getAttribute('data-theme');var isDark=(cur==='dark');var next=isDark?'light':'dark';document.documentElement.setAttribute('data-theme',next);var b=document.getElementById('theme-btn');if(b)b.textContent=next==='dark'?'☀️':'🌙';_applyPlotly(next==='dark');}
+window.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('theme-btn');if(b)b.textContent=_isDark()?'☀️':'🌙';_applyPlotly(_isDark());});
 """
 
 
@@ -249,7 +273,8 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>{title}</title><style>{_CSS}</style></head><body>"
-        f"<h1>{title}</h1>"
+        f"<div class='topbar'><h1>{title}</h1>"
+        f"<button id='theme-btn' onclick='toggleTheme()'>🌙</button></div>"
         f"<div class='meta'>数据截至 {last_date} · {period}日线 · 生成于 {datetime.now():%Y-%m-%d %H:%M}</div>"
         f"<h2>③ 估值开关</h2><section>{_valuation_tile_html(diag['valuation'])}</section>"
         f"<h2>⑥ 市场温度·大小盘温差</h2><section>{_market_temp_html(diag['market_temp'])}</section>"
@@ -258,8 +283,12 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}"
         f"<div class='hint' style='margin-top:8px'>有效突破/跌破 = 收盘价穿越 60 日线 ±2% 以上(S13);"
         f"gN = 强度档位(2=±2%、3=±3%,+1 若均线方向确认),N 越大越确定。仅列 grade≥2;震荡市标注信号谨慎。</div></section>"
-        f"<h2>① 偏离极值曲线</h2><section>" + "".join(figs_html) + "</section>"
-        f"</body></html>"
+        f"<h2>① 偏离极值曲线</h2><section>"
+        f"<div class='hint' style='margin-bottom:10px'>主图:收盘价 vs 60日线;副图:偏离度(价格−均线)÷均线,"
+        f"虚线=历史极值(红=正极值/超买,蓝=负极值/超卖),黑点=当前。"
+        f"S13:偏离接近历史极值(黑点贴近虚线)时有技术拉回力量,可套利。</div>"
+        + "".join(figs_html) + "</section>"
+        f"<script>{_JS}</script></body></html>"
     )
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
