@@ -30,3 +30,6 @@ Thumbs.db
 
 # Third-party paid-content study notes (知识星球付费课程, 版权属原作者, 仅本地笔记不入库)
 docs/InvestmentCourseBegin/
+
+# My own distilled notes derived from paid courses (照单全收式忠实摘要 = 付费内容衍生品, 保持本地不入库)
+docs/我的笔记/
