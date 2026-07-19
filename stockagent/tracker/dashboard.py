@@ -50,7 +50,7 @@ def _deviation_figure(sym: str, name: str, df: pd.DataFrame, period: int = ti.MA
     mn = float(dc.min()) if len(dc) else float("nan")
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4], vertical_spacing=0.10,
-        subplot_titles=(f"{name}({sym}) 收盘价 vs {period}日线", "偏离度 close/MA − 1"))
+        subplot_titles=(f"{name}({sym}) 收盘价 vs {period}日线", "偏离度 (价格−均线)÷均线"))
     fig.add_trace(go.Scatter(x=close.index, y=close, name="收盘",
                              line=dict(color=_PAL["series_1"], width=2)), row=1, col=1)
     fig.add_trace(go.Scatter(x=ma.index, y=ma, name=f"MA{period}",
@@ -93,14 +93,18 @@ def _trend_table_html(diag: dict) -> str:
         bo_label = {"up": "突破", "down": "跌破", "none": "中性"}[bo_dir] + f" g{bo['grade']}"
         bo_c = _PAL["good"] if bo_dir == "up" else _PAL["critical"] if bo_dir == "down" else _PAL["muted"]
         choppy = f'<span style="color:{_PAL["warning"]}">⚠震荡</span>' if dg["choppy"] else "趋势"
-        dev_txt = f"{dev['pct']:.0%}位" if not pd.isna(dev["pct"]) else "—"
+        dev_txt = (f"{dev['cur_dev']:+.1%} / {dev['pct']:.0%}位"
+                   if not pd.isna(dev["pct"]) and not pd.isna(dev["cur_dev"]) else "—")
         rows.append(
             f"<tr><td>{info['name']}</td>"
             f"<td>{_chip(above, above_c)}</td><td style='text-align:center'>{mtrend}</td>"
             f"<td>{_chip(bo_label, bo_c)}</td><td>{choppy}</td><td style='font-variant-numeric:tabular-nums'>{dev_txt}</td></tr>")
     return ("<table class='stat'><thead><tr>"
-            "<th>指数</th><th>60日线</th><th>均线趋势</th><th>突破跌破</th><th>市态</th><th>偏离分位</th>"
-            "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>")
+            "<th>指数</th><th>60日线</th><th>均线趋势</th><th>突破跌破</th><th>市态</th><th>偏离度</th>"
+            "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+            "<div class='hint' style='margin-top:8px'>列定义:60日线=价 vs 均线(线上/下) · "
+            "均线趋势=均线升降 · 突破跌破 gN=穿越强度(N越大越确定) · 市态=趋势/震荡(震荡时信号谨慎) · "
+            "偏离度=(价格−均线)÷均线%(绝对值 / 历史分位;近 0% 超卖 / 近 100% 超买)</div>")
 
 
 # ---- ③ 估值开关 stat tile ----
@@ -144,6 +148,26 @@ def _valuation_tile_html(val: dict) -> str:
             f"<span class='hint'>{hint}</span></div>"
             f"<div class='hint' style='margin-top:6px'>指标:PE(TTM)=市值÷净利润 · PB=市值÷净资产 · "
             f"ROE=净利润÷净资产 · 故 PE=PB÷ROE</div>")
+
+
+# ---- ⑥ 市场温度·大小盘温差 ----
+def _market_temp_html(mt: dict) -> str:
+    if not mt.get("valid"):
+        return "<p class='hint'>市场温度数据不足</p>"
+    diff = mt["diff"]
+    regime = mt["regime"]
+    rc = (_PAL["critical"] if regime == "小盘偏贵"
+          else _PAL["good"] if regime == "小盘偏便宜" else _PAL["ink_sec"])
+    mkt_sub = f"全市场中位数 PB {mt['market_pb']:.2f}"
+    hs_sub = f"沪深300 PB {mt['hs300_pb']:.2f}"
+    return (f"<div class='tiles-row'>"
+            f"{_meter('全A 股 PB 分位', mt['market_pct'], mkt_sub)}"
+            f"{_meter('沪深300 PB 分位', mt['hs300_pct'], hs_sub)}"
+            f"<div class='tile'><div class='tile-label'>大小盘温差</div>"
+            f"<div class='tile-value' style='color:{rc}'>{diff:+.0%}</div>"
+            f"<div class='tile-sub'>{regime}</div></div></div>"
+            f"<div class='hint' style='margin-top:8px'>温差 = 全市场PB分位 − 沪深300PB分位;"
+            f"&gt;0 小盘偏贵(中小盘热),&lt;0 小盘偏便宜(小盘机会),≈0 同步</div>")
 
 
 # ---- ④ 蓝筹 vs 成长 ----
@@ -228,9 +252,12 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<h1>{title}</h1>"
         f"<div class='meta'>数据截至 {last_date} · {period}日线 · 生成于 {datetime.now():%Y-%m-%d %H:%M}</div>"
         f"<h2>③ 估值开关</h2><section>{_valuation_tile_html(diag['valuation'])}</section>"
+        f"<h2>⑥ 市场温度·大小盘温差</h2><section>{_market_temp_html(diag['market_temp'])}</section>"
         f"<h2>④ 蓝筹 vs 成长 仓位倾向</h2><section>{_style_card_html(diag['style'])}</section>"
         f"<h2>② 趋势状态</h2><section>{_trend_table_html(diag)}</section>"
-        f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}</section>"
+        f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}"
+        f"<div class='hint' style='margin-top:8px'>有效突破/跌破 = 收盘价穿越 60 日线 ±2% 以上(S13);"
+        f"gN = 强度档位(2=±2%、3=±3%,+1 若均线方向确认),N 越大越确定。仅列 grade≥2;震荡市标注信号谨慎。</div></section>"
         f"<h2>① 偏离极值曲线</h2><section>" + "".join(figs_html) + "</section>"
         f"</body></html>"
     )
