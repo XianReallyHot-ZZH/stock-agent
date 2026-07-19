@@ -27,3 +27,6 @@ Thumbs.db
 # Claude Code agent-local state (transcripts/memory keyed to machine path).
 # .claude/skills/ IS tracked (project agent config); only projects/ is machine-local.
 .claude/projects/
+
+# Third-party paid-content study notes (知识星球付费课程, 版权属原作者, 仅本地笔记不入库)
+docs/InvestmentCourseBegin/
