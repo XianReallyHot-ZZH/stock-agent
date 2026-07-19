@@ -76,6 +76,41 @@ CREATE INDEX IF NOT EXISTS idx_scale_symbol ON etf_scale(symbol);
 CREATE INDEX IF NOT EXISTS idx_nav_symbol ON etf_nav(symbol);
 CREATE INDEX IF NOT EXISTS idx_industry_pe ON industry_pe(industry);
 CREATE INDEX IF NOT EXISTS idx_etf_earnings_symbol ON etf_earnings(symbol);
+CREATE TABLE IF NOT EXISTS index_daily (
+    symbol TEXT NOT NULL,
+    date   TEXT NOT NULL,
+    open   REAL, high REAL, low REAL, close REAL,
+    volume REAL,
+    source TEXT,
+    PRIMARY KEY (symbol, date)
+);
+CREATE TABLE IF NOT EXISTS index_pe (
+    name      TEXT NOT NULL,
+    date      TEXT NOT NULL,
+    pe_ttm    REAL,
+    pe_median REAL,
+    source    TEXT,
+    PRIMARY KEY (name, date)
+);
+CREATE TABLE IF NOT EXISTS index_pb (
+    name      TEXT NOT NULL,
+    date      TEXT NOT NULL,
+    pb        REAL,
+    pb_median REAL,
+    source    TEXT,
+    PRIMARY KEY (name, date)
+);
+CREATE TABLE IF NOT EXISTS market_pb (
+    date      TEXT PRIMARY KEY,
+    pb        REAL,
+    pb_median REAL,
+    pct_all   REAL,
+    pct_10y   REAL,
+    source    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_index_daily_symbol ON index_daily(symbol);
+CREATE INDEX IF NOT EXISTS idx_index_pe_name ON index_pe(name);
+CREATE INDEX IF NOT EXISTS idx_index_pb_name ON index_pb(name);
 """
 
 
@@ -448,4 +483,185 @@ class Store:
     def last_earnings_period(self) -> Optional[str]:
         with self._conn() as c:
             row = c.execute("SELECT MAX(report_period) FROM etf_earnings").fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- broad-index daily / valuation (V4 tracker) ----
+    def upsert_index_daily(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with open/high/low/close/volume."""
+        if df is None or len(df) == 0:
+            return 0
+        rows = [
+            (symbol, str(d),
+             float(r.get("open", 0) or 0), float(r.get("high", 0) or 0),
+             float(r.get("low", 0) or 0), float(r.get("close", 0) or 0),
+             float(r.get("volume", 0) or 0), source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO index_daily(symbol,date,open,high,low,close,volume,source) "
+                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(symbol,date) DO UPDATE SET "
+                "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
+                "volume=excluded.volume,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_index_daily_series(self, symbol: str, start: Optional[str] = None,
+                               end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,open,high,low,close,volume FROM index_daily WHERE symbol=?"
+        params: list = [symbol]
+        if start:
+            q += " AND date>=?"
+            params.append(start)
+        if end:
+            q += " AND date<=?"
+            params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_index_daily_date(self, symbol: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(date) FROM index_daily WHERE symbol=?", (symbol,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    def upsert_index_pe(self, name: str, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with pe_ttm (and optional pe_median)."""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = [
+            (name, str(d), _f(r.get("pe_ttm")), _f(r.get("pe_median")), source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO index_pe(name,date,pe_ttm,pe_median,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(name,date) DO UPDATE SET "
+                "pe_ttm=excluded.pe_ttm,pe_median=excluded.pe_median,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_index_pe_series(self, name: str, start: Optional[str] = None,
+                            end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,pe_ttm,pe_median FROM index_pe WHERE name=?"
+        params: list = [name]
+        if start:
+            q += " AND date>=?"
+            params.append(start)
+        if end:
+            q += " AND date<=?"
+            params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_index_pe_date(self, name: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(date) FROM index_pe WHERE name=?", (name,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    def upsert_index_pb(self, name: str, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with pb (and optional pb_median)."""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = [
+            (name, str(d), _f(r.get("pb")), _f(r.get("pb_median")), source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO index_pb(name,date,pb,pb_median,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(name,date) DO UPDATE SET "
+                "pb=excluded.pb,pb_median=excluded.pb_median,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_index_pb_series(self, name: str, start: Optional[str] = None,
+                            end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,pb,pb_median FROM index_pb WHERE name=?"
+        params: list = [name]
+        if start:
+            q += " AND date>=?"
+            params.append(start)
+        if end:
+            q += " AND date<=?"
+            params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_index_pb_date(self, name: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(date) FROM index_pb WHERE name=?", (name,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    def upsert_market_pb(self, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with pb (and optional pb_median/pct_all/pct_10y)."""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = [
+            (str(d), _f(r.get("pb")), _f(r.get("pb_median")),
+             _f(r.get("pct_all")), _f(r.get("pct_10y")), source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO market_pb(date,pb,pb_median,pct_all,pct_10y,source) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
+                "pb=excluded.pb,pb_median=excluded.pb_median,pct_all=excluded.pct_all,"
+                "pct_10y=excluded.pct_10y,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_market_pb_series(self, start: Optional[str] = None,
+                             end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,pb,pb_median,pct_all,pct_10y FROM market_pb"
+        params: list = []
+        clauses = []
+        if start:
+            clauses.append("date>=?")
+            params.append(start)
+        if end:
+            clauses.append("date<=?")
+            params.append(end)
+        if clauses:
+            q += " WHERE " + " AND ".join(clauses)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_market_pb_date(self) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(date) FROM market_pb").fetchone()
             return row[0] if row and row[0] else None

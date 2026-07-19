@@ -396,3 +396,93 @@ class DataManager:
         self.store.set_meta("last_earnings_update", period)
         log.info("earnings update %s: %d ETFs", period, n)
         return n
+
+    # ---- Broad-index daily / valuation (V4 tracker) — 指数择时层数据 ----
+    # 5 broad indices. Note 创业板指(399006)/科创50(000688) daily prices ARE fetchable,
+    # but their PE/PB series are NOT in stock_index_pe/pb_lg's supported set (only the 3 below).
+    BROAD_INDICES = ["000016", "000300", "000905", "399006", "000688"]  # 上证50/沪深300/中证500/创业板/科创50
+    INDEX_PE_NAMES = ["沪深300", "上证50", "中证500"]  # stock_index_pe_lg supported subset
+
+    def update_index_daily(self, symbols: Optional[list[str]] = None) -> dict:
+        """Fetch + store full daily OHLCV for broad indices (sina, RAW). Idempotent — sina
+        returns full history each call, upsert overwrites. Returns {symbol: rows}."""
+        syms = symbols or self.BROAD_INDICES
+        results: dict[str, int] = {}
+        for i, sym in enumerate(syms):
+            if i > 0:
+                time.sleep(0.4)
+            try:
+                df = fetcher.fetch_index_daily(sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning("index_daily %s failed: %s", sym, str(e)[:120])
+                results[sym] = 0
+                continue
+            n = self.store.upsert_index_daily(sym, df, source="sina_raw")
+            log.info("index_daily %s: +%d rows (to %s)", sym, n, df.index[-1] if len(df) else "?")
+            results[sym] = n
+        if any(results.values()):
+            self.store.set_meta("last_index_daily_update", fetcher.today_str())
+        return results
+
+    def update_index_pe(self, names: Optional[list[str]] = None) -> dict:
+        """Fetch + store broad-index PE history (legulegu). 创业板指/科创50 NOT supported by
+        stock_index_pe_lg — do not pass them. Returns {name: rows}."""
+        nms = names or self.INDEX_PE_NAMES
+        results: dict[str, int] = {}
+        for i, nm in enumerate(nms):
+            if i > 0:
+                time.sleep(1.0)  # legulegu can be throttle-prone
+            try:
+                df = fetcher.fetch_index_pe(nm)
+            except Exception as e:  # noqa: BLE001
+                log.warning("index_pe %s failed: %s", nm, str(e)[:120])
+                results[nm] = 0
+                continue
+            n = self.store.upsert_index_pe(nm, df, source="lg")
+            log.info("index_pe %s: +%d rows (to %s)", nm, n, df.index[-1] if len(df) else "?")
+            results[nm] = n
+        if any(results.values()):
+            self.store.set_meta("last_index_pe_update", fetcher.today_str())
+        return results
+
+    INDEX_PB_NAMES = ["沪深300", "上证50", "中证500"]  # stock_index_pb_lg supported (same as PE)
+
+    def update_index_pb(self, names: Optional[list[str]] = None) -> dict:
+        """Fetch + store broad-index PB history (legulegu). 创业板指/科创50 NOT supported.
+        Returns {name: rows}."""
+        nms = names or self.INDEX_PB_NAMES
+        results: dict[str, int] = {}
+        for i, nm in enumerate(nms):
+            if i > 0:
+                time.sleep(1.0)
+            try:
+                df = fetcher.fetch_index_pb(nm)
+            except Exception as e:  # noqa: BLE001
+                log.warning("index_pb %s failed: %s", nm, str(e)[:120])
+                results[nm] = 0
+                continue
+            n = self.store.upsert_index_pb(nm, df, source="lg")
+            log.info("index_pb %s: +%d rows (to %s)", nm, n, df.index[-1] if len(df) else "?")
+            results[nm] = n
+        if any(results.values()):
+            self.store.set_meta("last_index_pb_update", fetcher.today_str())
+        return results
+
+    def update_market_pb(self) -> int:
+        """Fetch + store whole-A-market PB history + percentiles (legulegu). Single series."""
+        try:
+            df = fetcher.fetch_market_pb()
+        except Exception as e:  # noqa: BLE001
+            log.warning("market_pb failed: %s", str(e)[:120])
+            return 0
+        n = self.store.upsert_market_pb(df, source="lg")
+        self.store.set_meta("last_market_pb_update", fetcher.today_str())
+        log.info("market_pb: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
+        return n
+
+    def update_index_all(self) -> None:
+        """Convenience: refresh all index-layer data (daily + PE + PB + market PB)."""
+        self.update_index_daily()
+        self.update_index_pe()
+        self.update_index_pb()
+        self.update_market_pb()

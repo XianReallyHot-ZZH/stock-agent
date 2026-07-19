@@ -106,7 +106,21 @@ def report(conn, cfg, syms) -> dict:
     print(f"PE新鲜: {'旧(>' + str(PE_STALE_DAYS) + '天)' if pe_stale else 'OK'}")
     earn_period = _fetch(conn, "SELECT MAX(report_period) FROM etf_earnings")[0] or "（无）"
     earn_n = _fetch(conn, "SELECT COUNT(DISTINCT symbol) FROM etf_earnings")[0]
-    print(f"业绩预期: 报告期 {earn_period}（{earn_n} 只ETF有信号）\n")
+    print(f"业绩预期: 报告期 {earn_period}（{earn_n} 只ETF有信号）")
+
+    # ---- index layer (V4 tracker — 指数择时层) ----
+    idx_names = [("000016", "上证50"), ("000300", "沪深300"), ("000905", "中证500"),
+                 ("399006", "创业板指"), ("000688", "科创50")]
+    print("指数层(择时):")
+    for sym, nm in idx_names:
+        d = _fetch(conn, "SELECT MAX(date) FROM index_daily WHERE symbol=?", (sym,))[0]
+        ok = d is not None and ref is not None and d >= ref
+        print(f"  {nm:6}({sym}) 日线 {str(d):12}{' OK' if ok else ' [缺/旧]'}")
+    for nm in ("沪深300", "上证50", "中证500"):
+        d = _fetch(conn, "SELECT MAX(date) FROM index_pe WHERE name=?", (nm,))[0]
+        print(f"  {nm:6} PE {str(d):12}")
+    d = _fetch(conn, "SELECT MAX(date) FROM market_pb")[0]
+    print(f"  全市场PB {str(d):12}\n")
     return {"bench_last": bench_last, "target": target, "ref": ref,
             "pe_last": pe_last, "pe_stale": pe_stale,
             "earn_period": earn_period,
@@ -170,6 +184,12 @@ def main():
     if have_period != want_period:
         print(f"  业绩预期更新 ({have_period or '无'} → {want_period}) ...")
         dm.update_etf_earnings(report_period=want_period)
+
+    # 6) index layer (V4 tracker): broad-index daily + PE + market PB — full refresh (idempotent)
+    print("  指数层刷新(daily+PE+PB)...")
+    dm.update_index_daily()
+    dm.update_index_pe()
+    dm.update_market_pb()
 
     print("\n=== 补齐后复查 ===")
     report(conn, cfg, syms)

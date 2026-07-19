@@ -517,3 +517,143 @@ def fetch_earnings_forecast(report_period: str, timeout: float = 60.0) -> pd.Dat
     df["_ann"] = pd.to_datetime(df["公告日期"], errors="coerce")
     df = df.sort_values("_ann").drop_duplicates("code", keep="last")  # latest announcement per code
     return df.set_index("code")[["yoy", "type"]]
+
+
+# ---- Broad-index daily / valuation (V4 tracker) — sina + legulegu, proxy-independent ----
+def _index_prefix(symbol: str) -> str:
+    """Broad-index sina prefix: 399xxx (深证, e.g. 创业板指) -> sz; everything else
+    (000016/000300/000905/000688 上证/中证系列) -> sh. Distinct from _szsh_prefix (ETF/stock)."""
+    s = str(symbol)
+    return "sz" if s.startswith("399") else "sh"
+
+
+def fetch_index_daily(symbol: str, timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """Broad-index daily OHLCV (sina stock_zh_index_daily, RAW — indices need no 复权).
+
+    Returns DataFrame indexed by date(str): open/high/low/close/volume. Covers 上证50/沪深300/
+    中证500/创业板指/科创50 (科创50 from 2020-01, 创业板指 from 2010-06, others back to 2002-2005).
+    """
+    pre = _index_prefix(symbol)
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.stock_zh_index_daily, timeout, symbol=f"{pre}{symbol}")
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            df = df.rename(columns={c: str(c).lower() for c in df.columns})
+            return _normalize(df)
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"{symbol}: index_daily failed ({last_err})")
+
+
+def fetch_index_pe(name: str, timeout: float = 40.0, retries: int = 3) -> pd.DataFrame:
+    """Broad-index PE history (legulegu stock_index_pe_lg). `name` = Chinese index name
+    (沪深300/上证50/中证500). Returns DataFrame indexed by date(str): pe_ttm = 滚动市盈率,
+    pe_median = 滚动市盈率中位数. Back to 2005 (~5k rows). 创业板指/科创50 NOT in the supported
+    set (raises FetchError) — caller should skip them."""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(2.0)
+        try:
+            df = _run_with_timeout(ak.stock_index_pe_lg, timeout, symbol=name)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            cols = list(df.columns)
+            date_col = next((c for c in cols if "日期" in str(c) or str(c).lower() == "date"), cols[0])
+            ttm_col = next((c for c in cols if str(c).strip() == "滚动市盈率"), None)
+            med_col = next((c for c in cols if str(c).strip() == "滚动市盈率中位数"), None)
+            if ttm_col is None:
+                raise FetchError(f"index_pe {name}: no 滚动市盈率 col, got {cols}")
+            out = pd.DataFrame({
+                "date": pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "pe_ttm": pd.to_numeric(df[ttm_col], errors="coerce"),
+                "pe_median": pd.to_numeric(df[med_col], errors="coerce") if med_col else pd.NA,
+            })
+            return out.dropna(subset=["date", "pe_ttm"]).drop_duplicates("date").set_index("date").sort_index()
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"{name}: index_pe failed ({last_err})")
+
+
+def fetch_index_pb(name: str, timeout: float = 40.0, retries: int = 3) -> pd.DataFrame:
+    """Broad-index PB history (legulegu stock_index_pb_lg). `name` = Chinese index name
+    (沪深300/上证50/中证500). Returns DataFrame indexed by date(str): pb, pb_median.
+    Back to 2005. 创业板指/科创50 NOT supported (raises FetchError)."""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(2.0)
+        try:
+            df = _run_with_timeout(ak.stock_index_pb_lg, timeout, symbol=name)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            cols = list(df.columns)
+            date_col = next((c for c in cols if "日期" in str(c) or str(c).lower() == "date"), cols[0])
+            pb_col = next((c for c in cols if str(c).strip() == "市净率"), None)
+            med_col = next((c for c in cols if str(c).strip() == "市净率中位数"), None)
+            if pb_col is None:
+                raise FetchError(f"index_pb {name}: no 市净率 col, got {cols}")
+            out = pd.DataFrame({
+                "date": pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "pb": pd.to_numeric(df[pb_col], errors="coerce"),
+                "pb_median": pd.to_numeric(df[med_col], errors="coerce") if med_col else pd.NA,
+            })
+            return out.dropna(subset=["date", "pb"]).drop_duplicates("date").set_index("date").sort_index()
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"{name}: index_pb failed ({last_err})")
+
+
+def fetch_market_pb(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """Whole-A-market PB history + percentiles (legulegu stock_a_all_pb). Single market-wide
+    series, back to 2005. Returns DataFrame indexed by date(str): pb, pb_median, pct_all
+    (quantile in all history), pct_10y (quantile in recent 10y). Any unavailable col is omitted."""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.stock_a_all_pb, timeout)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            cols = list(df.columns)
+            date_col = next((c for c in cols if "日期" in str(c) or str(c).lower() == "date"), cols[0])
+
+            def _pick(keywords):
+                for c in cols:
+                    if any(k.lower() in str(c).lower() for k in keywords):
+                        return c
+                return None
+
+            pb_col = _pick(["middlepb", "市净率"]) or _pick(["pb"])
+            med_col = _pick(["equalweight", "等权"]) or _pick(["中位"])
+            pct_all = _pick(["quantileinallhistory", "全部历史", "allhistory"])
+            pct_10y = _pick(["quantileinrecent10years", "近十年", "recent10"])
+            if pb_col is None:
+                raise FetchError(f"market_pb: no PB col in {cols}")
+            out = pd.DataFrame({
+                "date": pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "pb": pd.to_numeric(df[pb_col], errors="coerce"),
+            })
+            if med_col is not None:
+                out["pb_median"] = pd.to_numeric(df[med_col], errors="coerce")
+            if pct_all is not None:
+                out["pct_all"] = pd.to_numeric(df[pct_all], errors="coerce")
+            if pct_10y is not None:
+                out["pct_10y"] = pd.to_numeric(df[pct_10y], errors="coerce")
+            return out.dropna(subset=["date", "pb"]).drop_duplicates("date").set_index("date").sort_index()
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"market_pb failed ({last_err})")
