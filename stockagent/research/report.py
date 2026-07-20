@@ -141,7 +141,7 @@ def pe_figure(name: str, pe_df) -> go.Figure:
     """Industry PE history with current value marked. Shades the lookback cheap/expensive band."""
     fig = go.Figure()
     if pe_df is None or not len(pe_df) or "pe" not in pe_df.columns:
-        fig.update_layout(**_base_layout(f"{name} — 行业PE历史（无数据）"))
+        fig.update_layout(**_base_layout(f"{name} — 行业PE历史（无数据）", height=320))
         return fig
     pe = pe_df["pe"].astype(float).dropna()
     fig.add_trace(go.Scatter(
@@ -154,7 +154,7 @@ def pe_figure(name: str, pe_df) -> go.Figure:
                       annotation_text=f"{lo:.1f}~{hi:.1f}", annotation_position="top left")
         fig.add_hline(y=last, line=dict(color=C_PE_NOW, width=1.5, dash="dash"),
                       annotation_text=f"当前 {last:.1f}", annotation_position="top right")
-    fig.update_layout(**_base_layout(f"{name} — 行业PE历史 + 当前位置"))
+    fig.update_layout(**_base_layout(f"{name} — 行业PE历史 + 当前位置", height=320))
     fig.update_yaxes(title_text="静态市盈率（加权）", gridcolor=C_GRID)
     fig.update_xaxes(type="date")
     return fig
@@ -183,7 +183,7 @@ def factor_figure(name: str, snap: dict) -> go.Figure:
     red = snap.get("reduction_from_peak")
     title = (f"{name} — {factor_label}（{phase}·距峰值{_fmt(red, pct=True)}）"
              f"  综合性价比 <b style='color:{_composite_color(comp)}'>{_fmt(comp)} {_rating(comp)}</b>")
-    fig.update_layout(**_base_layout(title, height=300))
+    fig.update_layout(**_base_layout(title, height=180))
     fig.update_xaxes(range=[0, 100], gridcolor=C_GRID)
     fig.update_yaxes(autorange="reversed")
     return fig
