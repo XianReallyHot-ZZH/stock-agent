@@ -23,9 +23,18 @@ def _nan(v) -> bool:
     return v is None or (isinstance(v, float) and math.isnan(v))
 
 
-# 筹码相位 → D 告警(重远 6 相位)
-_D_BEAR = {"兑现中段", "见顶预警", "高位加仓", "高位减仓"}   # 机构兑现/见顶 → 看空
-_D_BULL = {"见底", "低位加仓", "加仓"}                      # 见底/加仓 → 看多
+# 筹码相位 → D 告警(重远 6 相位)。注意:位置决定"加仓"含义 ——
+# 低位加仓=机会(底部建仓),高位加仓=风险(拉高出货/接盘,易被误读成利好)。
+_D_BULL = {"见底", "低位加仓", "加仓"}
+_D_PHASE_MSG = {
+    "兑现中段":   "机构在中部兑现 → 看空(无性价比)",
+    "见顶预警":   "高位+机构停滞 → 见顶风险",
+    "高位加仓":   "高位+机构仍在买 → 警惕拉高出货/接盘(不是机会!)",
+    "高位减仓":   "高位+机构抛 → 明确出货",
+    "见底":       "深底+卖盘枯竭 → 见底(看多)",
+    "低位加仓":   "深底+聪明钱进场 → 最强看多(机会)",
+    "加仓":       "中部+机构加仓 → 偏多",
+}
 # 业绩预告 → A1/A2 告警
 _EARN_BEAR = {"业绩承压", "业绩恶化"}
 
@@ -61,14 +70,12 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
     # ---- ETF 层(D/B1/A1A2)----
     for sym, snap in etf_snapshots.items():
         nm = snap.get("name", sym)
-        # D: 筹码相位
+        # D: 筹码相位(位置决定加仓含义:低位加仓=机会,高位加仓=风险)
         phase = snap.get("chip_phase", "")
-        if phase in _D_BEAR:
-            alerts.append({"level": "warn", "scope": nm, "rule": "D",
-                           "msg": f"筹码相位「{phase}」→ 机构兑现/见顶"})
-        elif phase in _D_BULL:
-            alerts.append({"level": "info", "scope": nm, "rule": "D",
-                           "msg": f"筹码相位「{phase}」→ 见底/低位加仓"})
+        if phase in _D_PHASE_MSG:
+            level = "info" if phase in _D_BULL else "warn"
+            alerts.append({"level": level, "scope": nm, "rule": "D",
+                           "msg": f"筹码相位「{phase}」→ {_D_PHASE_MSG[phase]}"})
         # B1: 价值股息率偏高
         if snap.get("style") == "value":
             dy = snap.get("dividend_yield")
