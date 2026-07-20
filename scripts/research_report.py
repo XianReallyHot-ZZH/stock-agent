@@ -157,6 +157,8 @@ def main():
                     help="skip ALL LLM (pool summary + per-ETF = rule template)")
     ap.add_argument("--llm-per-etf", action="store_true",
                     help="also do per-ETF LLM commentary (27 calls, slow); default is pool summary only")
+    ap.add_argument("--push-alerts", action="store_true",
+                    help="推送信号提醒到微信/飞书(notify.broadcast,九条触发时)")
     args = ap.parse_args()
     setup_logging()
 
@@ -214,6 +216,14 @@ def main():
                       ma_period=int(cfg.params["research"]["ma_period"]),
                       alerts_list=alerts_list)
     out = rep.write_html(html, args.output)
+
+    # A4.3 微信通道:推送信号提醒(九条触发时)
+    if args.push_alerts and alerts_list:
+        title, text = talerts.format_for_push(alerts_list)
+        if title:
+            from stockagent.notify import broadcast
+            res = broadcast(text, title=title)
+            print(f"  提醒推送: {res}" if res else "  ⚠ 未配置通知渠道(.env WECOM_BOT_KEY 等)")
 
     # console summary — ranked ETFs first, then data-insufficient ones (excluded from ranking)
     def _comp(sn):

@@ -84,3 +84,18 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
                            "msg": f"业绩预告「{elabel}」{yoy_s} → 抱着颗雷/戴维斯双杀前兆"})
 
     return alerts
+
+
+def format_for_push(alerts_list: list, title_prefix: str = "📡 信号提醒") -> tuple[str, str]:
+    """把 alerts 渲染成推送友好文本(双通道之微信)。返回 (title, text)。
+    无触发时返回空 title(调用方可跳过推送)。"""
+    if not alerts_list:
+        return ("", "")
+    warns = [a for a in alerts_list if a["level"] == "warn"]
+    infos = [a for a in alerts_list if a["level"] == "info"]
+    title = f"{title_prefix}(⚠{len(warns)} 💡{len(infos)})"
+    lines = [f"**{title}**", ""]
+    for a in alerts_list:
+        icon = "⚠" if a["level"] == "warn" else "💡"
+        lines.append(f"{icon} **[{a['rule']}] {a['scope']}**\n{a['msg']}")
+    return (title, "\n".join(lines))
