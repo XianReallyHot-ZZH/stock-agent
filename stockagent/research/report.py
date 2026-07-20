@@ -249,7 +249,8 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict, style_filter:
             style_note = ""
         style_color = {"value": "#16a34a", "growth": "#2563eb", "cyclic": "#ea580c"}.get(style, "#64748b")
         out += (
-            f"<tr><td><b>{nm}</b><br><span style='color:#64748b;font-size:11px'>{sym}</span>{aum_html}</td>"
+            f"<tr><td><b><a href='#{sym}' style='color:#1e293b;text-decoration:none'>{nm}</a></b>"
+            f"<br><span style='color:#64748b;font-size:11px'>{sym}</span>{aum_html}</td>"
             f"<td style='text-align:center;color:{style_color};font-weight:600'>{style_cn}"
             f"<br><span style='font-size:10px;color:#94a3b8'>{style_note}</span></td>"
             f"<td style='text-align:center;font-size:18px;color:{c};font-weight:bold'>{_fmt(comp)}<br>"
@@ -294,18 +295,21 @@ def render(snapshots: dict, series_map: dict, meta: dict, commentaries: dict,
     ranked = {s: sn for s, sn in snapshots.items() if sn.get("data_sufficient", True)}
     excluded = {s: sn for s, sn in snapshots.items() if not sn.get("data_sufficient", True)}
 
-    # per-ETF detail figures: ranked (by composite) first, then excluded (by name)
-    chart_figs = []
-    for sym, snap in sorted(ranked.items(), key=lambda kv: _comp(kv[1]), reverse=True):
-        chart_figs.extend(_etf_figs(sym, snap, meta, series_map, ma_period))
-    for sym, snap in sorted(excluded.items(), key=lambda kv: meta.get(kv[0], {}).get("name", kv[0])):
-        chart_figs.extend(_etf_figs(sym, snap, meta, series_map, ma_period))
-
+    # per-ETF detail: ranked (by composite) first, then excluded. 每个 ETF 一个带 id 的块
+    # (排名表 ETF 名是锚点链接 → 点击跳转)。id = symbol。
+    ordered = (list(sorted(ranked.items(), key=lambda kv: _comp(kv[1]), reverse=True))
+               + list(sorted(excluded.items(), key=lambda kv: meta.get(kv[0], {}).get("name", kv[0]))))
     chart_blocks = []
-    for i, f in enumerate(chart_figs):
-        div = f.to_html(full_html=False, include_plotlyjs=("cdn" if i == 0 else False),
-                        config={"responsive": True})
-        chart_blocks.append(f'<div class="chart-block">{div}</div>')
+    first = True
+    for sym, snap in ordered:
+        nm = meta.get(sym, {}).get("name", sym)
+        figs = _etf_figs(sym, snap, meta, series_map, ma_period)
+        block = f'<div id="{sym}" class="etf-detail"><h4>📌 {nm}（{sym}）</h4>'
+        for f in figs:
+            div = f.to_html(full_html=False, include_plotlyjs=first, config={"responsive": True})
+            first = False
+            block += f'<div class="chart-block">{div}</div>'
+        chart_blocks.append(block + "</div>")
     charts_html = "\n".join(chart_blocks)
 
     ranking_value = _ranking_rows(ranked, meta, commentaries, style_filter="value")
@@ -346,6 +350,10 @@ tr:hover {{ background: #f8fafc; }}
 .flag {{ background: #fef3c7; padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #92400e; }}
 .summary-box {{ background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 16px; border-radius: 6px;
                 font-size: 14px; line-height: 1.7; color: #1e3a8a; margin: 14px 0; }}
+html {{ scroll-behavior: smooth; }}
+.etf-detail {{ margin: 28px 0 8px; padding: 12px 0 0; border-top: 2px solid #cbd5e1; }}
+.etf-detail:target {{ background: #eff6ff; transition: background 0.6s; }}
+.etf-detail h4 {{ margin: 0 0 10px; color: #334155; }}
 </style></head><body>
 <h2>🏭 ETF 行业研究 · 性价比看板</h2>
 <p class="sub">数据截至 {as_of} 收盘 · 纯研究视图（不构成买卖建议，不含涨跌预测）· {signal_note}</p>
