@@ -316,7 +316,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, commentaries: dict,
                     '<th>业绩预期<sup style="font-size:9px">信息</sup></th>'
                     '<th>成交<sub style="font-size:9px">5日</sub><sup style="font-size:9px">信息</sup></th>'
                     '<th style="text-align:left">解读</th></tr>')
-    _rank_header_cyclic = _rank_header.replace("估值(PE分位)", "估值(PB)")
+    _rank_header_cyclic = _rank_header.replace("估值(PE分位)", "估值(PB分位)")
     n_ranked, n_excluded = len(ranked), len(excluded)
     if excluded:
         excl_names = "、".join(f"{meta.get(s, {}).get('name', s)}({s})" for s in excluded)
