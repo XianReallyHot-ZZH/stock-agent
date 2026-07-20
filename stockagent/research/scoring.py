@@ -179,20 +179,17 @@ def analyze_etf(
 ) -> dict:
     """One-ETF snapshot. Pure: takes series, returns the factor dict the report consumes.
 
-    style (Phase 1-A 三类分类) drives valuation 解读:
-      - growth/value: valuation = 100*(1 - PE分位)(PE分位低 = 便宜 = 高分)
-      - cyclic:      valuation = 100*PE分位(反向!周期 PE 高分位 = 利润低 = 周期底 = 高分)
-    通用底盘(chip + trend)三类共享。dividend_df 给 value 算股息率(附加显示,不进 composite)。
-    默认 style='growth' = 现有一刀切行为(向后兼容)。"""
+    style (Phase 1-A 三类分类):
+      - growth/value(has_valuation=True): valuation = 100*(1 - PE分位)(PE分位低 = 便宜 = 高分)
+      - cyclic: 命门是 PB,板块 PB 无数据源 → build_snapshots 设 has_valuation=False,
+        不用 PE 反向(误差大,宁缺毋滥),valuation 留空,只用通用底盘(chip + trend)。
+    dividend_df 给 value 算股息率(附加显示,不进 composite)。默认 style='growth' = 现有行为。"""
     rp = params.get("research", {})
     lookback = _pe_lookback_days(rp)
     pe_pct = pe_percentile(pe_series, lookback) if (has_valuation and pe_series is not None) else np.nan
 
-    if has_valuation and not np.isnan(pe_pct):
-        val = (100.0 * pe_pct if style == "cyclic"          # 周期反向:高分位=底=高分
-               else 100.0 * (1.0 - pe_pct))                  # growth/value:低分位=便宜=高分
-    else:
-        val = np.nan
+    # value/growth: PE 分位低=便宜=高分。cyclic 由调用方设 has_valuation=False,不进此分支。
+    val = 100.0 * (1.0 - pe_pct) if (has_valuation and not np.isnan(pe_pct)) else np.nan
 
     chip, label, red = chip_score(shares, params)
     trend = trend_score(close, int(rp["ma_period"]))

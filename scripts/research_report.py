@@ -76,7 +76,9 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     for sym in symbols:
         m = meta.get(sym, {})
         csrc = m.get("csrc_industry")
-        has_val = bool(csrc)
+        # Phase 1-A: 按 style 分流; cyclic 命门是 PB(板块 PB 无源)→ 不走 PE 反向(误差大),估值留空
+        style_main, _ = clf.classify(sym, cfg)
+        has_val = bool(csrc) and style_main != "cyclic"
 
         price_df = store.get_series(sym, end=as_of)
         close = _series_to(price_df, "close", None)  # already sliced by end=
@@ -86,8 +88,6 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
         pe_df = store.get_industry_pe_series(csrc, end=as_of) if has_val else None
         pe = _series_to(pe_df, "pe", None)
 
-        # Phase 1-A: 按 style 分流(价值/成长/周期各走各的估值解读);value 额外算股息率
-        style_main, _ = clf.classify(sym, cfg)
         div_df = store.get_etf_dividend_series(sym) if style_main == "value" else None
         snap = rs.analyze_etf(close, shares, pe, cfg.params, has_valuation=has_val,
                               style=style_main or "growth", dividend_df=div_df)

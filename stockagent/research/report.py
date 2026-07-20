@@ -222,10 +222,12 @@ def _earnings_cell(snap: dict) -> str:
     return f"<td style='text-align:center;font-weight:bold;color:{color}'>{label}{bb}{fresh}</td>"
 
 
-def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict) -> str:
+def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict, style_filter: str | None = None) -> str:
     rows = sorted(snapshots.items(), key=lambda kv: (kv[1].get("composite") if not _nan(kv[1].get("composite")) else -1), reverse=True)
     out = ""
     for sym, snap in rows:
+        if style_filter and snap.get("style", "growth") != style_filter:
+            continue
         nm = meta.get(sym, {}).get("name", sym)
         comp = snap.get("composite")
         c = _composite_color(comp)
@@ -236,8 +238,20 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict) -> str:
         # 近5日均成交额 = 流动性/活跃度参考（信息列，不进性价比）
         to = snap.get("turnover_5d_yi")
         to_html = f"{to:.1f}亿" if not _nan(to) else "—"
+        style = snap.get("style", "growth")
+        style_cn = {"value": "价值", "growth": "成长", "cyclic": "周期"}.get(style, style)
+        div_y = snap.get("dividend_yield")
+        if style == "cyclic":
+            style_note = "待 PB"
+        elif style == "value" and not _nan(div_y):
+            style_note = f"股息 {div_y:.1%}"
+        else:
+            style_note = ""
+        style_color = {"value": "#16a34a", "growth": "#2563eb", "cyclic": "#ea580c"}.get(style, "#64748b")
         out += (
             f"<tr><td><b>{nm}</b><br><span style='color:#64748b;font-size:11px'>{sym}</span>{aum_html}</td>"
+            f"<td style='text-align:center;color:{style_color};font-weight:600'>{style_cn}"
+            f"<br><span style='font-size:10px;color:#94a3b8'>{style_note}</span></td>"
             f"<td style='text-align:center;font-size:18px;color:{c};font-weight:bold'>{_fmt(comp)}<br>"
             f"<span style='font-size:11px'>{_rating(comp)}</span></td>"
             f"<td style='text-align:center'>{_fmt(snap.get('valuation'))}<br>"
@@ -293,7 +307,14 @@ def render(snapshots: dict, series_map: dict, meta: dict, commentaries: dict,
         chart_blocks.append(f'<div class="chart-block">{div}</div>')
     charts_html = "\n".join(chart_blocks)
 
-    ranking = _ranking_rows(ranked, meta, commentaries)
+    ranking_value = _ranking_rows(ranked, meta, commentaries, style_filter="value")
+    ranking_growth = _ranking_rows(ranked, meta, commentaries, style_filter="growth")
+    ranking_cyclic = _ranking_rows(ranked, meta, commentaries, style_filter="cyclic")
+    _rank_header = ('<tr><th style="text-align:left">ETF</th><th>类型</th><th>综合性价比</th>'
+                    '<th>估值(PE分位)</th><th>筹码(相位)</th><th>趋势</th>'
+                    '<th>业绩预期<sup style="font-size:9px">信息</sup></th>'
+                    '<th>成交<sub style="font-size:9px">5日</sub><sup style="font-size:9px">信息</sup></th>'
+                    '<th style="text-align:left">解读</th></tr>')
     n_ranked, n_excluded = len(ranked), len(excluded)
     if excluded:
         excl_names = "、".join(f"{meta.get(s, {}).get('name', s)}({s})" for s in excluded)
@@ -331,10 +352,14 @@ tr:hover {{ background: #f8fafc; }}
 业绩预期列=最新一期<b>业绩预告</b>口径（见各单元格报告期，如「2026中报预告」）；覆盖度=已发预告成分股权重占比，披露窗口初期覆盖偏低属正常（⚠标注）。
 规模(ETF名下)=当下份额×净值；成交5日=近5日均成交额——均为流动性参考，不进性价比。</div>
 {summary_html}
-<h3>📊 性价比排名（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只数据不足未参与" or ""}）</h3>
+<h3>📊 性价比排名 · 三类分页（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只数据不足未参与" or ""}）</h3>
 {excluded_note}
-<table><thead><tr><th style="text-align:left">ETF</th><th>综合性价比</th><th>估值(PE分位)</th><th>筹码(相位)</th><th>趋势</th><th>业绩预期<sup style="font-size:9px">信息</sup></th><th>成交<sub style="font-size:9px">5日</sub><sup style="font-size:9px">信息</sup></th><th style="text-align:left">解读</th></tr></thead>
-<tbody>{ranking}</tbody></table>
+<h3 style="color:#16a34a">💰 价值型 · 股息率 + PE 分位(低=便宜)</h3>
+<table><thead>{_rank_header}</thead><tbody>{ranking_value}</tbody></table>
+<h3 style="color:#2563eb">🚀 成长型 · 业绩 + PE 分位(低=便宜)</h3>
+<table><thead>{_rank_header}</thead><tbody>{ranking_growth}</tbody></table>
+<h3 style="color:#ea580c">🔄 周期型 · 筹码+趋势(板块 PB 无源,估值暂缺)</h3>
+<table><thead>{_rank_header}</thead><tbody>{ranking_cyclic}</tbody></table>
 <h3>📈 逐标的明细（份额·净值·估值·三因子）</h3>
 {charts_html}
 </body></html>"""
