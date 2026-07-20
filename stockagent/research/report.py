@@ -163,17 +163,25 @@ def pe_figure(name: str, pe_df) -> go.Figure:
 def factor_figure(name: str, snap: dict) -> go.Figure:
     """Three-factor horizontal bar + composite marker. Shows the chip phase."""
     fig = go.Figure()
-    labels = ["估值", "筹码", "趋势"]
-    vals = [snap.get("valuation"), snap.get("chip"), snap.get("trend")]
+    if snap.get("style") == "cyclic":
+        # cyclic 命门是 PB(板块无源)→ 估值不适用,只显示筹码+趋势二因子
+        labels = ["筹码", "趋势"]
+        vals = [snap.get("chip"), snap.get("trend")]
+        colors = ["#2563eb", "#0ea5e9"]
+        factor_label = "二因子（估值暂缺·待 PB）"
+    else:
+        labels = ["估值", "筹码", "趋势"]
+        vals = [snap.get("valuation"), snap.get("chip"), snap.get("trend")]
+        colors = ["#7c3aed", "#2563eb", "#0ea5e9"]
+        factor_label = "三因子"
     vals = [0 if _nan(v) else float(v) for v in vals]
-    colors = ["#7c3aed", "#2563eb", "#0ea5e9"]
     fig.add_trace(go.Bar(x=vals, y=labels, orientation="h", marker_color=colors,
                          text=[f"{v:.0f}" for v in vals], textposition="outside",
                          showlegend=False, hovertemplate="%{y}: %{x:.0f}<extra></extra>"))
     comp = snap.get("composite")
     phase = snap.get("chip_phase", "")
     red = snap.get("reduction_from_peak")
-    title = (f"{name} — 三因子（{phase}·距峰值{_fmt(red, pct=True)}）"
+    title = (f"{name} — {factor_label}（{phase}·距峰值{_fmt(red, pct=True)}）"
              f"  综合性价比 <b style='color:{_composite_color(comp)}'>{_fmt(comp)} {_rating(comp)}</b>")
     fig.update_layout(**_base_layout(title, height=300))
     fig.update_xaxes(range=[0, 100], gridcolor=C_GRID)
@@ -269,17 +277,18 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict, style_filter:
 
 
 def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int) -> list:
-    """Build the 3 figures (shares+NAV, PE, factor) for one ETF."""
+    """Build detail figures for one ETF: value/growth = 3 (shares+NAV, PE, factor);
+    cyclic = 2 (shares+NAV, factor) — 跳过行业PE图(cyclic 不用 PE,板块 PB 无源)。"""
     nm = meta.get(sym, {}).get("name", sym)
     aum = snap.get("aum_yi")
     label = f"{nm}({sym})" + (f" · 规模{aum:.0f}亿" if not _nan(aum) else "")
     sm = series_map.get(sym, {})
-    return [
-        shares_nav_figure(label, sm.get("shares"), sm.get("nav"),
-                          ma_period=ma_period, current_shares=sm.get("current_shares")),
-        pe_figure(label, sm.get("pe")),
-        factor_figure(label, snap),
-    ]
+    figs = [shares_nav_figure(label, sm.get("shares"), sm.get("nav"),
+                              ma_period=ma_period, current_shares=sm.get("current_shares"))]
+    if snap.get("style") != "cyclic":
+        figs.append(pe_figure(label, sm.get("pe")))
+    figs.append(factor_figure(label, snap))
+    return figs
 
 
 def render(snapshots: dict, series_map: dict, meta: dict, commentaries: dict,
