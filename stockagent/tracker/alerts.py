@@ -72,12 +72,36 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
     # ---- ETF 层(D/B1/A1A2)----
     for sym, snap in etf_snapshots.items():
         nm = snap.get("name", sym)
-        # D: 筹码相位(位置决定加仓含义:低位加仓=机会,高位加仓=风险)
+        # D: 筹码相位 × 估值分位交叉(综合筹码+价格才准)
+        # 只看筹码会遗漏价格:高位筹码+低估值=好资产被错杀(不是风险!)
         phase = snap.get("chip_phase", "")
         if phase in _D_PHASE_MSG:
-            level = "info" if phase in _D_BULL else "warn"
-            alerts.append({"level": level, "scope": nm, "rule": "D",
-                           "msg": f"筹码相位「{phase}」→ {_D_PHASE_MSG[phase]}"})
+            pe_pct = snap.get("pe_percentile")
+            has_pe = pe_pct is not None and not _nan(pe_pct)
+            chip_high = phase in ("高位加仓", "高位减仓", "见顶预警")
+            chip_low = phase in ("低位加仓", "见底", "下跌末段")
+            if has_pe and (chip_high or chip_low):
+                val_low, val_high = pe_pct < 0.30, pe_pct > 0.70
+                if chip_high and val_low:
+                    alerts.append({"level": "info", "scope": nm, "rule": "D",
+                        "msg": f"筹码高位(机构重仓)+估值低位({pe_pct:.0%})→ 好资产被错杀,潜在反弹"})
+                elif chip_high and val_high:
+                    alerts.append({"level": "warn", "scope": nm, "rule": "D",
+                        "msg": f"筹码高位+估值高位({pe_pct:.0%})→ 拉高出货/见顶风险"})
+                elif chip_low and val_low:
+                    alerts.append({"level": "info", "scope": nm, "rule": "D",
+                        "msg": f"筹码低位+估值低位({pe_pct:.0%})→ 见底信号(机构可能重新进场)"})
+                elif chip_low and val_high:
+                    alerts.append({"level": "warn", "scope": nm, "rule": "D",
+                        "msg": f"筹码低位+估值高位({pe_pct:.0%})→ 机构已跑+估值贵(危险)"})
+                else:  # 筹码极端但估值中部 → 按筹码单维
+                    level = "info" if phase in _D_BULL else "warn"
+                    alerts.append({"level": level, "scope": nm, "rule": "D",
+                        "msg": f"筹码「{phase}」+估值中位({pe_pct:.0%})→ {_D_PHASE_MSG[phase]}"})
+            else:  # 无PE(cyclic/宽基)或筹码中部 → 按筹码单维
+                level = "info" if phase in _D_BULL else "warn"
+                alerts.append({"level": level, "scope": nm, "rule": "D",
+                    "msg": f"筹码相位「{phase}」→ {_D_PHASE_MSG[phase]}"})
         # B1: 价值股息率偏高
         if snap.get("style") == "value":
             dy = snap.get("dividend_yield")
