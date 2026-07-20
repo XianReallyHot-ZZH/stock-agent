@@ -291,11 +291,16 @@ def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int
     return figs
 
 
+_ALERT_LEGEND = ('<div class="alert-legend">代号：D=筹码×估值交叉 · E1E2=60日线突破跌破 · '
+                 'F1=大盘风险开关 · B1=价值股息率 · A1A2=业绩变脸 · C1C2=周期PB(待P2)</div>')
+
+
 def _alerts_html(alerts_list: list) -> str:
     """告警区:把 alerts.evaluate 输出渲染成看板顶部 box(warn 风险红 / info 机会绿)。"""
     if not alerts_list:
         return ('<div class="alerts-box"><b>📡 信号提醒</b>'
-                '<span style="color:#64748b"> 当前无触发(九条规则)</span></div>')
+                '<span style="color:#64748b"> 当前无触发(九条规则)</span>'
+                + _ALERT_LEGEND + '</div>')
     warns = [a for a in alerts_list if a.get("level") == "warn"]
     infos = [a for a in alerts_list if a.get("level") == "info"]
     items = "".join(
@@ -304,7 +309,8 @@ def _alerts_html(alerts_list: list) -> str:
     return (f'<div class="alerts-box"><b>📡 信号提醒</b> '
             f'<span class="alert-warn">⚠ {len(warns)} 风险</span> '
             f'<span class="alert-info">💡 {len(infos)} 机会</span>'
-            f'<div class="alert-list">{items}</div></div>')
+            f'<div class="alert-list">{items}</div>'
+            + _ALERT_LEGEND + '</div>')
 
 
 def render(snapshots: dict, series_map: dict, meta: dict, commentaries: dict,
@@ -384,6 +390,7 @@ html {{ scroll-behavior: smooth; }}
 .alert-warn {{ color: #dc2626; font-weight: 600; margin-left: 8px; }}
 .alert-info {{ color: #16a34a; font-weight: 600; margin-left: 8px; }}
 .alert-list {{ margin-top: 8px; }}
+.alert-legend {{ margin-top: 6px; font-size: 11px; color: #92400e; border-top: 1px dashed #fde68a; padding-top: 4px; }}
 .alert-item {{ padding: 4px 0; font-size: 13px; border-bottom: 1px dashed #fde68a; }}
 .alert-item:last-child {{ border-bottom: none; }}
 .alert-item.warn {{ color: #b91c1c; }}
