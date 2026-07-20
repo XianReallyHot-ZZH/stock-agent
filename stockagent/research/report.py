@@ -291,9 +291,25 @@ def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int
     return figs
 
 
+def _alerts_html(alerts_list: list) -> str:
+    """告警区:把 alerts.evaluate 输出渲染成看板顶部 box(warn 风险红 / info 机会绿)。"""
+    if not alerts_list:
+        return ('<div class="alerts-box"><b>📡 信号提醒</b>'
+                '<span style="color:#64748b"> 当前无触发(九条规则)</span></div>')
+    warns = [a for a in alerts_list if a.get("level") == "warn"]
+    infos = [a for a in alerts_list if a.get("level") == "info"]
+    items = "".join(
+        f'<div class="alert-item {a["level"]}"><span class="alert-rule">{a["rule"]}</span> '
+        f'<b>{a["scope"]}</b>: {a["msg"]}</div>' for a in alerts_list)
+    return (f'<div class="alerts-box"><b>📡 信号提醒</b> '
+            f'<span class="alert-warn">⚠ {len(warns)} 风险</span> '
+            f'<span class="alert-info">💡 {len(infos)} 机会</span>'
+            f'<div class="alert-list">{items}</div></div>')
+
+
 def render(snapshots: dict, series_map: dict, meta: dict, commentaries: dict,
            as_of: str, signal_note: str = "", ma_period: int = 60,
-           pool_summary: str = "") -> str:
+           pool_summary: str = "", alerts_list: list | None = None) -> str:
     """Build the full HTML. series_map[symbol] = {close, shares, nav, pe}."""
     # Split: data_sufficient ETFs are ranked; insufficient ones (e.g. no share history) are
     # kept for their detail charts but excluded from the ranking (shown in a note).
@@ -363,6 +379,16 @@ html {{ scroll-behavior: smooth; }}
 .etf-detail {{ margin: 28px 0 8px; padding: 12px 0 0; border-top: 2px solid #cbd5e1; }}
 .etf-detail:target {{ background: #eff6ff; transition: background 0.6s; }}
 .etf-detail h4 {{ margin: 0 0 10px; color: #334155; }}
+.alerts-box {{ background: #fffbeb; border-left: 4px solid #f59e0b; padding: 12px 16px; border-radius: 6px; margin: 14px 0; }}
+.alerts-box b {{ color: #92400e; }}
+.alert-warn {{ color: #dc2626; font-weight: 600; margin-left: 8px; }}
+.alert-info {{ color: #16a34a; font-weight: 600; margin-left: 8px; }}
+.alert-list {{ margin-top: 8px; }}
+.alert-item {{ padding: 4px 0; font-size: 13px; border-bottom: 1px dashed #fde68a; }}
+.alert-item:last-child {{ border-bottom: none; }}
+.alert-item.warn {{ color: #b91c1c; }}
+.alert-item.info {{ color: #15803d; }}
+.alert-rule {{ display: inline-block; min-width: 48px; padding: 1px 6px; border-radius: 4px; background: #fef3c7; font-size: 11px; font-weight: 600; margin-right: 6px; }}
 </style></head><body>
 <h2>🏭 ETF 行业研究 · 性价比看板</h2>
 <p class="sub">数据截至 {as_of} 收盘 · 纯研究视图（不构成买卖建议，不含涨跌预测）· {signal_note}</p>
@@ -371,6 +397,7 @@ html {{ scroll-behavior: smooth; }}
 业绩预期列=最新一期<b>业绩预告</b>口径（见各单元格报告期，如「2026中报预告」）；覆盖度=已发预告成分股权重占比，披露窗口初期覆盖偏低属正常（⚠标注）。
 规模(ETF名下)=当下份额×净值；成交5日=近5日均成交额——均为流动性参考，不进性价比。</div>
 {summary_html}
+{_alerts_html(alerts_list or [])}
 <h3>📊 性价比排名 · 三类分页（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只数据不足未参与" or ""}）</h3>
 {excluded_note}
 <h3 style="color:#16a34a">💰 价值型 · 股息率 + PE 分位(低=便宜)</h3>

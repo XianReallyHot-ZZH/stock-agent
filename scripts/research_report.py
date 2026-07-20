@@ -200,9 +200,19 @@ def main():
         src = "+".join(parts)
     else:
         src = "规则模板"
+    # Phase 1-A A4: 信号提醒(九条)— 指数层 diagnose + ETF snapshots → alerts
+    from stockagent.tracker import diagnose as tdiag, alerts as talerts
+    try:
+        index_diag = tdiag.diagnose_layer(store)
+        alerts_list = talerts.evaluate(snapshots, index_diag)
+    except Exception as e:  # noqa: BLE001
+        print(f"  ⚠ 提醒评估失败(不影响看板): {e}")
+        alerts_list = []
+
     html = rep.render(snapshots, series_map, meta, commentaries, as_of=as_of,
                       signal_note=f"解读源：{src}", pool_summary=pool_sum,
-                      ma_period=int(cfg.params["research"]["ma_period"]))
+                      ma_period=int(cfg.params["research"]["ma_period"]),
+                      alerts_list=alerts_list)
     out = rep.write_html(html, args.output)
 
     # console summary — ranked ETFs first, then data-insufficient ones (excluded from ranking)
