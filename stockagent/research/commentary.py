@@ -145,6 +145,7 @@ def _pool_facts(snapshots: dict, meta: dict) -> dict:
     def _row(sym, sn):
         return {
             "name": meta.get(sym, {}).get("name", sym),
+            "style": sn.get("style", "growth"),
             "composite": round(_num(sn.get("composite")), 0) if _num(sn.get("composite")) else None,
             "pe_pct": round(_pe(sn) * 100) if _pe(sn) is not None else None,
             "phase": sn.get("chip_phase"),
@@ -152,6 +153,20 @@ def _pool_facts(snapshots: dict, meta: dict) -> dict:
         }
 
     by_comp = sorted(ranked, key=lambda kv: (_num(kv[1].get("composite")) or -1), reverse=True)
+    # Phase 1-A: 按三类(value/growth/cyclic)分组 — 每类 top + 数量 + 是否有估值
+    _STYLE_CN = {"value": "价值", "growth": "成长", "cyclic": "周期"}
+    by_style = {}
+    for sk, cn in _STYLE_CN.items():
+        grp = [(s, sn) for s, sn in ranked if sn.get("style", "growth") == sk]
+        if not grp:
+            continue
+        grp_sorted = sorted(grp, key=lambda kv: (_num(kv[1].get("composite")) or -1), reverse=True)
+        by_style[sk] = {
+            "label": cn,
+            "count": len(grp),
+            "has_valuation": sk != "cyclic",  # cyclic 板块 PB 无源,不估值
+            "top": [_row(s, sn) for s, sn in grp_sorted[:2]],
+        }
     return {
         "n_participating": len(ranked),
         "n_excluded": len(excluded),
@@ -161,6 +176,7 @@ def _pool_facts(snapshots: dict, meta: dict) -> dict:
         "valuation": {"cheap_lt20pct": cheap, "mid": mid_pe, "expensive_gt80pct": expensive, "no_pe": no_pe},
         "top3": [_row(s, sn) for s, sn in by_comp[:3]],
         "bottom3": [_row(s, sn) for s, sn in by_comp[-3:]],
+        "by_style": by_style,
     }
 
 
@@ -210,7 +226,18 @@ def _pool_template(snapshots: dict, meta: dict) -> str:
     crash = ec.get("业绩恶化", 0) + ec.get("业绩承压", 0)
     earn_str = (f"业绩预告（未计入性价比）：{high}只上行、{crash}只承压/恶化；"
                 if (high or crash) else "")
-    return (f"本池 {f['n_participating']} 只参与排名{excl}。{dom_str}{earn_str}"
+    # Phase 1-A: 三类分类分布(价值/成长/周期 各自 top + 周期标 PB 暂缺)
+    bs = f.get("by_style", {})
+    style_parts = []
+    for sk in ("value", "growth", "cyclic"):
+        g = bs.get(sk)
+        if not g:
+            continue
+        top_names = "、".join(r["name"] for r in g["top"] if r.get("name"))
+        suffix = "(PB暂缺)" if sk == "cyclic" else ""
+        style_parts.append(f"{g['label']}{g['count']}只{suffix}[{top_names}]")
+    style_str = "三类分布：" + "；".join(style_parts) + "。" if style_parts else ""
+    return (f"本池 {f['n_participating']} 只参与排名{excl}。{style_str}{dom_str}{earn_str}"
             f"估值分布：便宜(<20%分位){v['cheap_lt20pct']}只、贵(>80%){v['expensive_gt80pct']}只、"
             f"无PE {v['no_pe']}只。性价比前三 {top}；后三 {bot}。以上为规则输出，不含涨跌预测。")
 
