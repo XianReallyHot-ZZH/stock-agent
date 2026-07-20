@@ -255,7 +255,8 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict, style_filter:
             f"<td style='text-align:center;font-size:18px;color:{c};font-weight:bold'>{_fmt(comp)}<br>"
             f"<span style='font-size:11px'>{_rating(comp)}</span></td>"
             f"<td style='text-align:center'>{_fmt(snap.get('valuation'))}<br>"
-            f"<span style='font-size:11px;color:#64748b'>PE分位 {_fmt(snap.get('pe_percentile'), pct=True)}</span></td>"
+            f"<span style='font-size:11px;color:#64748b'>"
+            f"{'待 PB(板块无源)' if style == 'cyclic' else 'PE分位 ' + _fmt(snap.get('pe_percentile'), pct=True)}</span></td>"
             f"<td style='text-align:center'>{_fmt(snap.get('chip'))}<br>"
             f"<span style='font-size:11px;color:#64748b'>{snap.get('chip_phase','')}</span></td>"
             f"<td style='text-align:center'>{_fmt(snap.get('trend'))}</td>"
@@ -315,6 +316,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, commentaries: dict,
                     '<th>业绩预期<sup style="font-size:9px">信息</sup></th>'
                     '<th>成交<sub style="font-size:9px">5日</sub><sup style="font-size:9px">信息</sup></th>'
                     '<th style="text-align:left">解读</th></tr>')
+    _rank_header_cyclic = _rank_header.replace("估值(PE分位)", "估值(PB)")
     n_ranked, n_excluded = len(ranked), len(excluded)
     if excluded:
         excl_names = "、".join(f"{meta.get(s, {}).get('name', s)}({s})" for s in excluded)
@@ -359,7 +361,7 @@ tr:hover {{ background: #f8fafc; }}
 <h3 style="color:#2563eb">🚀 成长型 · 业绩 + PE 分位(低=便宜)</h3>
 <table><thead>{_rank_header}</thead><tbody>{ranking_growth}</tbody></table>
 <h3 style="color:#ea580c">🔄 周期型 · 筹码+趋势(板块 PB 无源,估值暂缺)</h3>
-<table><thead>{_rank_header}</thead><tbody>{ranking_cyclic}</tbody></table>
+<table><thead>{_rank_header_cyclic}</thead><tbody>{ranking_cyclic}</tbody></table>
 <h3>📈 逐标的明细（份额·净值·估值·三因子）</h3>
 {charts_html}
 </body></html>"""
