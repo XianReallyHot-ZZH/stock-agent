@@ -486,3 +486,28 @@ class DataManager:
         self.update_index_pe()
         self.update_index_pb()
         self.update_market_pb()
+
+    # ---- ETF dividend (V4 tracker · 价值型股息率数据) ----
+    def update_etf_dividend(self, symbols: Optional[list[str]] = None) -> dict:
+        """Fetch + store ETF 分红历史(sina)。覆盖稀疏——部分 ETF 无分红数据,正常跳过(0 行)。
+        价值型股息率 = 近 12 月单次分红之和(累计差分) ÷ 当前价格。"""
+        syms = symbols or self.config.rotation_symbols()
+        results: dict[str, int] = {}
+        for i, sym in enumerate(syms):
+            if i > 0:
+                time.sleep(0.3)
+            try:
+                df = fetcher.fetch_etf_dividend(sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning("etf_dividend %s failed: %s", sym, str(e)[:80])
+                results[sym] = 0
+                continue
+            if len(df) == 0:
+                results[sym] = 0
+                continue  # 稀疏:该 ETF 无分红记录,正常
+            n = self.store.upsert_etf_dividend(sym, df, source="sina")
+            log.info("etf_dividend %s: +%d rows (to %s)", sym, n, df.index[-1])
+            results[sym] = n
+        if any(results.values()):
+            self.store.set_meta("last_etf_dividend_update", fetcher.today_str())
+        return results

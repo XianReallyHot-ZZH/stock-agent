@@ -61,6 +61,29 @@ def valuation_score(pe_series: pd.Series, lookback: int) -> float:
     return 100.0 * (1.0 - pct)
 
 
+def value_dividend_yield(dividend_df, close, lookback_days: int = 365) -> float:
+    """近 12 月股息率 = 最近 lookback_days 内单次分红之和 ÷ 当前价格(Phase 1-A 价值型)。
+
+    dividend_df: etf_dividend store 的 cumulative_dividend 序列(indexed by date)。
+    单次分红 = 累计差分(剔除 ≤0 的噪音)。NaN if 数据不足(覆盖稀疏属正常,不报错)。"""
+    if dividend_df is None or len(dividend_df) < 2 or close is None or len(close) == 0:
+        return np.nan
+    cum = pd.to_numeric(dividend_df["cumulative_dividend"], errors="coerce").dropna()
+    if len(cum) < 2:
+        return np.nan
+    per_event = cum.diff().dropna()
+    per_event = per_event[per_event > 0]
+    if len(per_event) == 0:
+        return np.nan
+    idx = pd.to_datetime(per_event.index)
+    cutoff = idx.max() - pd.Timedelta(days=lookback_days)
+    recent = per_event[idx >= cutoff]
+    last_price = float(close.iloc[-1])
+    if last_price <= 0:
+        return np.nan
+    return float(recent.sum()) / last_price
+
+
 # ---------- chip ----------
 def reduction_from_peak(shares: pd.Series) -> float:
     """1 - now/peak over the series. 0 = at historical peak (高仓位), 1 = fully drawn down (深底部)."""
@@ -151,14 +174,33 @@ def analyze_etf(
     pe_series: pd.Series | None,
     params: dict,
     has_valuation: bool = True,
+    style: str = "growth",
+    dividend_df: pd.DataFrame | None = None,
 ) -> dict:
-    """One-ETF snapshot. Pure: takes series, returns the factor dict the report consumes."""
+    """One-ETF snapshot. Pure: takes series, returns the factor dict the report consumes.
+
+    style (Phase 1-A 三类分类) drives valuation 解读:
+      - growth/value: valuation = 100*(1 - PE分位)(PE分位低 = 便宜 = 高分)
+      - cyclic:      valuation = 100*PE分位(反向!周期 PE 高分位 = 利润低 = 周期底 = 高分)
+    通用底盘(chip + trend)三类共享。dividend_df 给 value 算股息率(附加显示,不进 composite)。
+    默认 style='growth' = 现有一刀切行为(向后兼容)。"""
     rp = params.get("research", {})
     lookback = _pe_lookback_days(rp)
-    val = valuation_score(pe_series, lookback) if (has_valuation and pe_series is not None) else np.nan
+    pe_pct = pe_percentile(pe_series, lookback) if (has_valuation and pe_series is not None) else np.nan
+
+    if has_valuation and not np.isnan(pe_pct):
+        val = (100.0 * pe_pct if style == "cyclic"          # 周期反向:高分位=底=高分
+               else 100.0 * (1.0 - pe_pct))                  # growth/value:低分位=便宜=高分
+    else:
+        val = np.nan
+
     chip, label, red = chip_score(shares, params)
     trend = trend_score(close, int(rp["ma_period"]))
     comp = composite(val, chip, trend, rp["weights"], has_valuation and not np.isnan(val))
+
+    # value 型股息率(附加显示;数据稀疏故不进 composite,免扰乱无数据的标的)
+    div_yield = (value_dividend_yield(dividend_df, close)
+                 if style == "value" and dividend_df is not None else np.nan)
 
     def _ok(x):
         return not (x is None or (isinstance(x, float) and np.isnan(x)))
@@ -171,11 +213,13 @@ def analyze_etf(
 
     return {
         "valuation": val,
-        "pe_percentile": pe_percentile(pe_series, lookback) if (has_valuation and pe_series is not None) else np.nan,
+        "pe_percentile": pe_pct,
         "chip": chip,
         "chip_phase": label,
         "reduction_from_peak": red,
         "trend": trend,
         "composite": comp,
         "data_sufficient": data_sufficient,
+        "style": style,
+        "dividend_yield": div_yield,
     }

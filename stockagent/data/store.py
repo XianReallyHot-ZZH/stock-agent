@@ -108,6 +108,13 @@ CREATE TABLE IF NOT EXISTS market_pb (
     pct_10y   REAL,
     source    TEXT
 );
+CREATE TABLE IF NOT EXISTS etf_dividend (
+    symbol              TEXT NOT NULL,
+    date                TEXT NOT NULL,
+    cumulative_dividend REAL,
+    source              TEXT,
+    PRIMARY KEY (symbol, date)
+);
 CREATE INDEX IF NOT EXISTS idx_index_daily_symbol ON index_daily(symbol);
 CREATE INDEX IF NOT EXISTS idx_index_pe_name ON index_pe(name);
 CREATE INDEX IF NOT EXISTS idx_index_pb_name ON index_pb(name);
@@ -664,4 +671,45 @@ class Store:
     def last_market_pb_date(self) -> Optional[str]:
         with self._conn() as c:
             row = c.execute("SELECT MAX(date) FROM market_pb").fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- ETF dividend (V4 tracker · 价值型股息率) ----
+    def upsert_etf_dividend(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with cumulative_dividend. Sparse — many ETFs have no rows."""
+        if df is None or len(df) == 0:
+            return 0
+        rows = [
+            (symbol, str(d), float(r.get("cumulative_dividend", 0) or 0), source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO etf_dividend(symbol,date,cumulative_dividend,source) VALUES(?,?,?,?) "
+                "ON CONFLICT(symbol,date) DO UPDATE SET "
+                "cumulative_dividend=excluded.cumulative_dividend,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_etf_dividend_series(self, symbol: str, start: Optional[str] = None,
+                                end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,cumulative_dividend FROM etf_dividend WHERE symbol=?"
+        params: list = [symbol]
+        if start:
+            q += " AND date>=?"
+            params.append(start)
+        if end:
+            q += " AND date<=?"
+            params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_etf_dividend_date(self, symbol: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(date) FROM etf_dividend WHERE symbol=?", (symbol,)).fetchone()
             return row[0] if row and row[0] else None

@@ -657,3 +657,31 @@ def fetch_market_pb(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
         except Exception as e:  # noqa: BLE001
             last_err = FetchError(str(e)[:200])
     raise FetchError(f"market_pb failed ({last_err})")
+
+
+def fetch_etf_dividend(symbol: str, timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """ETF 分红历史(sina fund_etf_dividend_sina)。返回 DataFrame indexed by date:
+    cumulative_dividend(自成立累计分红,单位元)。覆盖稀疏——部分 ETF 返回空属正常,返回空 df
+    (不报错)。价值型股息率 = 近 12 月单次分红之和(累计差分) ÷ 当前价格。"""
+    pre = _szsh_prefix(symbol)
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.0)
+        try:
+            df = _run_with_timeout(ak.fund_etf_dividend_sina, timeout, symbol=f"{pre}{symbol}")
+            if df is None or len(df) == 0:
+                return pd.DataFrame(columns=["cumulative_dividend"])
+            cols = list(df.columns)
+            date_col = next((c for c in cols if "日期" in str(c) or str(c).lower() == "date"), cols[0])
+            div_col = (next((c for c in cols if "累计" in str(c) and "分红" in str(c)), None)
+                       or next((c for c in cols if "分红" in str(c)), None))
+            if div_col is None:
+                return pd.DataFrame(columns=["cumulative_dividend"])
+            out = pd.DataFrame({
+                "date": pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "cumulative_dividend": pd.to_numeric(df[div_col], errors="coerce"),
+            })
+            return out.dropna(subset=["date"]).drop_duplicates("date").set_index("date").sort_index()
+        except Exception:  # noqa: BLE001
+            pass
+    return pd.DataFrame(columns=["cumulative_dividend"])

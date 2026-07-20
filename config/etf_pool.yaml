@@ -1,6 +1,10 @@
 # A-share sector ETF rotation pool (Q9). One representative ETF per distinct sector.
 # All codes below verified against live AkShare (see scripts/verify_pool.py).
 # Names are human labels (may differ slightly from market name). Edit freely; log changes.
+#
+# style / style_alt (Phase 1-A 三类分类): value=价值 / growth=成长 / cyclic=周期。
+# 主类型 style 驱动主指标路径;次类型 style_alt 仅附加展示(软分类)。
+# 依据 PRD §4.3 草案 + 课程 S09-11。模糊标的(食品饮料/医药/家电)走主+次。
 
 # Functional roles (not part of rotation ranking):
 benchmark:
@@ -16,40 +20,40 @@ risk_off:
 # Rotation candidates (distinct sectors, one ETF each):
 rotation_pool:
   # 大金融
-  - {symbol: "512800", name: "银行ETF",     sector: "银行",     csrc_industry: "货币金融服务"}
-  - {symbol: "512880", name: "证券ETF",     sector: "券商",     csrc_industry: "资本市场服务"}
+  - {symbol: "512800", name: "银行ETF",     sector: "银行",     csrc_industry: "货币金融服务",                      style: "value",  style_alt: []}
+  - {symbol: "512880", name: "证券ETF",     sector: "券商",     csrc_industry: "资本市场服务",                      style: "cyclic", style_alt: []}
   # 大消费
-  - {symbol: "512690", name: "食品饮料ETF", sector: "食品饮料", csrc_industry: "酒、饮料和精制茶制造业"}
-  - {symbol: "512010", name: "医药ETF",     sector: "医药",     csrc_industry: "医药制造业"}
-  - {symbol: "159992", name: "创新药ETF",   sector: "创新药",   csrc_industry: "医药制造业"}  # 与512010同属医药制造业→PE分位相同（行业粒度上限）
-  - {symbol: "159865", name: "养殖ETF",     sector: "养殖",     csrc_industry: "畜牧业"}
-  - {symbol: "159996", name: "家电ETF",     sector: "家电",     csrc_industry: "电气机械和器材制造业"}
+  - {symbol: "512690", name: "食品饮料ETF", sector: "食品饮料", csrc_industry: "酒、饮料和精制茶制造业",            style: "value",  style_alt: ["growth"]}
+  - {symbol: "512010", name: "医药ETF",     sector: "医药",     csrc_industry: "医药制造业",                        style: "growth", style_alt: ["value"]}
+  - {symbol: "159992", name: "创新药ETF",   sector: "创新药",   csrc_industry: "医药制造业",                        style: "growth", style_alt: []}  # 与512010同属医药制造业→PE分位相同（行业粒度上限）
+  - {symbol: "159865", name: "养殖ETF",     sector: "养殖",     csrc_industry: "畜牧业",                            style: "cyclic", style_alt: []}  # 猪周期(S11)
+  - {symbol: "159996", name: "家电ETF",     sector: "家电",     csrc_industry: "电气机械和器材制造业",              style: "value",  style_alt: ["growth"]}
   # 科技
-  - {symbol: "512480", name: "半导体ETF",   sector: "半导体",   csrc_industry: "计算机、通信和其他电子设备制造业"}
-  - {symbol: "159819", name: "人工智能ETF", sector: "人工智能", csrc_industry: "软件和信息技术服务业"}
-  - {symbol: "515880", name: "通信ETF",     sector: "通信",     csrc_industry: "电信、广播电视和卫星传输服务"}
-  - {symbol: "512980", name: "传媒ETF",     sector: "传媒",     csrc_industry: "广播、电视、电影和影视录音制作业"}
-  - {symbol: "159852", name: "软件ETF",     sector: "软件",     csrc_industry: "软件和信息技术服务业"}
-  - {symbol: "159530", name: "机器人ETF",   sector: "机器人",   csrc_industry: "通用设备制造业"}
+  - {symbol: "512480", name: "半导体ETF",   sector: "半导体",   csrc_industry: "计算机、通信和其他电子设备制造业",  style: "growth", style_alt: []}
+  - {symbol: "159819", name: "人工智能ETF", sector: "人工智能", csrc_industry: "软件和信息技术服务业",              style: "growth", style_alt: []}
+  - {symbol: "515880", name: "通信ETF",     sector: "通信",     csrc_industry: "电信、广播电视和卫星传输服务",      style: "growth", style_alt: []}
+  - {symbol: "512980", name: "传媒ETF",     sector: "传媒",     csrc_industry: "广播、电视、电影和影视录音制作业",  style: "growth", style_alt: []}
+  - {symbol: "159852", name: "软件ETF",     sector: "软件",     csrc_industry: "软件和信息技术服务业",              style: "growth", style_alt: []}
+  - {symbol: "159530", name: "机器人ETF",   sector: "机器人",   csrc_industry: "通用设备制造业",                    style: "growth", style_alt: []}
   # 新能源
-  - {symbol: "515030", name: "新能源车ETF", sector: "新能源车", csrc_industry: "汽车制造业"}
-  - {symbol: "515790", name: "光伏ETF",     sector: "光伏",     csrc_industry: "电气机械和器材制造业"}
+  - {symbol: "515030", name: "新能源车ETF", sector: "新能源车", csrc_industry: "汽车制造业",                        style: "growth", style_alt: []}
+  - {symbol: "515790", name: "光伏ETF",     sector: "光伏",     csrc_industry: "电气机械和器材制造业",              style: "growth", style_alt: ["cyclic"]}  # 产能周期强,次标周期
   # 周期/资源
-  - {symbol: "512400", name: "有色金属ETF", sector: "有色金属", csrc_industry: "有色金属冶炼和压延加工业"}
-  - {symbol: "515220", name: "煤炭ETF",     sector: "煤炭",     csrc_industry: "煤炭开采和洗选业"}
-  - {symbol: "159611", name: "电力ETF",     sector: "电力",     csrc_industry: "电力、热力生产和供应业"}
-  - {symbol: "518880", name: "黄金ETF",     sector: "黄金"}     # 商品ETF，无PE（不走估值因子）
-  - {symbol: "159870", name: "化工ETF",     sector: "化工",     csrc_industry: "化学原料和化学制品制造业"}
+  - {symbol: "512400", name: "有色金属ETF", sector: "有色金属", csrc_industry: "有色金属冶炼和压延加工业",          style: "cyclic", style_alt: []}
+  - {symbol: "515220", name: "煤炭ETF",     sector: "煤炭",     csrc_industry: "煤炭开采和洗选业",                  style: "cyclic", style_alt: []}
+  - {symbol: "159611", name: "电力ETF",     sector: "电力",     csrc_industry: "电力、热力生产和供应业",            style: "cyclic", style_alt: []}
+  - {symbol: "518880", name: "黄金ETF",     sector: "黄金",     style: "cyclic", style_alt: []}     # 商品ETF，无PE（不走估值因子）
+  - {symbol: "159870", name: "化工ETF",     sector: "化工",     csrc_industry: "化学原料和化学制品制造业",          style: "cyclic", style_alt: []}
   # 国防 / 地产 / 汽车
-  - {symbol: "512660", name: "军工ETF",     sector: "军工",     csrc_industry: "铁路、船舶、航空航天和其他运输设备制造业"}
-  - {symbol: "512200", name: "房地产ETF",   sector: "房地产",   csrc_industry: "房地产业"}
-  - {symbol: "516110", name: "汽车ETF",     sector: "汽车",     csrc_industry: "汽车制造业"}
+  - {symbol: "512660", name: "军工ETF",     sector: "军工",     csrc_industry: "铁路、船舶、航空航天和其他运输设备制造业", style: "growth", style_alt: []}
+  - {symbol: "512200", name: "房地产ETF",   sector: "房地产",   csrc_industry: "房地产业",                          style: "cyclic", style_alt: []}
+  - {symbol: "516110", name: "汽车ETF",     sector: "汽车",     csrc_industry: "汽车制造业",                        style: "cyclic", style_alt: []}
   # 成长宽基/风格（宽基无单一证监会行业，不走估值因子）
-  - {symbol: "159915", name: "创业板ETF",   sector: "创业板"}
-  - {symbol: "588000", name: "科创50ETF",   sector: "科创"}
+  - {symbol: "159915", name: "创业板ETF",   sector: "创业板",   style: "growth", style_alt: []}
+  - {symbol: "588000", name: "科创50ETF",   sector: "科创",     style: "growth", style_alt: []}
   # 跨境 QDII（境外资产，cninfo无A股行业PE，不走估值因子）
-  - {symbol: "513180", name: "恒生科技ETF", sector: "恒生科技"}
-  - {symbol: "513050", name: "中概互联ETF", sector: "中概互联"}
-  - {symbol: "159941", name: "纳指ETF",     sector: "纳指"}
+  - {symbol: "513180", name: "恒生科技ETF", sector: "恒生科技", style: "growth", style_alt: []}
+  - {symbol: "513050", name: "中概互联ETF", sector: "中概互联", style: "growth", style_alt: []}
+  - {symbol: "159941", name: "纳指ETF",     sector: "纳指",     style: "growth", style_alt: []}
   # 防御/收益（策略宽基，无单一行业，不走估值因子）
-  - {symbol: "512890", name: "红利低波ETF", sector: "红利"}
+  - {symbol: "512890", name: "红利低波ETF", sector: "红利",     style: "value",  style_alt: []}

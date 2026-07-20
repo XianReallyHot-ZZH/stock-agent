@@ -69,6 +69,7 @@ def do_backfill(dm: DataManager, kind: str, start: str, end: str, step: int, sle
 def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     from stockagent.data import fetcher
     from stockagent.research import earnings as ern
+    from stockagent.tracker import classifier as clf
     meta = cfg.symbol_meta()
     snapshots: dict[str, dict] = {}
     series_map: dict[str, dict] = {}
@@ -85,7 +86,12 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
         pe_df = store.get_industry_pe_series(csrc, end=as_of) if has_val else None
         pe = _series_to(pe_df, "pe", None)
 
-        snap = rs.analyze_etf(close, shares, pe, cfg.params, has_valuation=has_val)
+        # Phase 1-A: 按 style 分流(价值/成长/周期各走各的估值解读);value 额外算股息率
+        style_main, _ = clf.classify(sym, cfg)
+        div_df = store.get_etf_dividend_series(sym) if style_main == "value" else None
+        snap = rs.analyze_etf(close, shares, pe, cfg.params, has_valuation=has_val,
+                              style=style_main or "growth", dividend_df=div_df)
+        snap["style"] = style_main or "growth"
         snap["name"] = m.get("name", sym)
         snap["csrc_industry"] = csrc or "(宽基/无单一行业)"
 
