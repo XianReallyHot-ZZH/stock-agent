@@ -50,9 +50,20 @@ def _run_with_timeout(fn, timeout: float, *args, **kwargs):
 
 
 def _szsh_prefix(symbol: str) -> str:
-    """Map a 6-digit code to sina/baostock prefix: sh for 5xxxxx, sz for 1xxxxx."""
-    s = str(symbol)
-    return "sh" if s.startswith("5") else "sz"
+    """sina/baostock 交易所前缀 for a 6-digit code (ETF + 个股共用):
+      sh (上交所): 5xxxxx ETF / 6xxxxx 主板 / 688xxx 科创板 / 9xxxxx B股
+      sz (深交所): 0xxxxx 主板 / 3xxxxx 创业板 / 159xxx ETF
+      bj (北交所): 8xxxxx / 4xxxxx — sina stock_zh_a_daily 不支持,按 bj 返回交调用方自理。
+    Phase 2 修:旧 ETF-only 实现(`5→sh, else→sz`)对个股全坏——上证主板 6xx/科创板 68x/B股 9xx
+    会被误判 sz(sina 直接 KeyError)。按首位分流后,3 个 ETF 调用者(_fetch_sina/_fetch_baostock/
+    fetch_etf_dividend)行为不变(5xx→sh、159xx→sz 仍正确)。
+    """
+    head = str(symbol)[:1]
+    if head in ("5", "6", "9"):
+        return "sh"
+    if head in ("0", "1", "3"):
+        return "sz"
+    return "bj"
 
 
 def _normalize(df: pd.DataFrame, date_col: str = "date") -> pd.DataFrame:
@@ -685,3 +696,230 @@ def fetch_etf_dividend(symbol: str, timeout: float = 40.0, retries: int = 2) -> 
         except Exception:  # noqa: BLE001
             pass
     return pd.DataFrame(columns=["cumulative_dividend"])
+
+
+# ---- Stock daily / valuation (V5 tracker · Phase 2 个股层数据栈) ----
+# 个股日线 sina stock_zh_a_daily(prefix 由 _szsh_prefix 算);估值金矿 stock_zh_valuation_baidu
+# (PE/PB/总市值免财报硬算)。复用 ETF/指数的 timeout/normalize 基础设施,纯抓取层不入库(store/manager
+# 在下一步建 stock_valuation 表 + 增量游标时再接)。
+def fetch_stock_daily(
+    symbol: str,
+    adjust: str = "hfq",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    retries: int = 2,
+    timeout: float = 40.0,
+) -> tuple[pd.DataFrame, str]:
+    """个股日线 OHLCV (sina stock_zh_a_daily)。Returns (DataFrame indexed by date(str), source_tag)。
+
+    DataFrame 列与 ETF 路径一致(经 _normalize): open/high/low/close/volume/amount。sina 原始还含
+    outstanding_share/turnover,被 _normalize 裁掉——需流通股本/换手的研究另取原始帧。
+    adjust: '' / 'raw' → 不复权(sina 原始价,拆分需 fix_splits);'qfq'/'hfq' → 前/后复权(趋势连续,
+    个股研究推荐 hfq)。prefix 由 _szsh_prefix 算(6xx/68x/9xx→sh,0xx/3xx→sz);北交所(8/4开头) sina
+    不支持,会抛 FetchError。
+    """
+    pre = _szsh_prefix(symbol)
+    if pre == "bj":
+        raise FetchError(f"{symbol}: 北交所个股 sina stock_zh_a_daily 不支持(前缀 bj)")
+    adj = "" if adjust in ("", "raw", None) else adjust
+    # sina stock_zh_a_daily 对空串 start/end 会内部 DatetimeIndex 切片报错,故仅在显式给值时传入
+    # (省略 = 拉全历史,与指数 fetch_index_daily 同口径)。
+    kwargs: dict = {"symbol": f"{pre}{symbol}", "adjust": adj}
+    s = (start_date or "").replace("-", "")
+    e = (end_date or "").replace("-", "")
+    if s:
+        kwargs["start_date"] = s
+    if e:
+        kwargs["end_date"] = e
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.stock_zh_a_daily, timeout, **kwargs)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            df = df.rename(columns={c: str(c).lower() for c in df.columns})
+            return _normalize(df), f"sina_stock_{adj or 'raw'}"
+        except FetchError as ex:
+            last_err = ex
+        except Exception as ex:  # noqa: BLE001
+            last_err = FetchError(str(ex)[:200])
+    raise FetchError(f"{symbol}: stock_daily failed ({last_err})")
+
+
+# stock_zh_valuation_baidu 实测可用指标(2026-07-21 探针:茅台/招行)。
+# 市销率(TTM) 返回 None(不可靠)→ 故意不入集;无股息率(另从 stock_history_dividend derive)。
+STOCK_VALUATION_INDICATORS = {
+    "pe_ttm": "市盈率(TTM)",
+    "pe_static": "市盈率(静)",
+    "pb": "市净率",
+    "pcf": "市现率",
+    "market_cap": "总市值",
+}
+
+
+def fetch_stock_valuation(
+    symbol: str,
+    indicator: str,
+    period: str = "全部",
+    timeout: float = 40.0,
+    retries: int = 2,
+) -> pd.DataFrame:
+    """个股估值历史(百度 stock_zh_valuation_baidu)。indicator 取 STOCK_VALUATION_INDICATORS 的键
+    (pe_ttm/pe_static/pb/pcf/market_cap)。返回 DataFrame indexed by date(str): value。
+
+    实测字段固定 [date, value];period='全部' 从 IPO 起(茅台 2001-08-31 起)到最新,**稀疏**(半月级,
+    非日频,茅台 25 年仅 ~607 点)——足够算历史分位,但不要当日频价序列用。无股息率。
+    """
+    cn = STOCK_VALUATION_INDICATORS.get(indicator)
+    if cn is None:
+        raise FetchError(
+            f"unknown valuation indicator: {indicator} "
+            f"(supported: {sorted(STOCK_VALUATION_INDICATORS)})"
+        )
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.0)
+        try:
+            df = _run_with_timeout(
+                ak.stock_zh_valuation_baidu, timeout,
+                symbol=symbol, indicator=cn, period=period,
+            )
+            if df is None or len(df) == 0 or "value" not in df.columns or "date" not in df.columns:
+                raise FetchError("empty")
+            out = pd.DataFrame({
+                "date": pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "value": pd.to_numeric(df["value"], errors="coerce"),
+            })
+            return (out.dropna(subset=["date", "value"])
+                       .drop_duplicates("date").set_index("date").sort_index())
+        except FetchError as ex:
+            last_err = ex
+        except Exception as ex:  # noqa: BLE001 — baidu 对不支持的指标抛 'NoneType not subscriptable'
+            last_err = FetchError(str(ex)[:200])
+    raise FetchError(f"{symbol} {indicator}: valuation failed ({last_err})")
+
+
+# stock_financial_abstract(常用指标) 的 17 项→EN 键映射。实测(2026-07-22)指标名跨股稳定
+# (茅台/招行完全一致)。营收/利润为原始元单位(显示时 ÷1e8 转亿);ROE/毛利率等为百分数原值。
+STOCK_FINANCIAL_METRICS = {
+    "revenue":          "营业总收入",
+    "operating_cost":   "营业成本",
+    "net_profit":       "归母净利润",
+    "net_profit_total": "净利润",
+    "np_deducted":      "扣非净利润",
+    "equity_total":     "股东权益合计(净资产)",
+    "goodwill":         "商誉",
+    "ocf":              "经营现金流量净额",
+    "eps":              "基本每股收益",
+    "bvps":             "每股净资产",
+    "cps":              "每股现金流",
+    "roe":              "净资产收益率(ROE)",
+    "roa":              "总资产报酬率(ROA)",
+    "gross_margin":     "毛利率",
+    "net_margin":       "销售净利率",
+    "expense_ratio":    "期间费用率",
+    "debt_ratio":       "资产负债率",
+}
+
+
+def fetch_stock_financials(symbol: str, timeout: float = 40.0,
+                           retries: int = 2) -> pd.DataFrame:
+    """个股财务摘要(sina stock_financial_abstract 常用指标 17 项)。返回**长表** DataFrame
+    [report_period, metric, value](report_period=YYYYMMDD, metric=EN 键,见 STOCK_FINANCIAL_METRICS)。
+    全历史(~102 期 ≈ 25 年,每次全量返回)。C1 增速/利润波动/利润归因/戴维斯/避坑都吃它。"""
+    cn_to_en = {v: k for k, v in STOCK_FINANCIAL_METRICS.items()}
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.0)
+        try:
+            fa = _run_with_timeout(ak.stock_financial_abstract, timeout, symbol=symbol)
+            if fa is None or len(fa) == 0 or "选项" not in fa.columns or "指标" not in fa.columns:
+                raise FetchError("empty")
+            fa = fa[(fa["选项"] == "常用指标") & (fa["指标"].isin(cn_to_en))]
+            if len(fa) == 0:
+                raise FetchError("no 常用指标 rows")
+            period_cols = [c for c in fa.columns if c not in ("选项", "指标")]
+            rows = []
+            for _, r in fa.iterrows():
+                en = cn_to_en[r["指标"]]
+                for p in period_cols:
+                    v = r[p]
+                    if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                        rows.append({"report_period": str(p), "metric": en,
+                                     "value": pd.to_numeric(v, errors="coerce")})
+            out = pd.DataFrame(rows, columns=["report_period", "metric", "value"])
+            return out.dropna(subset=["value"])
+        except FetchError as ex:
+            last_err = ex
+        except Exception as ex:  # noqa: BLE001
+            last_err = FetchError(str(ex)[:200])
+    raise FetchError(f"{symbol}: stock_financials failed ({last_err})")
+
+
+def fetch_stock_dividend(symbol: str, timeout: float = 40.0,
+                         retries: int = 2) -> pd.DataFrame:
+    """个股分红明细(sina stock_history_dividend_detail, indicator='分红')。返回 DataFrame indexed
+    by ex_date(除权除息日=影响第一天): cash_per_share(派息/10, 每股现金元)/stock_div_10(送股per10)/
+    trans_10(转增per10)/announce_date。**只存 进度=实施** 的(预告/预案不进)。C1 股息率 + 利润归因分红贡献吃它。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.0)
+        try:
+            dv = _run_with_timeout(ak.stock_history_dividend_detail, timeout,
+                                   symbol=symbol, indicator="分红")
+            if dv is None or len(dv) == 0:
+                return pd.DataFrame(columns=["announce_date", "cash_per_share",
+                                             "stock_div_10", "trans_10"])
+            dv = dv[dv["进度"].astype(str).str.strip() == "实施"].copy()
+            if len(dv) == 0:
+                return pd.DataFrame(columns=["announce_date", "cash_per_share",
+                                             "stock_div_10", "trans_10"])
+            out = pd.DataFrame({
+                "ex_date": pd.to_datetime(dv["除权除息日"], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "announce_date": pd.to_datetime(dv["公告日期"], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "cash_per_share": pd.to_numeric(dv["派息"], errors="coerce") / 10.0,
+                "stock_div_10": pd.to_numeric(dv["送股"], errors="coerce"),
+                "trans_10": pd.to_numeric(dv["转增"], errors="coerce"),
+            })
+            out = out.dropna(subset=["ex_date"]).drop_duplicates("ex_date").set_index("ex_date").sort_index()
+            return out
+        except FetchError as ex:
+            last_err = ex
+        except Exception as ex:  # noqa: BLE001
+            last_err = FetchError(str(ex)[:200])
+    raise FetchError(f"{symbol}: stock_dividend failed ({last_err})")
+
+
+def fetch_stock_forecast_panel(report_period: str, timeout: float = 60.0,
+                                retries: int = 2) -> pd.DataFrame:
+    """全市场业绩预告(stock_yjyg_em)某报告期(YYYYMMDD)。返回 DataFrame[code, yoy, type, announce_date]:
+      yoy = 业绩变动幅度(归母净利同比 %), type = 预告类型, announce_date = 公告日期。
+    过滤 归属于上市公司股东的净利润,按 code 去重保留最新公告。市场级单调用(~3-13s/期,分页),
+    调用方按 watchlist 过滤。稀疏——仅显著变动才发预告(稳定大市值股常无)。预告/快报/正式报 链的最早一环。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5)
+        try:
+            df = _run_with_timeout(ak.stock_yjyg_em, timeout, date=report_period)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            df = df[df["预测指标"].astype(str).str.strip() == "归属于上市公司股东的净利润"].copy()
+            if len(df) == 0:
+                raise FetchError("no 归母净利润 rows")
+            df["code"] = df["股票代码"].astype(str)
+            df["yoy"] = pd.to_numeric(df["业绩变动幅度"], errors="coerce")
+            df["type"] = df["预告类型"].astype(str).str.strip()
+            df["announce_date"] = pd.to_datetime(df["公告日期"], errors="coerce").dt.strftime("%Y-%m-%d")
+            df = df.sort_values("announce_date", na_position="last").drop_duplicates("code", keep="last")
+            return df[["code", "yoy", "type", "announce_date"]].reset_index(drop=True)
+        except FetchError as ex:
+            last_err = ex
+        except Exception as ex:  # noqa: BLE001
+            last_err = FetchError(str(ex)[:200])
+    raise FetchError(f"forecast_panel {report_period} failed ({last_err})")

@@ -15,8 +15,15 @@ evaluate 接收 ETF snapshots + 指数层 diagnose,返回 alert 列表。
 from __future__ import annotations
 
 import math
+from datetime import datetime
 
 _DIV_THRESHOLD = 0.05  # B1: 股息率 > 5% 视为偏高(买入窗口)
+
+# ---- C2 个股提醒阈值(Phase 2)----
+_A3_DECEL_MARGIN = 0.05      # A3: 营收增速下滑 >5pp 触发(滤噪音)
+_G1_RECENT_DAYS = 90         # G1: 预告公告在 90 天内 = 披露窗口刚开
+_G2_DEADLINE_NEAR_DAYS = 45  # G2: 法定披露截止日在 45 天内 = 临近
+_E3_LOW, _E3_HIGH = 0.05, 0.95  # E3: 偏离极值套利阈值(≤5% 超卖买点 / ≥95% 超买卖点)
 
 
 def _nan(v) -> bool:
@@ -115,6 +122,95 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
             yoy_s = f"(yoy {yoy:+.0f}%)" if not _nan(yoy) else ""
             alerts.append({"level": "warn", "scope": nm, "rule": "A1/A2",
                            "msg": f"业绩预告「{elabel}」{yoy_s} → 抱着颗雷/戴维斯双杀前兆"})
+
+    return alerts
+
+
+# ---------- C2 个股提醒(Phase 2)----------
+def _days(a, b) -> int | None:
+    """两个 YYYY-MM-DD 相差天数(a − b)。解析失败 → None。"""
+    try:
+        da = datetime.strptime(str(a)[:10], "%Y-%m-%d")
+        db = datetime.strptime(str(b)[:10], "%Y-%m-%d")
+        return (da - db).days
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
+                    asof: str | None = None) -> list[dict]:
+    """评估个股级提醒(PRD §8 二阶段: A1/A2/A3/G1/G2/E3 + 市场 E4),返回 alert 列表。
+
+    stocks[symbol] 期望键(name 可选, 余为 diagnose 输出):
+      forecast      diagnose_forecast_chain 输出(A1/A2/G1 用)
+      pitfalls      diagnose_pitfalls 输出(A3 营收 + G2 披露截止 用)
+      price_timing  diagnose_stock/diagnose_price_timing 输出(E3 偏离极值 用)
+    index_diag 的 style.blue_up/growth_up → E4 蓝筹vs成长背离(市场级)。
+    返回形状同 evaluate:[{level, scope, rule, msg}],可直接喂 format_for_push。"""
+    alerts: list[dict] = []
+    asof = asof or datetime.now().strftime("%Y-%m-%d")
+
+    for sym, s in stocks.items():
+        nm = s.get("name", sym)
+
+        # A1/A2 + G1: 业绩预告链
+        fc = s.get("forecast") or {}
+        if fc.get("valid"):
+            L = fc.get("latest") or {}
+            yoy = L.get("yoy")
+            ys = f"(yoy {yoy:+.0f}%)" if not _nan(yoy) else ""
+            if fc.get("a2_turn_bearish"):
+                alerts.append({"level": "warn", "scope": nm, "rule": "A2",
+                               "msg": f"业绩预告「{L.get('type', '?')}」{ys}转空 → 戴维斯双杀前兆"})
+            elif fc.get("a1_deceleration"):
+                alerts.append({"level": "warn", "scope": nm, "rule": "A1",
+                               "msg": f"业绩预告增速下滑{ys} → 抱着颗雷(拐点)"})
+            ann = L.get("announce_date")
+            if ann:
+                d = _days(asof, ann)  # asof − ann;0..N = 近 N 天内公告
+                if d is not None and 0 <= d <= _G1_RECENT_DAYS:
+                    alerts.append({"level": "info", "scope": nm, "rule": "G1",
+                                   "msg": f"业绩披露窗口已开(预告「{L.get('type', '?')}」公告{ann})→ 催化剂/风险事件"})
+
+        # A3: 营收增速下滑(营收是利润之母)
+        rev = (s.get("pitfalls") or {}).get("revenue") or {}
+        if rev.get("valid"):
+            ly, base, prev = rev.get("yoy"), rev.get("base"), rev.get("prev_base")
+            if not _nan(ly) and not _nan(base) and not _nan(prev) and prev > 0:
+                py = base / prev - 1.0  # 上年增速
+                if ly < py - _A3_DECEL_MARGIN:
+                    alerts.append({"level": "warn", "scope": nm, "rule": "A3",
+                                   "msg": f"营收增速下滑({py * 100:.0f}%→{ly * 100:.0f}%)→ 营收是利润之母,业绩前瞻预警"})
+
+        # G2: 法定披露截止日临近(公告时间差:截止日=最晚影响日)
+        disc = (s.get("pitfalls") or {}).get("disclosure") or {}
+        dl, lp = disc.get("deadline"), disc.get("latest_period")
+        if dl and lp:
+            d = _days(dl, asof)  # dl − asof;0..N = 未来 N 天内截止
+            if d is not None and 0 <= d <= _G2_DEADLINE_NEAR_DAYS:
+                alerts.append({"level": "info", "scope": nm, "rule": "G2",
+                               "msg": f"{lp[:4]}期财报披露截止{dl}(剩{d}天)→ 公告日=影响第一天"})
+
+        # E3: 股价/均线偏离接近历史极值 → 套利
+        dev = (s.get("price_timing") or {}).get("deviation") or {}
+        pct = dev.get("pct")
+        if dev.get("valid") and not _nan(pct):
+            if pct <= _E3_LOW:
+                alerts.append({"level": "info", "scope": nm, "rule": "E3",
+                               "msg": f"股价偏离60日线接近历史底部(pct={pct:.0%})→ 超卖·套利买点"})
+            elif pct >= _E3_HIGH:
+                alerts.append({"level": "warn", "scope": nm, "rule": "E3",
+                               "msg": f"股价偏离60日线接近历史顶部(pct={pct:.0%})→ 超买·减仓/套利卖点"})
+
+    # E4: 蓝筹 vs 成长趋势背离 → 仓位倾向(市场级,复用指数层 style)
+    if index_diag:
+        st = index_diag.get("style") or {}
+        if st.get("valid"):
+            b, g = st.get("blue_up"), st.get("growth_up")
+            if b is not None and g is not None and b != g:
+                lean = "蓝筹(上证50)" if b else "成长(创业板)"
+                alerts.append({"level": "info", "scope": "大盘", "rule": "E4",
+                               "msg": f"蓝筹vs成长趋势背离(蓝筹{'上行' if b else '下行'}/成长{'上行' if g else '下行'})→ 偏向{lean}"})
 
     return alerts
 

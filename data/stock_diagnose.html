@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>个股诊断看板</title><style>
+:root { --bg:#f8fafc; --card:#fff; --text:#0f172a; --muted:#64748b; --border:#e2e8f0; --shadow:0 1px 3px rgba(0,0,0,.08); }
+body.dark { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --border:#334155; --shadow:0 1px 3px rgba(0,0,0,.3); }
+* { box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; margin:0; padding:20px; font-size:14px; }
+h1 { font-size:20px; margin:0 0 4px; }
+h2 { font-size:16px; margin:0 0 10px; }
+.muted { color:var(--muted); font-size:12px; }
+.header { margin-bottom:16px; }
+.toggle { float:right; margin-top:4px; cursor:pointer; background:var(--card); border:1px solid var(--border); color:var(--text); padding:4px 10px; border-radius:6px; }
+.alerts { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px 16px; margin-bottom:18px; box-shadow:var(--shadow); }
+.count { color:var(--muted); font-weight:normal; font-size:13px; }
+.alert { display:flex; gap:8px; align-items:flex-start; padding:6px 0; border-top:1px solid var(--border); }
+.alert:first-of-type { border-top:none; }
+.alert-icon { flex:0 0 18px; }
+.alert-warn .alert-icon { color:#dc2626; } .alert-info .alert-icon { color:#2563eb; }
+.alert-rule { flex:0 0 56px; font-weight:600; color:var(--muted); }
+.alert-scope { flex:0 0 90px; font-weight:600; }
+.alert-msg { flex:1; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); gap:14px; }
+.card { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px 16px; box-shadow:var(--shadow); }
+.card-head { display:flex; align-items:baseline; gap:8px; margin-bottom:8px; border-bottom:1px solid var(--border); padding-bottom:6px; }
+.stock-name { font-weight:700; font-size:15px; }
+.stock-code { color:var(--muted); font-size:12px; }
+.stock-price { margin-left:auto; font-weight:600; }
+.card-row { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.badge { color:#fff; font-size:11px; padding:2px 8px; border-radius:10px; font-weight:600; }
+.metrics { width:100%; border-collapse:collapse; }
+.metrics td { padding:3px 6px; border-top:1px solid var(--border); }
+.metrics td:nth-child(odd) { color:var(--muted); width:18%; }
+.metrics td:nth-child(even) { font-weight:600; }
+.warn-txt { color:#dc2626; font-weight:600; }
+</style></head>
+<body>
+<div class="header">
+  <button class="toggle" onclick="document.body.classList.toggle('dark');
+    localStorage.setItem('stock-dark',document.body.classList.contains('dark'))">🌙 深浅色</button>
+  <h1>个股诊断看板</h1>
+  <p class="muted">as_of 2026-07-22 · 5 只个股 · 数据底座 C0/C0.5/C0.6(price/估值/财报/分红/预告)</p>
+</div>
+<div class="alerts"><h2>📡 信号提醒 <span class="count">⚠2 💡0</span></h2><div class="alert alert-warn"><span class="alert-icon">⚠</span><span class="alert-rule">[A3]</span><span class="alert-scope">贵州茅台</span><span class="alert-msg">营收增速下滑(16%→-1%)→ 营收是利润之母,业绩前瞻预警</span></div><div class="alert alert-warn"><span class="alert-icon">⚠</span><span class="alert-rule">[A3]</span><span class="alert-scope">中芯国际</span><span class="alert-msg">营收增速下滑(28%→16%)→ 营收是利润之母,业绩前瞻预警</span></div></div>
+<h2>个股诊断卡片</h2>
+<div class="grid">
+
+    <div class="card">
+      <div class="card-head">
+        <span class="stock-name">贵州茅台</span>
+        <span class="stock-code">600519</span>
+        <span class="stock-price">¥1308.00 <span class="muted">2026-07-21</span></span>
+      </div>
+      <div class="card-row"><span class="badge" style="background:#16a34a">value</span> <span class="badge" style="background:#16a34a">低位·便宜</span> <span class="badge" style="background:#2563eb">双击观察·低PE+业绩探底待回升</span></div>
+      <table class="metrics">
+        <tr><td>营收CAGR</td><td>+10.5%</td>
+            <td>净利CAGR</td><td>+9.5%</td></tr>
+        <tr><td>利润波动</td><td>9%</td>
+            <td>股息率</td><td>4%</td></tr>
+        <tr><td>PE(TTM)</td><td>19.8 <span class="muted">(分位4%)</span></td>
+            <td>PB</td><td>6.04 <span class="muted">(分位5%)</span></td></tr>
+        <tr><td>戴维斯</td><td colspan="3"><span class="muted">净利YoY -4.5% · PE变化 -1.8%</span></td></tr>
+        <tr><td>避坑</td><td colspan="3">净利 -4.5% · 营收 -1.2%</td></tr>
+        <tr><td>预告链</td><td colspan="3">略增 yoy=+1467.0% <span class="muted">(2025-01-03)</span></td></tr>
+        <tr><td>披露</td><td colspan="3">2025报 截止2026-04-30 <span class="muted">(已披露)</span></td></tr>
+        <tr><td>E3偏离</td><td colspan="3">70% <span class="muted">(突破 grade1)</span></td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="stock-name">招商银行</span>
+        <span class="stock-code">600036</span>
+        <span class="stock-price">¥37.99 <span class="muted">2026-07-21</span></span>
+      </div>
+      <div class="card-row"><span class="badge" style="background:#16a34a">value</span> <span class="badge" style="background:#16a34a">低位·便宜</span> <span class="badge" style="background:#65a30d">双击买点·低PE+业绩正增</span></div>
+      <table class="metrics">
+        <tr><td>营收CAGR</td><td>-0.7%</td>
+            <td>净利CAGR</td><td>+2.9%</td></tr>
+        <tr><td>利润波动</td><td>9%</td>
+            <td>股息率</td><td>11%</td></tr>
+        <tr><td>PE(TTM)</td><td>6.4 <span class="muted">(分位18%)</span></td>
+            <td>PB</td><td>0.85 <span class="muted">(分位4%)</span></td></tr>
+        <tr><td>戴维斯</td><td colspan="3"><span class="muted">净利YoY +1.2% · PE变化 -21.9%</span></td></tr>
+        <tr><td>避坑</td><td colspan="3">净利 +1.2% · 营收 +0.0%</td></tr>
+        <tr><td>预告链</td><td colspan="3"><span class="muted">无预告历史</span></td></tr>
+        <tr><td>披露</td><td colspan="3">2025报 截止2026-04-30 <span class="muted">(已披露)</span></td></tr>
+        <tr><td>E3偏离</td><td colspan="3">56% <span class="muted">(突破 grade1)</span></td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="stock-name">宁德时代</span>
+        <span class="stock-code">300750</span>
+        <span class="stock-price">¥382.20 <span class="muted">2026-07-21</span></span>
+      </div>
+      <div class="card-row"><span class="badge" style="background:#ea580c">cyclic</span> <span class="badge" style="background:#475569">growth+value</span> <span class="badge" style="background:#94a3b8">中位·中性</span> <span class="badge" style="background:#65a30d">双击买点·低PE+业绩正增</span></div>
+      <table class="metrics">
+        <tr><td>营收CAGR</td><td>+8.8%</td>
+            <td>净利CAGR</td><td>+32.9%</td></tr>
+        <tr><td>利润波动</td><td>60%</td>
+            <td>股息率</td><td>1%</td></tr>
+        <tr><td>PE(TTM)</td><td>22.4 <span class="muted">(分位18%)</span></td>
+            <td>PB</td><td>4.95 <span class="muted">(分位30%)</span></td></tr>
+        <tr><td>戴维斯</td><td colspan="3"><span class="muted">净利YoY +42.3% · PE变化 -1.8%</span></td></tr>
+        <tr><td>避坑</td><td colspan="3">净利 +42.3% · 营收 +17.0%</td></tr>
+        <tr><td>预告链</td><td colspan="3">略增 yoy=+1559.0% <span class="muted">(2025-01-21)</span></td></tr>
+        <tr><td>披露</td><td colspan="3">2025报 截止2026-04-30 <span class="muted">(已披露)</span></td></tr>
+        <tr><td>E3偏离</td><td colspan="3">32% <span class="muted">(跌破 grade4)</span></td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="stock-name">格力电器</span>
+        <span class="stock-code">000651</span>
+        <span class="stock-price">¥40.59 <span class="muted">2026-07-21</span></span>
+      </div>
+      <div class="card-row"><span class="badge" style="background:#16a34a">value</span> <span class="badge" style="background:#94a3b8">中位·中性</span> <span class="badge" style="background:#2563eb">双击观察·低PE+业绩探底待回升</span></div>
+      <table class="metrics">
+        <tr><td>营收CAGR</td><td>-3.5%</td>
+            <td>净利CAGR</td><td>+5.8%</td></tr>
+        <tr><td>利润波动</td><td>9%</td>
+            <td>股息率</td><td>10%</td></tr>
+        <tr><td>PE(TTM)</td><td>7.8 <span class="muted">(分位23%)</span></td>
+            <td>PB</td><td>1.50 <span class="muted">(分位3%)</span></td></tr>
+        <tr><td>戴维斯</td><td colspan="3"><span class="muted">净利YoY -9.9% · PE变化 -0.3%</span></td></tr>
+        <tr><td>避坑</td><td colspan="3">净利 -9.9% · 营收 -10.0%</td></tr>
+        <tr><td>预告链</td><td colspan="3"><span class="muted">无预告历史</span></td></tr>
+        <tr><td>披露</td><td colspan="3">2025报 截止2026-04-30 <span class="muted">(已披露)</span></td></tr>
+        <tr><td>E3偏离</td><td colspan="3">83% <span class="muted">(突破 grade4)</span></td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="stock-name">中芯国际</span>
+        <span class="stock-code">688981</span>
+        <span class="stock-price">¥160.00 <span class="muted">2026-07-21</span></span>
+      </div>
+      <div class="card-row"><span class="badge" style="background:#ea580c">cyclic</span> <span class="badge" style="background:#dc2626">高位·偏贵</span> <span class="badge" style="background:#16a34a">戴维斯双击·业绩正增加速+估值扩张</span></div>
+      <table class="metrics">
+        <tr><td>营收CAGR</td><td>+10.8%</td>
+            <td>净利CAGR</td><td>-25.4%</td></tr>
+        <tr><td>利润波动</td><td>71%</td>
+            <td>股息率</td><td>—</td></tr>
+        <tr><td>PE(TTM)</td><td>271.5 <span class="muted">(分位98%)</span></td>
+            <td>PB</td><td>9.14 <span class="muted">(分位95%)</span></td></tr>
+        <tr><td>戴维斯</td><td colspan="3"><span class="muted">净利YoY +36.3% · PE变化 +74.6%</span></td></tr>
+        <tr><td>避坑</td><td colspan="3">净利 +36.3% · 营收 +16.5%</td></tr>
+        <tr><td>预告链</td><td colspan="3"><span class="muted">无预告历史</span></td></tr>
+        <tr><td>披露</td><td colspan="3">2025报 截止2026-04-30 <span class="muted">(已披露)</span></td></tr>
+        <tr><td>E3偏离</td><td colspan="3">91% <span class="muted">(突破 grade4)</span></td></tr>
+      </table>
+    </div>
+</div>
+<script>if(localStorage.getItem('stock-dark')==='true')document.body.classList.add('dark');</script>
+</body></html>

@@ -511,3 +511,170 @@ class DataManager:
         if any(results.values()):
             self.store.set_meta("last_etf_dividend_update", fetcher.today_str())
         return results
+
+    # ---- Stock daily / valuation (V5 tracker · Phase 2 个股层数据栈) ----
+    # C0 默认观察池:覆盖 4 交易所 + 三类风格,仅供数据栈联调;C1 个股诊断会迁到 config/stock_pool.yaml。
+    STOCK_WATCHLIST = [
+        "600519",  # 茅台  上证主板  消费·价值
+        "600036",  # 招行  上证主板  金融·价值
+        "300750",  # 宁德  创业板    新能源·成长
+        "000651",  # 格力  深证主板  家电·价值
+        "688981",  # 中芯  科创板    半导体·成长/周期
+    ]
+
+    def update_stock_daily(self, symbols: Optional[list[str]] = None,
+                           adjust: Optional[str] = None) -> dict:
+        """个股日线增量 → daily_prices(与 ETF 同表不同 symbol,复用 upsert_prices)。
+        增量游标(_backfill_start) + basis 一致性守卫(is_basis_consistent,防 hfq/raw 混)与 ETF 路径同。
+        Returns {symbol: rows_added}。"""
+        syms = symbols or self.STOCK_WATCHLIST
+        adjust = adjust or self.config.params.get("data", {}).get("adjust", "hfq")
+        results: dict[str, int] = {}
+        for i, sym in enumerate(syms):
+            existing = self.store.dominant_price_source(sym)
+            start = self._backfill_start(sym)
+            end = fetcher.today_str().replace("-", "")
+            if i > 0:
+                time.sleep(0.4)
+            try:
+                df, source = fetcher.fetch_stock_daily(sym, adjust=adjust, start_date=start, end_date=end)
+            except Exception as e:  # noqa: BLE001
+                log.warning("stock_daily %s failed (will use cached): %s", sym, str(e)[:120])
+                results[sym] = 0
+                continue
+            if not fetcher.is_basis_consistent(source, existing):
+                log.warning("skip stock %s: fetched source=%s conflicts with basis=%s", sym, source, existing)
+                results[sym] = 0
+                continue
+            n = self.store.upsert_prices(sym, df, source=source)
+            log.info("stock_daily %s: +%d rows (to %s, src=%s)",
+                     sym, n, df.index[-1] if len(df) else "?", source)
+            results[sym] = n
+        if any(results.values()):
+            self.store.set_meta("last_stock_daily_update", fetcher.today_str())
+        return results
+
+    def update_stock_valuation(self, symbols: Optional[list[str]] = None,
+                               indicators: Optional[list[str]] = None) -> dict:
+        """个股估值(百度金矿,5 指标)→ stock_valuation 表。百度 period='全部' 每次返回 IPO 起全历史
+        (稀疏半月级),全量 upsert 幂等覆盖——无增量游标(数据小、全量返回,与日线不同)。
+        Returns {symbol: {indicator: rows_added}}。"""
+        syms = symbols or self.STOCK_WATCHLIST
+        inds = indicators or list(fetcher.STOCK_VALUATION_INDICATORS)
+        results: dict[str, dict] = {}
+        for i, sym in enumerate(syms):
+            per: dict[str, int] = {}
+            for j, ind in enumerate(inds):
+                if j > 0:
+                    time.sleep(0.3)  # be gentle to baidu
+                try:
+                    df = fetcher.fetch_stock_valuation(sym, ind)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("stock_valuation %s %s failed: %s", sym, ind, str(e)[:100])
+                    per[ind] = 0
+                    continue
+                n = self.store.upsert_stock_valuation(sym, ind, df, source="baidu")
+                log.info("stock_valuation %s %s: +%d rows (to %s)",
+                         sym, ind, n, df.index[-1] if len(df) else "?")
+                per[ind] = n
+            results[sym] = per
+            if i < len(syms) - 1:
+                time.sleep(0.4)
+        if any(any(p.values()) for p in results.values()):
+            self.store.set_meta("last_stock_valuation_update", fetcher.today_str())
+        return results
+
+    def update_stock_financials(self, symbols: Optional[list[str]] = None) -> dict:
+        """个股财务摘要(常用指标 17 项, sina)→ stock_financials 长表。sina 每次返回全历史(~102 期)
+        → 全量幂等 upsert,无增量游标。Returns {symbol: rows_added}。"""
+        syms = symbols or self.STOCK_WATCHLIST
+        results: dict[str, int] = {}
+        for i, sym in enumerate(syms):
+            if i > 0:
+                time.sleep(0.5)  # be gentle to sina
+            try:
+                df = fetcher.fetch_stock_financials(sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning("stock_financials %s failed: %s", sym, str(e)[:120])
+                results[sym] = 0
+                continue
+            n = self.store.upsert_stock_financials(sym, df, source="sina")
+            log.info("stock_financials %s: +%d rows (%d periods × %d metrics, to %s)",
+                     sym, n, df["report_period"].nunique() if len(df) else 0,
+                     df["metric"].nunique() if len(df) else 0,
+                     df["report_period"].max() if len(df) else "?")
+            results[sym] = n
+        if any(results.values()):
+            self.store.set_meta("last_stock_financials_update", fetcher.today_str())
+        return results
+
+    def update_stock_dividend(self, symbols: Optional[list[str]] = None) -> dict:
+        """个股分红明细(sina, 只存 实施)→ stock_dividend。幂等主键 (symbol, ex_date)。
+        Returns {symbol: rows_added}。部分股票无分红记录 → 0 行,正常。"""
+        syms = symbols or self.STOCK_WATCHLIST
+        results: dict[str, int] = {}
+        for i, sym in enumerate(syms):
+            if i > 0:
+                time.sleep(0.4)
+            try:
+                df = fetcher.fetch_stock_dividend(sym)
+            except Exception as e:  # noqa: BLE001
+                log.warning("stock_dividend %s failed: %s", sym, str(e)[:100])
+                results[sym] = 0
+                continue
+            if len(df) == 0:
+                results[sym] = 0
+                continue  # 无分红记录,正常
+            n = self.store.upsert_stock_dividend(sym, df, source="sina")
+            log.info("stock_dividend %s: +%d rows (to %s)", sym, n, df.index[-1])
+            results[sym] = n
+        if any(results.values()):
+            self.store.set_meta("last_stock_dividend_update", fetcher.today_str())
+        return results
+
+    def update_stock_forecasts(self, symbols: Optional[list[str]] = None,
+                               periods: Optional[list[str]] = None) -> dict:
+        """个股业绩预告(stock_yjyg_em,全市场面板按 watchlist 过滤)→ stock_forecast。每期一次市场调用,
+        过滤 watchlist 后 upsert(只存观察池股票)。稀疏——稳定股常无预告(0 行正常)。
+        periods 默认最近 8 个季末。Returns {period: rows_added}。"""
+        syms = symbols or self.STOCK_WATCHLIST
+        symset = {str(s) for s in syms}
+        periods = periods or _recent_report_periods(8)
+        results: dict[str, int] = {p: 0 for p in periods}
+        for i, period in enumerate(periods):
+            if i > 0:
+                time.sleep(0.5)
+            try:
+                panel = fetcher.fetch_stock_forecast_panel(period)
+            except Exception as e:  # noqa: BLE001
+                log.warning("forecast_panel %s failed: %s", period, str(e)[:100])
+                continue
+            rows = [
+                (str(r["code"]), period, r.get("yoy"), r.get("type"), r.get("announce_date"))
+                for _, r in panel.iterrows() if str(r["code"]) in symset
+            ]
+            n = self.store.upsert_stock_forecast(rows, source="em_yjyg")
+            results[period] = n
+            log.info("stock_forecast %s: +%d rows (%d watchlist / %d market)", period, n, len(rows), len(panel))
+        if any(results.values()):
+            self.store.set_meta("last_stock_forecast_update", fetcher.today_str())
+        return results
+
+
+def _recent_report_periods(n: int = 8) -> list[str]:
+    """最近 n 个报告期(季末 YYYYMMDD,从今天往回,降序)。季末:3-31/6-30/9-30/12-31。"""
+    from datetime import date
+    ends = [(12, 31), (9, 30), (6, 30), (3, 31)]  # 年内降序
+    today = date.today()
+    out: list[str] = []
+    y = today.year
+    while len(out) < n:
+        for qm, qd in ends:
+            key = f"{y}{qm:02d}{qd:02d}"
+            d = date(y, qm, qd)
+            if d <= today and key not in out:
+                out.append(key)
+                if len(out) >= n:
+                    break
+        y -= 1
+    return out

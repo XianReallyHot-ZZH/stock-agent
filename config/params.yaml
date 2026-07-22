@@ -108,3 +108,26 @@ research:
   earnings:                 # 业绩预期信号（V3.2，INFORMATIONAL 不计入 composite）
     min_coverage: 0.30      # 持仓权重覆盖 < 30% → 数据不足
     min_matched: 5          # 匹配到的持仓股票 < 5 只 → 数据不足
+
+# ---- Phase 2 个股层诊断 (V5 tracker · C1) ----
+# Read-only 诊断旁路（不喂交易引擎，同 research/tracker）。三类自动判定 + 估值分位/zone + E3 偏离极值。
+# 阈值为起点默认值，三类边界股（价值成长/周期成长）靠 secondary 表达，后续按实盘校准调。
+stock:
+  classify:
+    profit_vol_years: 5         # 利润波动窗口（取年报，报告期末 1231）
+    cyclic_vol_threshold: 0.40  # 年度净利 YoY 增速 std ≥40% → 周期（结构信号，优先判定）
+    growth_cagr_years: 3        # 增速 CAGR 年数
+    growth_threshold: 0.15      # 营收/净利 CAGR ≥15% → 成长
+    dividend_yield_threshold: 0.03  # 近12月股息率 ≥3% → 价值候选
+    pe_low_percentile: 0.30     # PE 分位 ≤30% → 价值候选
+  valuation:
+    pe_lookback_years: 10       # PE/PB 分位窗口（baidu IPO起稀疏，None=全历史）
+    zone_low_percentile: 0.20   # 估值 zone 便宜档（PE+PB 分位都 < 此值 = 低位·便宜）
+    zone_high_percentile: 0.80  # 估值 zone 偏贵档（都 > 此值 = 高位·偏贵）
+  davis:                       # S10 戴维斯双击/双杀（业绩方向 × 估值方向）
+    pe_low_percentile: 0.30     # PE 低位（双击买点区）
+    pe_high_percentile: 0.70    # PE 高位（双杀预警区）
+    pe_change_lookback_days: 365  # PE 变化回看窗口（今 vs 此天数前）
+  pitfalls:                    # S08 避坑（异常高增速 + 低基数 + 两年复合增速）
+    abnormal_growth_threshold: 1.5   # YoY ≥150% 视为异常（可能低基数幻觉）
+    low_base_frac: 0.5              # 上年值 < 前年 × 此值 = 低基数（分母被压低→增速虚高）

@@ -21,6 +21,82 @@ def _idx(breakout_dir="none", grade=0, above_ma=False, ma_trend_up=False, choppy
 def _rules(a): return [x["rule"] for x in a]
 
 
+# ---- C2 个股提醒(evaluate_stocks)----
+def _stock(sym="600519", name="茅台", **kw):
+    base = {"name": name}
+    base.update(kw)
+    return {sym: base}
+
+
+def test_A2_forecast_turn_bearish():
+    s = _stock(forecast={"valid": True, "a2_turn_bearish": True,
+                         "latest": {"type": "预减", "yoy": -20.0, "announce_date": "2026-01-15"}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    assert any(x["rule"] == "A2" and x["level"] == "warn" for x in a)
+
+
+def test_A1_forecast_deceleration():
+    s = _stock(forecast={"valid": True, "a1_deceleration": True,
+                         "latest": {"type": "预增", "yoy": 10.0, "announce_date": "2025-01-15"}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    # ann 2025-01-15 距 asof 2026-07-22 > 90 天 → 不触发 G1,只 A1
+    assert any(x["rule"] == "A1" and x["level"] == "warn" for x in a)
+    assert not any(x["rule"] == "G1" for x in a)
+
+
+def test_G1_recent_forecast_window_open():
+    s = _stock(forecast={"valid": True, "a1_deceleration": False, "a2_turn_bearish": False,
+                         "latest": {"type": "略增", "yoy": 15.0, "announce_date": "2026-06-15"}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")  # 距 2026-06-15 = 37 天 ≤90
+    assert any(x["rule"] == "G1" and x["level"] == "info" for x in a)
+
+
+def test_A3_revenue_deceleration():
+    # 上年增速 = base/prev-1 = 115/100-1 = 15%; 当年 yoy=2% → 下滑>5pp
+    s = _stock(pitfalls={"revenue": {"valid": True, "yoy": 0.02, "base": 115.0, "prev_base": 100.0},
+                         "disclosure": {}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    assert any(x["rule"] == "A3" and x["level"] == "warn" for x in a)
+
+
+def test_A3_no_fire_when_accelerating():
+    s = _stock(pitfalls={"revenue": {"valid": True, "yoy": 0.30, "base": 130.0, "prev_base": 100.0},
+                         "disclosure": {}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    assert not any(x["rule"] == "A3" for x in a)
+
+
+def test_G2_disclosure_deadline_near():
+    s = _stock(pitfalls={"revenue": {"valid": False},
+                         "disclosure": {"latest_period": "20251231", "deadline": "2026-08-10"}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")  # 截止 2026-08-10 距今 19 天 ≤45
+    assert any(x["rule"] == "G2" and x["level"] == "info" for x in a)
+
+
+def test_E3_oversold_and_overbought():
+    low = _stock(price_timing={"deviation": {"valid": True, "pct": 0.03}})
+    a1 = alerts.evaluate_stocks(low, asof="2026-07-22")
+    assert any(x["rule"] == "E3" and x["level"] == "info" for x in a1)   # 超卖买点
+    high = _stock(price_timing={"deviation": {"valid": True, "pct": 0.97}})
+    a2 = alerts.evaluate_stocks(high, asof="2026-07-22")
+    assert any(x["rule"] == "E3" and x["level"] == "warn" for x in a2)   # 超买卖点
+
+
+def test_E4_blue_vs_growth_divergence():
+    idx = {"style": {"valid": True, "blue_up": True, "growth_up": False}}
+    a = alerts.evaluate_stocks({}, index_diag=idx, asof="2026-07-22")
+    assert any(x["rule"] == "E4" and "蓝筹" in x["msg"] for x in a)
+
+
+def test_stock_no_alerts_when_clean():
+    s = _stock(pitfalls={"revenue": {"valid": True, "yoy": 0.20, "base": 120.0, "prev_base": 100.0},
+                         "disclosure": {"latest_period": "20251231", "deadline": "2027-04-30"}},
+               price_timing={"deviation": {"valid": True, "pct": 0.50}},
+               forecast={"valid": False})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    assert a == []  # 增速上行 + 偏离中位 + 无预告 + 截止日远 → 无触发
+
+
 def test_E2_breakdown_and_F1():
     a = alerts.evaluate({}, _idx(breakout_dir="down", grade=3, above_ma=False, ma_trend_up=False))
     assert "E2" in _rules(a) and "F1" in _rules(a)

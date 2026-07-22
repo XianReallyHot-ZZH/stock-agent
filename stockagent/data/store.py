@@ -118,6 +118,45 @@ CREATE TABLE IF NOT EXISTS etf_dividend (
 CREATE INDEX IF NOT EXISTS idx_index_daily_symbol ON index_daily(symbol);
 CREATE INDEX IF NOT EXISTS idx_index_pe_name ON index_pe(name);
 CREATE INDEX IF NOT EXISTS idx_index_pb_name ON index_pb(name);
+CREATE TABLE IF NOT EXISTS stock_valuation (
+    symbol    TEXT NOT NULL,
+    date      TEXT NOT NULL,
+    indicator TEXT NOT NULL,
+    value     REAL,
+    source    TEXT,
+    PRIMARY KEY (symbol, date, indicator)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_valuation_symbol ON stock_valuation(symbol);
+CREATE TABLE IF NOT EXISTS stock_financials (
+    symbol        TEXT NOT NULL,
+    report_period TEXT NOT NULL,
+    metric        TEXT NOT NULL,
+    value         REAL,
+    source        TEXT,
+    PRIMARY KEY (symbol, report_period, metric)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_financials_symbol ON stock_financials(symbol);
+CREATE TABLE IF NOT EXISTS stock_dividend (
+    symbol         TEXT NOT NULL,
+    ex_date        TEXT NOT NULL,
+    announce_date  TEXT,
+    cash_per_share REAL,
+    stock_div_10   REAL,
+    trans_10       REAL,
+    source         TEXT,
+    PRIMARY KEY (symbol, ex_date)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_dividend_symbol ON stock_dividend(symbol);
+CREATE TABLE IF NOT EXISTS stock_forecast (
+    symbol        TEXT NOT NULL,
+    report_period TEXT NOT NULL,
+    yoy           REAL,
+    type          TEXT,
+    announce_date TEXT,
+    source        TEXT,
+    PRIMARY KEY (symbol, report_period)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_forecast_symbol ON stock_forecast(symbol);
 """
 
 
@@ -712,4 +751,221 @@ class Store:
         with self._conn() as c:
             row = c.execute(
                 "SELECT MAX(date) FROM etf_dividend WHERE symbol=?", (symbol,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- stock valuation (V5 tracker · Phase 2 个股层 · 百度金矿 PE/PB/总市值) ----
+    # 个股日线复用 daily_prices(upsert_prices/get_series,与 ETF 同表不同 symbol),无新表。
+    def upsert_stock_valuation(self, symbol: str, indicator: str, df: pd.DataFrame,
+                               source: str = "") -> int:
+        """df indexed by date(str) with value. Idempotent upsert keyed by (symbol,date,indicator).
+        百度 period='全部' 每次返回全历史(IPO起,稀疏),全量 upsert 幂等覆盖——无需增量游标。"""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = [
+            (symbol, str(d), indicator, _f(r.get("value")), source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO stock_valuation(symbol,date,indicator,value,source) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(symbol,date,indicator) DO UPDATE SET "
+                "value=excluded.value,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_stock_valuation_series(self, symbol: str, indicator: str,
+                                   start: Optional[str] = None,
+                                   end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,value FROM stock_valuation WHERE symbol=? AND indicator=?"
+        params: list = [symbol, indicator]
+        if start:
+            q += " AND date>=?"
+            params.append(start)
+        if end:
+            q += " AND date<=?"
+            params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_stock_valuation_date(self, symbol: str,
+                                  indicator: Optional[str] = None) -> Optional[str]:
+        with self._conn() as c:
+            if indicator:
+                row = c.execute(
+                    "SELECT MAX(date) FROM stock_valuation WHERE symbol=? AND indicator=?",
+                    (symbol, indicator)).fetchone()
+            else:
+                row = c.execute(
+                    "SELECT MAX(date) FROM stock_valuation WHERE symbol=?", (symbol,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- stock financials (V5 tracker · Phase 2 C0.5 · sina 财务摘要 常用指标 17 项) ----
+    def upsert_stock_financials(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:
+        """df 长表 columns [report_period, metric, value](report_period=YYYYMMDD, metric=EN 键)。
+        幂等 upsert 主键 (symbol, report_period, metric)。sina 每次返回全历史(102 期~25年)→ 全量覆盖。"""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = [
+            (symbol, str(r["report_period"]), str(r["metric"]), _f(r.get("value")), source)
+            for _, r in df.iterrows()
+            if pd.notna(r.get("report_period")) and pd.notna(r.get("metric"))
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO stock_financials(symbol,report_period,metric,value,source) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(symbol,report_period,metric) DO UPDATE SET "
+                "value=excluded.value,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_stock_financials_series(self, symbol: str, metric: str,
+                                    start: Optional[str] = None,
+                                    end: Optional[str] = None) -> pd.Series:
+        """单指标时间序列(indexed by report_period, ascending)。C1 算增速/波动直接吃。"""
+        q = "SELECT report_period,value FROM stock_financials WHERE symbol=? AND metric=?"
+        params: list = [symbol, metric]
+        if start:
+            q += " AND report_period>=?"
+            params.append(start)
+        if end:
+            q += " AND report_period<=?"
+            params.append(end)
+        q += " ORDER BY report_period ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return pd.Series(dtype=float)
+        return pd.Series(pd.to_numeric(df["value"], errors="coerce").values,
+                         index=df["report_period"].values).dropna()
+
+    def get_stock_financials_panel(self, symbol: str,
+                                   metrics: Optional[list[str]] = None) -> pd.DataFrame:
+        """宽表面板(index=report_period, columns=metric)——C1 多指标诊断便利读取。
+        metrics=None → 全部已存指标。NaN 补缺(某期缺某指标)。"""
+        q = "SELECT report_period,metric,value FROM stock_financials WHERE symbol=?"
+        params: list = [symbol]
+        if metrics:
+            ph = ",".join("?" * len(metrics))
+            q += f" AND metric IN ({ph})"
+            params += list(metrics)
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return (df.pivot_table(index="report_period", columns="metric", values="value",
+                               aggfunc="first")
+                  .sort_index())
+
+    def last_stock_financials_period(self, symbol: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(report_period) FROM stock_financials WHERE symbol=?", (symbol,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- stock dividend (V5 tracker · Phase 2 C0.5 · sina 分红明细) ----
+    def upsert_stock_dividend(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by ex_date(除权除息日,=影响第一天) with cash_per_share/stock_div_10/trans_10/
+        announce_date。只存 进度=实施 的(已在 fetcher 过滤)。幂等主键 (symbol, ex_date)。"""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = []
+        for d, r in df.iterrows():
+            rows.append((
+                symbol, str(d),
+                str(r["announce_date"]) if pd.notna(r.get("announce_date")) else None,
+                _f(r.get("cash_per_share")), _f(r.get("stock_div_10")), _f(r.get("trans_10")),
+                source,
+            ))
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO stock_dividend(symbol,ex_date,announce_date,cash_per_share,"
+                "stock_div_10,trans_10,source) VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(symbol,ex_date) DO UPDATE SET "
+                "announce_date=excluded.announce_date,cash_per_share=excluded.cash_per_share,"
+                "stock_div_10=excluded.stock_div_10,trans_10=excluded.trans_10,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_stock_dividend_series(self, symbol: str, start: Optional[str] = None,
+                                  end: Optional[str] = None) -> pd.DataFrame:
+        q = ("SELECT ex_date,announce_date,cash_per_share,stock_div_10,trans_10 "
+             "FROM stock_dividend WHERE symbol=?")
+        params: list = [symbol]
+        if start:
+            q += " AND ex_date>=?"
+            params.append(start)
+        if end:
+            q += " AND ex_date<=?"
+            params.append(end)
+        q += " ORDER BY ex_date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("ex_date")
+
+    def last_stock_dividend_date(self, symbol: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(ex_date) FROM stock_dividend WHERE symbol=?", (symbol,)).fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- stock forecast (V5 tracker · Phase 2 S08-G1 业绩预告链) ----
+    # 业绩预告(预告/快报/正式报 链的最早一环)。稀疏——仅显著变动才发,容忍缺失。
+    def upsert_stock_forecast(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (symbol, report_period, yoy, type, announce_date)。幂等主键 (symbol, report_period)。"""
+        if not rows:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        def _s(x):  # 字符串或 None(空/NaN → None);日期截到 10 字符 YYYY-MM-DD
+            if x is None or x == "" or (isinstance(x, float) and pd.isna(x)):
+                return None
+            return str(x)[:10]
+
+        payload = [(str(s), str(rp), _f(yo), _s(t), _s(a), source) for (s, rp, yo, t, a) in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO stock_forecast(symbol,report_period,yoy,type,announce_date,source) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(symbol,report_period) DO UPDATE SET "
+                "yoy=excluded.yoy,type=excluded.type,announce_date=excluded.announce_date,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_stock_forecast_series(self, symbol: str) -> pd.DataFrame:
+        """某股所有报告期的业绩预告,indexed by report_period(升序): yoy/type/announce_date。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT report_period,yoy,type,announce_date FROM stock_forecast "
+                "WHERE symbol=? ORDER BY report_period ASC", c, params=(symbol,))
+        if len(df) == 0:
+            return df
+        return df.set_index("report_period")
+
+    def last_stock_forecast_period(self, symbol: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(report_period) FROM stock_forecast WHERE symbol=?", (symbol,)).fetchone()
             return row[0] if row and row[0] else None

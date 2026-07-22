@@ -32,6 +32,11 @@ python scripts/research_report.py --push-alerts  # 生成看板 + 推送信号�
 python scripts/backfill_index.py            # 回填 5 宽基日线 + 沪深300 PE/PB + 全市场 PB（幂等）
 python scripts/index_timing_report.py       # 生成指数择时看板（data/index_timing.html，六 section，深浅色可切）
 
+# 个股层（tracker，Phase 2 · 只读诊断，三类分类+归因+戴维斯+避坑+预告链）
+python scripts/backfill_stock_data.py             # 回填观察池 个股日线/估值(baidu PE·PB)/财报/分红/业绩预告（幂等，--daily/--val/--fin/--div/--forecast）
+python scripts/stock_report.py                    # 生成个股诊断看板（data/stock_diagnose.html，告警区+个股卡片，深浅色可切）
+python scripts/stock_report.py --push-alerts      # 生成看板 + 推送个股信号提醒到微信（A1/A2/A3/G1/G2/E3/E4 触发时）
+
 # 实盘
 python scripts/run_morning_report.py --force   # 生成+推送晨报
 python scripts/record_actual.py --executed     # 对账自律度
@@ -48,6 +53,7 @@ python scripts/record_actual.py --executed     # 对账自律度
 - 大盘择时层（RegimeFilter A+B）是最高优先级
 - **行业研究模块（`research/`）是只读旁路**：算 ETF 性价比（三类分类 Phase 1-A：价值=股息率+PE分位 / 成长=业绩+PE / 周期=筹码+趋势,板块PB无源→不估值待P2）。`scoring.py` 按 `etf_pool.yaml` 的 style 标签分流；三类分页看板 + 锚点导航。信号提醒（`tracker/alerts.py`）九条（D筹码×估值交叉/E1E2趋势/B1股息/A1A2业绩/F1大盘），双通道（看板告警区+微信 `--push-alerts`）。筹码相位用非单调 6 相位表（文章「末期见底」逻辑：兑现中段最空、深回撤+卖盘枯竭=见底最看多）
 - **指数择时层（`tracker/`）是只读诊断旁路**：基于课程 S12-13，算大盘估值开关（沪深300 同口径 PE+PB → 四档 zone）·大小盘温差·蓝筹vs成长·60日线趋势/突破跌破/偏离极值，出本地交互式看板（`data/index_timing.html`，深浅色可切），**不喂交易引擎**
+- **个股层（`tracker/stock_diagnose.py` + `stock_report.py`，Phase 2）是只读诊断旁路**：个股级三类自动判定（增速→成长 / 高股息低PE→价值 / 利润波动→周期）+ 利润来源归因 S07（业绩/分红/估值三段，EPS 由 P/PE 反推）+ 戴维斯双击/双杀 S10（业绩方向×估值方向六档）+ 避坑 S08（公告时间差 G2·两年复合增速·异常高增速最小值分母·预告链 G1）。数据栈 C0/C0.5/C0.6（价格/百度 PE·PB/sina 财报17指标/分红/eastmoney 业绩预告）。`alerts.evaluate_stocks` 七条个股提醒（A1/A2/A3/G1/G2/E3/E4）双通道（看板告警区+微信）。出 `data/stock_diagnose.html`（告警区+个股卡片，深浅色可切），**不喂交易引擎**
 
 ## 6 个可插拔信号
 
