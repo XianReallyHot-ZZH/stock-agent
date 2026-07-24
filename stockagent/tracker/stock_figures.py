@@ -22,7 +22,7 @@ from . import indicators as ti
 _PAL = {
     "surface": "#ffffff", "ink": "#0f172a", "ink_sec": "#52514e", "muted": "#898781",
     "grid": "#e2e8f0", "baseline": "#cbd5e1",
-    "close": "#2a78d6", "rev": "#2563eb", "profit": "#008300", "yoy": "#ea580c",
+    "close": "#2a78d6", "rev": "#2563eb", "profit": "#008300", "yoy": "#ea580c", "rev_yoy": "#c026d3",
     "val": "#7c3aed", "val_now": "#dc2626",
     "pos_extreme": "#d03b3b", "neg_extreme": "#1c5cab", "div": "#16a34a",
 }
@@ -148,7 +148,7 @@ def valuation_figure(sym: str, name: str, val_df: pd.DataFrame,
 
 # ---- ③ 业绩年报柱 + 同比线 ----
 def earnings_figure(sym: str, name: str, fin_panel: pd.DataFrame) -> go.Figure:
-    """营收/净利年报柱(亿元)+ 净利同比线(次轴%)。年报口径(累计可跨年比);单季留 S07。"""
+    """营收/净利年报柱(亿元)+ 营收&净利同比线(次轴%)。年报口径(累计可跨年比);单季留 S07。"""
     if fin_panel is None or len(fin_panel) == 0:
         return _placeholder(name, "业绩(年报)", "无财报数据")
     annual_mask = pd.Index([str(i) for i in fin_panel.index]).str.endswith("1231")
@@ -164,11 +164,14 @@ def earnings_figure(sym: str, name: str, fin_panel: pd.DataFrame) -> go.Figure:
     if rev is None and np_ is None:
         return _placeholder(name, "业绩(年报)", "无营收/净利指标")
 
-    # 净利同比(前值>0 才有意义,负基期置空)
-    yoy = None
+    # 同比(前值>0 才有意义,负基期置空)
+    rev_yoy = np_yoy = None
+    if rev is not None:
+        rev_s = pd.Series(rev, index=years)
+        rev_yoy = rev_s.pct_change().where(rev_s.shift() > 0)
     if np_ is not None:
         np_s = pd.Series(np_, index=years)
-        yoy = np_s.pct_change().where(np_s.shift() > 0)
+        np_yoy = np_s.pct_change().where(np_s.shift() > 0)
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     if rev is not None:
@@ -179,16 +182,21 @@ def earnings_figure(sym: str, name: str, fin_panel: pd.DataFrame) -> go.Figure:
         fig.add_trace(go.Bar(x=years, y=np_, name="净利(亿)", marker_color=_PAL["profit"],
                              hovertemplate="%{x}<br>净利 %{y:.0f}亿<extra></extra>"),
                       secondary_y=False)
-    if yoy is not None:
-        fig.add_trace(go.Scatter(x=years, y=yoy, name="净利同比", mode="lines+markers",
+    if rev_yoy is not None:
+        fig.add_trace(go.Scatter(x=years, y=rev_yoy, name="营收同比", mode="lines+markers",
+                                 line=dict(color=_PAL["rev_yoy"], width=1.6),
+                                 hovertemplate="%{x}<br>营收同比 %{y:.1%}<extra></extra>"),
+                      secondary_y=True)
+    if np_yoy is not None:
+        fig.add_trace(go.Scatter(x=years, y=np_yoy, name="净利同比", mode="lines+markers",
                                  line=dict(color=_PAL["yoy"], width=1.6),
                                  hovertemplate="%{x}<br>净利同比 %{y:.1%}<extra></extra>"),
                       secondary_y=True)
-    fig.update_layout(**_layout(f"{name}({sym}) — 营收/净利(年报·亿) + 净利同比", height=360,
+    fig.update_layout(**_layout(f"{name}({sym}) — 营收/净利(年报·亿) + 同比", height=360,
                                 barmode="group"))
     _style_axes(fig)
     fig.update_yaxes(title_text="亿元", secondary_y=False)
-    fig.update_yaxes(title_text="净利同比", secondary_y=True, hoverformat=".0%",
+    fig.update_yaxes(title_text="同比", secondary_y=True, hoverformat=".0%",
                      gridcolor=_PAL["grid"])
     return fig
 

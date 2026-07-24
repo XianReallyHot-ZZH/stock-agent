@@ -83,10 +83,11 @@ def _fin_panel():
 def test_earnings_valid():
     fig = sf.earnings_figure("600519", "茅台", _fin_panel())
     assert isinstance(fig, go.Figure)
-    assert len(fig.data) == 3                         # 营收 bar / 净利 bar / 同比 line
-    assert isinstance(fig.data[0], go.Bar)
-    assert isinstance(fig.data[1], go.Bar)
-    assert isinstance(fig.data[2], go.Scatter)
+    assert len(fig.data) == 4                         # 营收 bar / 净利 bar / 营收同比 / 净利同比
+    assert isinstance(fig.data[0], go.Bar) and isinstance(fig.data[1], go.Bar)
+    assert isinstance(fig.data[2], go.Scatter) and isinstance(fig.data[3], go.Scatter)
+    names = [t.name for t in fig.data]
+    assert "营收同比" in names and "净利同比" in names
 
 
 def test_earnings_empty():
