@@ -70,7 +70,7 @@ def main():
     alerts_list = sd.collect_stock_alerts(codes, store, cfg, index_diag=index_diag,
                                            asof=asof, names=names)
 
-    html = srep.render(diagnoses, alerts_list, as_of=asof, names=names)
+    html = srep.render(diagnoses, alerts_list, as_of=asof, names=names, store=store)
     out = srep.write_html(html, args.output)
 
     # 推送

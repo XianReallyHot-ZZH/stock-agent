@@ -2,6 +2,8 @@
 No network — synthetic diagnose dicts only(实盘看板另跑 stock_report.py 验)。"""
 import math
 
+import pandas as pd
+
 from stockagent.tracker import stock_report as srep
 
 
@@ -63,3 +65,45 @@ def test_write_html(tmp_path):
     h = srep.render({"600519": _diag()}, [], as_of="2026-07-22")
     out = srep.write_html(h, tmp_path / "sub" / "stock.html")
     assert out.exists() and out.read_text(encoding="utf-8").startswith("<!DOCTYPE html>")
+
+
+class _StubStore:
+    """最小 store —— 全返回空,figure builder 走占位(不抛),验证 render 装配模态。"""
+    def get_series(self, sym):
+        return pd.DataFrame()
+
+    def get_stock_valuation_series(self, sym, indicator):
+        return pd.DataFrame()
+
+    def get_stock_financials_panel(self, sym, metrics=None):
+        return pd.DataFrame()
+
+    def get_stock_dividend_series(self, sym):
+        return pd.DataFrame()
+
+
+def test_render_with_store_emits_modal():
+    h = srep.render({"600519": _diag()}, [], as_of="2026-07-22",
+                    names={"600519": "贵州茅台"}, store=_StubStore())
+    # 模态壳 + 懒渲染 JS
+    assert 'id="chart-modal"' in h
+    assert "var CHARTS={" in h and "var _NAMES={" in h
+    assert "function openChart" in h and "function closeChart" in h
+    # 5 个图槽位:价格+偏离 / PE / PB / 业绩 / 分红
+    for i in range(5):
+        assert f'<div id="m-chart-{i}"' in h
+    # 卡片 📊 按钮触发 openChart(sym)
+    assert "openChart('600519')" in h
+    # JSON 嵌入(图数据以对象字面量存在,非预渲染 <script>)
+    assert '"600519":[' in h
+    # 不再有 inline chart-block(改成模态)
+    assert 'class="chart-block"' not in h
+    assert "Plotly.newPlot" in h
+
+
+def test_render_without_store_no_charts():
+    """store=None → 完全无图表相关产物(向后兼容)。"""
+    h = srep.render({"600519": _diag()}, [], as_of="2026-07-22", names={"600519": "贵州茅台"})
+    assert "chart-modal" not in h
+    assert "var CHARTS" not in h
+    assert "openChart" not in h

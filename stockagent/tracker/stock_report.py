@@ -10,6 +10,9 @@ import html
 import math
 from pathlib import Path
 
+from . import indicators as ti
+from . import stock_figures as sf
+
 
 def _nan(v) -> bool:
     return v is None or (isinstance(v, float) and math.isnan(v))
@@ -71,7 +74,7 @@ def _alerts_region(alerts_list: list) -> str:
             + "".join(rows) + "</div>")
 
 
-def _card(sym: str, d: dict, name: str) -> str:
+def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
     cls = d.get("classification") or {}
     primary = cls.get("primary") or "未分类"
     secondary = "+".join(cls.get("secondary") or [])
@@ -113,12 +116,17 @@ def _card(sym: str, d: dict, name: str) -> str:
     disc_txt = (f'{disc.get("latest_period","?")[:4]}报 截止{disc.get("deadline","?")}'
                 f' <span class="muted">({"已披露" if disc.get("disclosed_by_asof") else "未披露"})</span>')
 
+    chart_link = ('<button type="button" class="chart-link" title="查看时序图" '
+                  'onclick="openChart(\'' + sym + '\')">📊</button>'
+                  if with_charts else "")
+
     return f"""
     <div class="card">
       <div class="card-head">
         <span class="stock-name">{html.escape(name)}</span>
         <span class="stock-code">{sym}</span>
         <span class="stock-price">¥{_num(d.get("price_last"))} <span class="muted">{d.get("date_last","")}</span></span>
+        {chart_link}
       </div>
       <div class="card-row">{cls_badge} {zone_badge} {dv_badge}</div>
       <table class="metrics">
@@ -169,23 +177,155 @@ h2 { font-size:16px; margin:0 0 10px; }
 .metrics td:nth-child(odd) { color:var(--muted); width:18%; }
 .metrics td:nth-child(even) { font-weight:600; }
 .warn-txt { color:#dc2626; font-weight:600; }
+.chart-link { margin-left:8px; background:transparent; border:none; color:var(--text); font-size:15px; cursor:pointer; padding:0 2px; line-height:1; opacity:.7; }
+.chart-link:hover { opacity:1; }
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:flex-start; justify-content:center; padding:28px 14px; z-index:1000; overflow:auto; }
+.modal-overlay[hidden] { display:none; }
+.modal-box { background:var(--card); border:1px solid var(--border); border-radius:10px; width:100%; max-width:2200px; box-shadow:0 16px 50px rgba(0,0,0,.45); }
+.modal-head { display:flex; justify-content:space-between; align-items:center; padding:10px 16px; border-bottom:1px solid var(--border); position:sticky; top:0; background:var(--card); border-radius:10px 10px 0 0; z-index:1; }
+.modal-head #modal-title { font-weight:700; font-size:16px; }
+.modal-close { background:transparent; border:none; color:var(--muted); font-size:20px; cursor:pointer; padding:2px 10px; border-radius:6px; line-height:1; }
+.modal-close:hover { background:var(--border); color:var(--text); }
+.modal-body { padding:10px 14px 18px; }
+.modal-chart { margin-bottom:6px; }
 """
 
 
+_THEME_JS = """
+function _isDark(){return document.body.classList.contains('dark');}
+function _applyPlotly(dark){
+  if(!window.Plotly)return;
+  var u={'paper_bgcolor':dark?'#1e293b':'#ffffff','plot_bgcolor':dark?'#1e293b':'#ffffff','font.color':dark?'#e2e8f0':'#0f172a'};
+  ['xaxis','xaxis2','xaxis3','yaxis','yaxis2','yaxis3','yaxis4'].forEach(function(a){
+    u[a+'.gridcolor']=dark?'#334155':'#e2e8f0';
+    u[a+'.zerolinecolor']=dark?'#475569':'#cbd5e1';
+  });
+  document.querySelectorAll('.plotly-graph-div').forEach(function(gd){try{Plotly.relayout(gd,u);}catch(e){}});
+}
+function _syncBtn(){var b=document.getElementById('theme-btn');if(b)b.textContent=_isDark()?'☀️ 浅色':'🌙 深浅色';}
+function toggleTheme(){
+  document.body.classList.toggle('dark');
+  var dark=_isDark();
+  localStorage.setItem('stock-dark',dark);
+  _syncBtn();
+  _applyPlotly(dark);
+}
+(function(){
+  if(localStorage.getItem('stock-dark')==='true')document.body.classList.add('dark');
+  _syncBtn();
+  function init(){_applyPlotly(_isDark());}
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);
+  else init();
+})();
+"""
+
+
+_CHART_MODAL_HTML = """
+<div id="chart-modal" class="modal-overlay" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="modal-title">—</span>
+      <button type="button" class="modal-close" onclick="closeChart()" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="modal-body">
+      __SLOTS__
+    </div>
+  </div>
+</div>"""
+
+
+# 模态交互逻辑(依赖运行时的 Plotly / CHARTS / _NAMES / _applyPlotly / _isDark,
+# 后两者来自 _THEME_JS)。openChart 只 newPlot 当前这一只的 4 张,closeChart purge 释放。
+_CHART_MODAL_JS = """
+function openChart(sym){
+  var list = CHARTS[sym];
+  if(!list) return;
+  document.getElementById('modal-title').textContent = (_NAMES[sym] || sym);
+  var ov = document.getElementById('chart-modal');
+  ov.hidden = false;                 // 先显示(容器拿到真实宽度)再 newPlot,图才能横向占满
+  document.body.style.overflow = 'hidden';
+  Promise.all(list.map(function(fig, i){
+    var gd = document.getElementById('m-chart-' + i);
+    try{ Plotly.purge(gd); }catch(e){}
+    return Plotly.newPlot(gd, fig, {responsive:true, displaylogo:false});
+  })).then(function(){ _applyPlotly(_isDark()); });
+}
+function closeChart(){
+  var ov = document.getElementById('chart-modal');
+  ov.hidden = true;
+  document.body.style.overflow = '';
+  document.querySelectorAll('.modal-chart').forEach(function(gd){
+    try{ Plotly.purge(gd); }catch(e){}
+  });
+}
+document.addEventListener('keydown', function(e){
+  var ov = document.getElementById('chart-modal');
+  if(ov && !ov.hidden && (e.key==='Escape' || e.keyCode===27)) closeChart();
+});
+document.addEventListener('DOMContentLoaded', function(){
+  var ov = document.getElementById('chart-modal');
+  if(ov) ov.addEventListener('click', function(e){ if(e.target===ov) closeChart(); });
+});
+"""
+
+
+def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str:
+    """点卡片 📊 弹模态窗看该股 4 张时序图(价格+偏离 / 估值分位 / 业绩年报 / 分红)。
+    store=None → 空串(向后兼容)。图表以 JSON 嵌入 CHARTS dict,点开时才 Plotly.newPlot
+    懒渲染——页面只承载紧凑 JSON,股票再多也只画当前这一只(可扩展,避免一次性渲染几百张)。"""
+    if store is None:
+        return ""
+    import re
+    from plotly.offline import get_plotlyjs
+
+    charts: dict[str, list[str]] = {}
+    n = 0
+    for sym, d in stock_diagnoses.items():
+        name = names.get(sym, sym)
+        built = [
+            sf.price_deviation_figure(sym, name, store.get_series(sym), period),
+            # PE 和 PB 都画(价值/银行看 PB 更准,成长/周期看 PE;两个口径都给,任由判断)
+            sf.valuation_figure(sym, name, store.get_stock_valuation_series(sym, "pe_ttm"), "pe_ttm"),
+            sf.valuation_figure(sym, name, store.get_stock_valuation_series(sym, "pb"), "pb"),
+            sf.earnings_figure(sym, name,
+                               store.get_stock_financials_panel(sym, ["revenue", "net_profit"])),
+            sf.dividend_figure(sym, name, store.get_stock_dividend_series(sym)),
+        ]
+        n = len(built)
+        charts[sym] = [f.to_json() for f in built]
+
+    slots = "\n".join(f'      <div id="m-chart-{i}" class="modal-chart"></div>' for i in range(n))
+    modal_html = _CHART_MODAL_HTML.replace("__SLOTS__", slots)
+    # 每个 to_json() 是合法 JSON → 直接作 JS 对象字面量;纯拼接(不用 %/format,plotly.js 含大量 % {})
+    entries = ",\n".join(f'"{sym}":[{",".join(charts[sym])}]' for sym in charts)
+    names_js = ", ".join(f'"{sym}":"{html.escape(names.get(sym, sym))}"' for sym in charts)
+    plotly_js = re.sub(r"</script", r"<\\/script", get_plotlyjs(), flags=re.I)
+    entries = re.sub(r"</script", r"<\\/script", entries, flags=re.I)   # 防御 figure JSON
+    body = (plotly_js + "\nvar CHARTS={" + entries + "};\nvar _NAMES={" + names_js + "};\n"
+            + _CHART_MODAL_JS)
+    return modal_html + "\n<script>\n" + body + "</script>"
+
+
 def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
-           names: dict | None = None, title: str = "个股诊断看板") -> str:
+           names: dict | None = None, title: str = "个股诊断看板",
+           store=None, period: int | None = None) -> str:
     """渲染个股诊断 HTML。stock_diagnoses = {symbol: diagnose_stock_full 输出}。
-    names = {symbol: 显示名}(可选)。alerts_list = collect_stock_alerts 输出。"""
+    names = {symbol: 显示名}(可选)。alerts_list = collect_stock_alerts 输出。
+    store 非空时追加「个股时序图」区(价格/估值/业绩/分红);period 默认 MA_PERIOD。"""
     names = names or {}
-    cards = "\n".join(_card(sym, d, names.get(sym, sym)) for sym, d in stock_diagnoses.items())
+    prd = period or ti.MA_PERIOD
+    with_charts = store is not None
+    cards = "\n".join(
+        _card(sym, d, names.get(sym, sym), with_charts=with_charts)
+        for sym, d in stock_diagnoses.items())
     n = len(stock_diagnoses)
+    chart_section = _chart_assets(stock_diagnoses, names, store, prd)
     return f"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)}</title><style>{_CSS}</style></head>
 <body>
 <div class="header">
-  <button class="toggle" onclick="document.body.classList.toggle('dark');
-    localStorage.setItem('stock-dark',document.body.classList.contains('dark'))">🌙 深浅色</button>
+  <button id="theme-btn" class="toggle" onclick="toggleTheme()">🌙 深浅色</button>
   <h1>{html.escape(title)}</h1>
   <p class="muted">as_of {html.escape(as_of)} · {n} 只个股 · 数据底座 C0/C0.5/C0.6(price/估值/财报/分红/预告)</p>
 </div>
@@ -194,7 +334,8 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
 <div class="grid">
 {cards}
 </div>
-<script>if(localStorage.getItem('stock-dark')==='true')document.body.classList.add('dark');</script>
+{chart_section}
+<script>{_THEME_JS}</script>
 </body></html>"""
 
 
