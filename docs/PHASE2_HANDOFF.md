@@ -1,5 +1,52 @@
 # Phase 2（个股层）Handoff — 清理上下文后恢复用
 
+## ⚡ 快速恢复（先读这段，30 秒定位）
+
+**状态（2026-07-25）**：Phase 2 个股层 **全部完成并已推送**（commit `754e9a6` 在 `origin/master`，本地与远程同步）。全套 **308 测试绿**。
+
+**4 条命令验证一切在跑**：
+```bash
+python -m pytest tests/ -q                     # 308 passed
+python scripts/backfill_stock_data.py          # 回填观察池 5 只(日线/估值/财报/分红/预告,幂等)
+python scripts/stock_report.py                 # 生成 data/stock_diagnose.html(双击看) + 控制台摘要
+python scripts/stock_report.py --push-alerts   # 同上 + 推送提醒(未配置渠道时优雅降级)
+```
+
+**文件地图**：
+| 角色 | 文件 |
+|---|---|
+| 诊断库(核心) | `stockagent/tracker/stock_diagnose.py`（classify / valuation_zone / E3 / S07归因 / S10戴维斯 / S08避坑 / 预告链 + `diagnose_stock_full` 打包） |
+| 提醒规则 | `stockagent/tracker/alerts.py::evaluate_stocks`（A1/A2/A3/G1/G2/E3/E4）+ `stock_diagnose.collect_stock_alerts` |
+| 看板渲染 | `stockagent/tracker/stock_report.py`（卡片式 HTML,告警区+个股卡片,深浅色可切） |
+| 数据抓取 | `stockagent/data/fetcher.py`（`fetch_stock_daily/valuation/financials/dividend/forecast_panel`） |
+| 入库 | `stockagent/data/store.py`（stock_valuation/financials/dividend/forecast 表）+ `manager.py`（`update_stock_*`） |
+| 脚本 | `scripts/backfill_stock_data.py`（--daily/--val/--fin/--div/--forecast）/ `scripts/stock_report.py`（--codes/--as-of/--push-alerts） |
+| 配置 | `config/params.yaml` 的 `stock:` 段（classify / davis / pitfalls / valuation 阈值） |
+| 测试 | `tests/test_stock_data.py` / `test_stock_diagnose.py` / `test_stock_report.py` / `test_alerts.py` |
+| 看板输出 | `data/stock_diagnose.html`（已 commit，随仓库走） |
+
+**观察池**：`DataManager.STOCK_WATCHLIST` = [600519 茅台 / 600036 招行 / 300750 宁德 / 000651 格力 / 688981 中芯]（C0 占位，待迁 `config/stock_pool.yaml`）。
+
+**恢复后第一步**：继续开发 → 挑下面「可选增强」一个；验证 → 跑上面 4 条命令；懂某块 → 读对应 docstring（每个函数都有详细中文注释）+ 本文件下方的详细记录。
+
+**数据约定 & 已知 wart**：
+- `data.adjust='raw'`（全项目 ETF+个股同）；日价受 `history_years=6` 限（长持仓期 S07 归因需先扩 price 回填）；baidu PE/PB 有 IPO 起全史但**稀疏**（半月级，够算分位不能当日频）。
+- `stock_dividend_yield` 偏高（raw 价被历年分红压低 + 一年 N 次分红节奏切换年 TTM 多吃 1 次）——分类鲁棒（价值也经干净 PE 分位识别），精算留 C2/B1。
+- 业绩预告**稀疏**（仅显著变动才发，观察池 5 只只 2 只有 2024 年报预告）。
+
+## 📋 可选增强（讨论过、未做，按价值排序）
+
+1. **业绩含金量指标**（归母 vs 扣非）：库里已有 `np_deducted`（扣非净利润）。加一个 diagnose + 提醒——「归母涨但扣非没涨/下滑」=利润靠一次性收益撑，业绩含金量低（S08 雷）。**价值高**：直接补上 S08 利润质量维度。
+2. **避坑行始终显示 2y CAGR**：当前只在触发硬异常(≥150%/腰斩)时显示可信增速。中芯例揭示——单年+36% vs 2年+2.2% 的落差本身有信息价值，应始终并排显示（或落差>X倍时软提示「疑似基数反弹」）。
+3. **看板加 plotly 图**：当前是卡片快照。可加 PE/PB 历史分位曲线（baidu 全史）+ S07 归因柱状图（业绩/估值/分红）+ 戴维斯业绩-估值象限图。让个股看板和 ETF/指数看板风格一致。
+4. **`min_profit_growth` 纳入周期判定**：目前只看利润波动 std，`min_profit_growth`（最差年）算了但没用。加「std≥阈值 AND 经历过明显下滑年」双保险，减少误判。
+5. **`config/stock_pool.yaml` 正式化**：观察池迁出 manager 硬编码，带 name/行业标签，扩到 >5 只覆盖更多行业测分类鲁棒性。
+6. **业绩快报 `stock_yjbb_em`**：补预告链第二环（预告→快报→正式报），快报给实际数做交叉校验。字段已探（净利润同比/营收同比/公告日）。
+
+> 验证范式：用 **中芯 688981** 做多镜头交叉验证最直观——戴维斯(双击信号) + S07(过去一年+80%里96%靠估值) + 避坑(净利单年+36%但2年CAGR+2.2%=反弹) + E3(grade4强突破但91%偏热) → 三镜头汇聚「周期反转但主要由估值/情绪驱动,业绩兑现未跟上」。
+
+---
+
 ## 项目现状
 
 **Phase 1-B（指数择时）+ Phase 1-A（ETF 三类分类）全部完成**，代码 + 看板 + 测试(160) + 文档 + skills 都在远端。
