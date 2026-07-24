@@ -89,8 +89,8 @@ def test_render_with_store_emits_modal():
     assert 'id="chart-modal"' in h
     assert "var CHARTS={" in h and "var _NAMES={" in h
     assert "function openChart" in h and "function closeChart" in h
-    # 5 个图槽位:价格+偏离 / PE / PB / 业绩 / 分红
-    for i in range(5):
+    # 6 个图槽位:价格+偏离 / PE / PB / 业绩 / 利润归因 / 分红
+    for i in range(6):
         assert f'<div id="m-chart-{i}"' in h
     # 卡片 📊 按钮触发 openChart(sym)
     assert "openChart('600519')" in h

@@ -117,3 +117,25 @@ def test_dividend_valid():
 def test_dividend_empty():
     fig = sf.dividend_figure("688981", "中芯", pd.DataFrame())
     assert len(fig.data) == 0                         # 科创板无分红 → 占位,不抛
+
+
+# ---------- S07 利润归因(多年三段堆叠柱) ----------
+def _attr_rows():
+    return [
+        {"year": "2021", "earnings": 0.333, "valuation": -0.133, "dividend": 0.03, "total": 0.23},
+        {"year": "2022", "earnings": 0.20, "valuation": -0.25, "dividend": 0.027, "total": -0.023},
+        {"year": "2023", "earnings": 0.15, "valuation": 0.40, "dividend": 0.03, "total": 0.58},
+    ]
+
+
+def test_attribution_figure_valid():
+    fig = sf.attribution_figure("600519", "茅台", _attr_rows())
+    assert isinstance(fig, go.Figure)
+    assert len(fig.data) == 3                         # 业绩 / 估值 / 分红
+    assert all(isinstance(t, go.Bar) for t in fig.data)
+    assert [t.name for t in fig.data] == ["业绩", "估值", "分红"]
+
+
+def test_attribution_figure_empty():
+    fig = sf.attribution_figure("600519", "茅台", [])
+    assert len(fig.data) == 0                         # 无有效区间 → 占位

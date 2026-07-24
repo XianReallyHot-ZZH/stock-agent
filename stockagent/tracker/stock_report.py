@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 
 from . import indicators as ti
+from . import stock_diagnose as sd
 from . import stock_figures as sf
 
 
@@ -289,6 +290,8 @@ def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str
             sf.valuation_figure(sym, name, store.get_stock_valuation_series(sym, "pb"), "pb"),
             sf.earnings_figure(sym, name,
                                store.get_stock_financials_panel(sym, ["revenue", "net_profit"])),
+            # S07 利润归因:每年 业绩/估值/分红 三段(多年滚动,看回报驱动力)
+            sf.attribution_figure(sym, name, sd.attribution_by_year(sym, store, 6)),
             sf.dividend_figure(sym, name, store.get_stock_dividend_series(sym)),
         ]
         n = len(built)

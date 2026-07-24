@@ -352,6 +352,34 @@ def diagnose_attribution(symbol: str, store, t0: str, t1: str, config=None) -> d
     return out
 
 
+def attribution_by_year(symbol: str, store, years: int = 6) -> list[dict]:
+    """最近 `years` 个自然年的 S07 利润归因(业绩/估值/分红 三段,占年初价比例,可加)——给看板画
+    多年堆叠柱用。每年一根:该年最后一个交易日 → 次年最后一个交易日的持仓回报拆解(12-31 常是
+    周末,故用「每自然年最后一个交易日」作锚,不用死 1231)。复用 diagnose_attribution(端点
+    as-of、分红按年汇总、profit_attribution 三段对账)。返回 [{year,earnings,valuation,dividend,
+    total}],仅含有效年(端点价/PE 齐全);无价格或不足 2 个年末锚 → []。"""
+    px = store.get_series(symbol)
+    if len(px) == 0:
+        return []
+    last_by_year: dict[str, str] = {}              # 年 → 该年最后一个交易日
+    for d in px.index:
+        y = str(d)[:4]
+        if y not in last_by_year or str(d) > last_by_year[y]:
+            last_by_year[y] = str(d)
+    anchors = sorted(last_by_year.values())[-(years + 1):]   # years+1 锚 → 至多 years 个区间
+    if len(anchors) < 2:
+        return []
+    rows = []
+    for t0, t1 in zip(anchors[:-1], anchors[1:]):
+        a = diagnose_attribution(symbol, store, t0, t1)
+        if not a.get("valid"):
+            continue
+        rows.append({"year": str(t1)[:4],
+                     "earnings": a["earnings_return"], "valuation": a["valuation_return"],
+                     "dividend": a["dividend_return"], "total": a["total_return"]})
+    return rows
+
+
 # ---------- S10 戴维斯双击/双杀 ----------
 def davis_signal(profit_yoy_latest: float, profit_yoy_prev: float,
                  pe_change: float, pe_pct: float,

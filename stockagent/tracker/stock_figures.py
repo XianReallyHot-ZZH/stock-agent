@@ -222,3 +222,29 @@ def dividend_figure(sym: str, name: str, div_df: pd.DataFrame) -> go.Figure:
     fig.update_xaxes(type="date", hoverformat="%Y-%m-%d", dtick="M12",
                      tickformat="%Y")
     return fig
+
+
+# ---- ⑤ S07 利润归因(多年三段堆叠柱) ----
+def attribution_figure(sym: str, name: str, rows: list[dict]) -> go.Figure:
+    """S07 利润归因:每年一根 业绩/估值/分红 堆叠柱(占年初价%,可加,barmode=relative 支持负值)。
+    rows = attribution_by_year 输出。看回报是业绩驱动(可持续)还是估值驱动(周期/脆弱)。
+    用 *_return 稳健成分(share_* 在 total≤0 时为 NaN);不给总回报线(深色下深色线不可见)。"""
+    if not rows:
+        return _placeholder(name, "利润归因", "无有效年度区间")
+    years = [r["year"] for r in rows]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=years, y=[r["earnings"] for r in rows], name="业绩",
+                         marker_color="#16a34a",
+                         hovertemplate="%{x} 业绩 %{y:+.1%}<extra></extra>"))
+    fig.add_trace(go.Bar(x=years, y=[r["valuation"] for r in rows], name="估值",
+                         marker_color="#f59e0b",
+                         hovertemplate="%{x} 估值 %{y:+.1%}<extra></extra>"))
+    fig.add_trace(go.Bar(x=years, y=[r["dividend"] for r in rows], name="分红",
+                         marker_color="#2563eb",
+                         hovertemplate="%{x} 分红 %{y:+.1%}<extra></extra>"))
+    fig.update_layout(**_layout(
+        f"{name}({sym}) — 利润归因(业绩/估值/分红,占年初价)", height=340, barmode="relative"))
+    _style_axes(fig)
+    fig.update_yaxes(title_text="回报(占年初价)", hoverformat=".0%", gridcolor=_PAL["grid"])
+    fig.add_hline(y=0, line=dict(color=_PAL["baseline"], width=1))
+    return fig

@@ -259,6 +259,41 @@ def test_diagnose_attribution_as_of_non_trade_day():
     assert a["t0"] == "2020-01-02" and a["t1"] == "2021-01-04"
 
 
+# ---- attribution_by_year(多年归因,给看板堆叠柱) ----
+def test_attribution_by_year_multi_year_additive():
+    st = _store()
+    # 4 个年末交易日 → 3 个自然年区间;每段 close/PE 已给,每年一次分红
+    px = pd.DataFrame({"close": [100.0, 120.0, 110.0, 140.0]},
+                      index=["2020-12-31", "2021-12-31", "2022-12-30", "2023-12-29"])
+    st.upsert_prices("TEST", px, source="sina_raw")
+    pe = pd.DataFrame({"value": [20.0, 18.0, 22.0, 19.0]},
+                      index=["2020-12-31", "2021-12-31", "2022-12-30", "2023-12-29"])
+    st.upsert_stock_valuation("TEST", "pe_ttm", pe, source="baidu")
+    dv = pd.DataFrame({"announce_date": ["2021-06-01", "2022-06-01", "2023-06-01"],
+                       "cash_per_share": [3.0, 3.0, 3.0], "stock_div_10": [0, 0, 0],
+                       "trans_10": [0, 0, 0]},
+                      index=["2021-06-15", "2022-06-15", "2023-06-15"])
+    st.upsert_stock_dividend("TEST", dv, source="sina")
+
+    rows = sd.attribution_by_year("TEST", st, years=6)
+    assert [r["year"] for r in rows] == ["2021", "2022", "2023"]
+    for r in rows:                                    # 三段可加 = 总回报(对账)
+        assert abs(r["earnings"] + r["valuation"] + r["dividend"] - r["total"]) < 1e-9
+    # 2021:p0=100 pe0=20(eps5) → p1=120 pe1=18(eps6.667);业绩=eps1/eps0-1=0.3333,分红=3/100=0.03
+    r21 = rows[0]
+    assert abs(r21["earnings"] - ((120 / 18) / (100 / 20) - 1)) < 1e-9
+    assert abs(r21["dividend"] - 0.03) < 1e-9
+
+    # years 截断:years=1 → 只取最近 1 个区间
+    rows1 = sd.attribution_by_year("TEST", st, years=1)
+    assert len(rows1) == 1 and rows1[0]["year"] == "2023"
+
+
+def test_attribution_by_year_empty():
+    st = _store()
+    assert sd.attribution_by_year("NOPE", st) == []
+
+
 # ---- davis_signal (S10) ----
 def test_davis_double_play():
     # 业绩正增加速(0.30>0.10) + PE 扩张 → 强双击
