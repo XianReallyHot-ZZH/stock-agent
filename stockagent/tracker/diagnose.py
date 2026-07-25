@@ -23,11 +23,13 @@ PE_PCT_LOW, PE_PCT_HIGH = 0.20, 0.80   # 估值低/高位分位阈值(④ 敏感
 
 def diagnose_index(close: pd.Series, period: int = ti.MA_PERIOD,
                    lookback: int | None = None) -> dict:
-    """单指数 60日线择时诊断(纯)。组装 trend / deviation / breakout / choppy。"""
+    """单指数 60日线择时诊断(纯)。组装 trend / deviation / breakout / cross / choppy。
+    cross = 真正的穿越事件(突破/跌破应基于此,非「在线上」;breakout_grade 仍给位置强度)。"""
     return {
         "trend": ti.trend_state(close, period),
         "deviation": ti.deviation_extremes(close, period, lookback),
         "breakout": ti.breakout_grade(close, period),
+        "cross": ti.last_ma_cross(close, period),
         "choppy": ti.is_choppy(close, period),
     }
 

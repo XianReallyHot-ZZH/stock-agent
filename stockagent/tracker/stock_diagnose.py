@@ -201,6 +201,7 @@ def diagnose_price_timing(close: pd.Series, period: int = ti.MA_PERIOD,
         "trend": ti.trend_state(close, period),
         "deviation": ti.deviation_extremes(close, period, lookback),
         "breakout": ti.breakout_grade(close, period),
+        "cross": ti.last_ma_cross(close, period),   # 真正的穿越事件(突破/跌破应基于此,非「在线上」)
         "choppy": ti.is_choppy(close, period),
     }
 
@@ -246,6 +247,7 @@ def diagnose_stock(symbol: str, store, config=None) -> dict:
         "revenue_cagr": rev_cagr, "profit_cagr": np_cagr,
         "profit_vol": pvol, "min_profit_growth": min_g,
         "pe_pct": pe_pct, "div_yield": div_yield,
+        "cagr_years": cagr_years, "vol_years": vol_years,  # 窗口(卡片标签用,避免「几年?」的懵)
     }
     primary, secondary = classify_stock(features, params)
 

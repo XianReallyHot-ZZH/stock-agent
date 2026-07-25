@@ -123,6 +123,39 @@ def breakout_grade(close: pd.Series, period: int = MA_PERIOD,
             "price_vs_ma_pct": pct, "ma_trend_up": ma_up, "valid": True}
 
 
+def last_ma_cross(close: pd.Series, period: int = MA_PERIOD) -> dict | None:
+    """最近一次 close 真正穿越 MA(period) 的事件 —— 区别于 breakout_grade(后者把「在线上」
+    也叫突破)。返回 {direction:'up'/'down', date, bars_ago} 或 None(数据不足/从未穿越)。
+      'up'  = 从下方穿到上方(向上突破)
+      'down'= 从上方穿到下方(向下跌破)
+    严格变号判定(sign −1↔+1 才算,触线/贴线 sign=0 不算)。bars_ago = 距最后 bar 的交易日数。"""
+    ma = ma_series(close, period)
+    if ma is None or len(ma) < 2:
+        return None
+    diff = (close - ma).dropna()
+    if len(diff) < 2:
+        return None
+    flips = np.sign(diff).diff().abs() == 2          # 严格穿越(−1↔+1)
+    if not flips.any():
+        return None
+    idx = diff.index[flips.values][-1]
+    pos = diff.index.get_loc(idx)
+    return {"direction": "up" if diff.iloc[pos] > 0 else "down",
+            "date": str(idx), "bars_ago": int(len(diff) - 1 - pos)}
+
+
+def fresh_cross_direction(cross: dict | None, fresh: int = 5) -> str | None:
+    """最近 `fresh`(默认 5) 个交易日内真正穿越 MA 的方向('up'/'down'),否则 None。
+    用于把「有效突破/跌破」锚定到真实穿越事件(而非 breakout_grade 那种「在线上=突破」)。
+    配合 breakout_grade 的 grade≥2(偏离≥2%)即 S13「收盘价穿越 60日线 ±2% 以上」的本意。"""
+    if not cross:
+        return None
+    ago = cross.get("bars_ago")
+    if ago is None or ago > fresh:
+        return None
+    return cross.get("direction")
+
+
 def is_choppy(close: pd.Series, period: int = MA_PERIOD, window: int = 60,
               cross_threshold: int = 6) -> bool:
     """震荡市 flag (S13): price has crossed the MA ≥ cross_threshold times in the last

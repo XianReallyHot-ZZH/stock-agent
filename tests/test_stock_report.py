@@ -13,7 +13,7 @@ def _diag():
         "classification": {"primary": "value", "secondary": []},
         "valuation_zone": {"pe_pct": 0.04, "pb_pct": 0.10, "zone": "低位·便宜", "valid": True},
         "features": {"revenue_cagr": 0.10, "profit_cagr": 0.095, "profit_vol": 0.089,
-                     "pe_pct": 0.04, "div_yield": 0.0397},
+                     "pe_pct": 0.04, "div_yield": 0.0397, "cagr_years": 3, "vol_years": 5},
         "pitfalls": {"net_profit": {"yoy": -0.045, "abnormal": False, "trustworthy": -0.045, "valid": True},
                      "revenue": {"yoy": -0.01, "valid": True},
                      "disclosure": {"latest_period": "20251231", "deadline": "2026-04-30",
@@ -23,8 +23,10 @@ def _diag():
                      "a1_deceleration": False, "a2_turn_bearish": False},
         "davis": {"type": "double_play_watch", "label": "双击观察·低PE+业绩探底待回升",
                   "profit_yoy_latest": -0.045, "pe_change": -0.018, "pe_pct": 0.037, "valid": True},
-        "price_timing": {"deviation": {"pct": 0.12, "valid": True},
-                         "breakout": {"direction": "up", "grade": 1, "label": "突破"}, "valid": True},
+        "price_timing": {"deviation": {"pct": 0.12, "cur_dev": 0.08, "valid": True},
+                         "breakout": {"direction": "up", "grade": 1, "label": "突破"},
+                         "cross": {"direction": "up", "date": "2026-05-10", "bars_ago": 50},
+                         "valid": True},
     }
 
 
@@ -36,6 +38,9 @@ def test_render_contains_key_sections():
     assert "<!DOCTYPE html>" in h
     assert "个股诊断卡片" in h
     assert "贵州茅台" in h
+    assert "营收CAGR(3y)" in h and "净利CAGR(3y)" in h   # CAGR 标窗口年数
+    assert "利润波动(5y)" in h                            # 波动窗口
+    assert "线上+8.0%" in h and "上穿" in h               # E3 诚实展示位置+穿越(非误称突破)
     assert "value" not in h or "#16a34a" in h          # value badge color
     assert "低位·便宜" in h
     assert "双击观察" in h

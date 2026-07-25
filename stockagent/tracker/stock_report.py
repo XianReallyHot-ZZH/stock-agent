@@ -110,6 +110,10 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
     dv_badge = _badge(dv.get("label", "中性"), _C_DAVIS.get(dv_type, _C_DAVIS["neutral"]))
 
     f = d.get("features") or {}
+    _cy, _vy = f.get("cagr_years"), f.get("vol_years")
+    _rev_lbl = f"营收CAGR({_cy}y)" if _cy else "营收CAGR"
+    _np_lbl = f"净利CAGR({_cy}y)" if _cy else "净利CAGR"
+    _vol_lbl = f"利润波动({_vy}y)" if _vy else "利润波动"
     pit = d.get("pitfalls") or {}
     np_ = pit.get("net_profit") or {}
     rev = pit.get("revenue") or {}
@@ -117,7 +121,7 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
     fc = d.get("forecast") or {}
     pt = d.get("price_timing") or {}
     dev = pt.get("deviation") or {}
-    bo = pt.get("breakout") or {}
+    cross = pt.get("cross") or {}
 
     # 预告
     if fc.get("valid"):
@@ -139,6 +143,20 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
                   'onclick="openChart(\'' + sym + '\')">📊</button>'
                   if with_charts else "")
 
+    # E3:诚实展示 —— 当前相对 60 日线的位置(线上/线下+偏离)+ 最近一次真正穿越(≤5 日=新突破/跌破,
+    # 否则只标上穿/下穿日期)。不再把「在线上」误称「突破」。
+    _pos = dev.get("cur_dev")
+    _pos_txt = (f"{'线上' if _pos >= 0 else '线下'}{_pos:+.1%}" if not _nan(_pos) else "—")
+    _cx, _cxd, _cxa = cross.get("direction"), cross.get("date"), cross.get("bars_ago")
+    if _cx and _cxd:
+        _mmdd = str(_cxd)[5:10] if len(str(_cxd)) >= 10 else str(_cxd)
+        if isinstance(_cxa, int) and _cxa <= 5:
+            _cross_txt = f'<span class="muted">· {"突破" if _cx == "up" else "跌破"} {_mmdd}(新)</span>'
+        else:
+            _cross_txt = f'<span class="muted">· {"上穿" if _cx == "up" else "下穿"} {_mmdd}</span>'
+    else:
+        _cross_txt = ""
+
     return f"""
     <div class="card">
       <div class="card-head">
@@ -149,9 +167,9 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
       </div>
       <div class="card-row">{cls_badge} {zone_badge} {dv_badge}</div>
       <table class="metrics">
-        <tr><td>营收CAGR</td><td>{_pct(f.get('revenue_cagr'), True)}</td>
-            <td>净利CAGR</td><td>{_pct(f.get('profit_cagr'), True)}</td></tr>
-        <tr><td>利润波动</td><td>{_pct(f.get('profit_vol'))}</td>
+        <tr><td>{_rev_lbl}</td><td>{_pct(f.get('revenue_cagr'), True)}</td>
+            <td>{_np_lbl}</td><td>{_pct(f.get('profit_cagr'), True)}</td></tr>
+        <tr><td>{_vol_lbl}</td><td>{_pct(f.get('profit_vol'))}</td>
             <td>股息率</td><td>{_pct(f.get('div_yield'))}</td></tr>
         <tr><td>PE(TTM)</td><td>{_num(d.get('pe_ttm'),1)} <span class="muted">(分位{_pct(vz.get('pe_pct'))})</span></td>
             <td>PB</td><td>{_num(d.get('pb'))} <span class="muted">(分位{_pct(vz.get('pb_pct'))})</span></td></tr>
@@ -159,7 +177,7 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
         <tr><td>避坑</td><td colspan="3">{pit_txt} · 营收 {_pct(rev.get('yoy'),True)}</td></tr>
         <tr><td>预告链</td><td colspan="3">{fc_txt}</td></tr>
         <tr><td>披露</td><td colspan="3">{disc_txt}</td></tr>
-        <tr><td>E3偏离</td><td colspan="3">{_pct(dev.get('pct'))} <span class="muted">({html.escape(bo.get('label','—'))} grade{bo.get('grade','—')})</span></td></tr>
+        <tr><td>E3偏离</td><td colspan="3">{_pct(dev.get('pct'))}位 · <b>{_pos_txt}</b> {_cross_txt}</td></tr>
       </table>
     </div>"""
 

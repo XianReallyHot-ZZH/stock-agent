@@ -72,6 +72,35 @@ def test_breakout_grade_ma_confirm_bonus():
     assert g["grade"] >= 2                       # confirmed direction adds +1
 
 
+# ---- last_ma_cross(真正的穿越,区别于 breakout_grade 的「在线上=突破」) ----
+def test_last_ma_cross_finds_last_up_cross():
+    # 涨→跌→涨:必有下穿再上穿,最后一次穿越方向 = up
+    rise1 = [100 + i for i in range(70)]
+    fall = [170 - i for i in range(40)]
+    rise2 = [130 + i for i in range(40)]
+    cx = ti.last_ma_cross(_line(rise1 + fall + rise2), 60)
+    assert cx is not None and cx["direction"] == "up"
+    assert cx["bars_ago"] >= 0 and isinstance(cx["date"], str)
+
+
+def test_last_ma_cross_none_when_monotonic():
+    # 单调上涨 → 始终在 MA 之上 → 从未穿越
+    s = _line([100 + i * 0.5 for i in range(90)])
+    assert ti.last_ma_cross(s, 60) is None
+
+
+def test_last_ma_cross_short_series():
+    assert ti.last_ma_cross(_line([1.0, 2.0, 3.0]), 60) is None
+
+
+# ---- fresh_cross_direction(有效突破闸门:近期真穿越才放行) ----
+def test_fresh_cross_direction_gate():
+    assert ti.fresh_cross_direction(None) is None
+    assert ti.fresh_cross_direction({"direction": "up", "bars_ago": 2, "date": "x"}) == "up"
+    assert ti.fresh_cross_direction({"direction": "down", "bars_ago": 5, "date": "x"}) == "down"
+    assert ti.fresh_cross_direction({"direction": "up", "bars_ago": 6, "date": "x"}) is None  # >5 太久
+
+
 def test_is_choppy_detects_sawtooth():
     # oscillate around 100 every few bars → many MA crosses
     vals = []

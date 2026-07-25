@@ -8,11 +8,15 @@ def _snap(**kw):
     return base
 
 
-def _idx(breakout_dir="none", grade=0, above_ma=False, ma_trend_up=False, choppy=False, valid=True):
+def _idx(breakout_dir="none", grade=0, above_ma=False, ma_trend_up=False, choppy=False, valid=True,
+         cross_dir=None, cross_ago=3):
+    cross = ({"direction": cross_dir, "bars_ago": cross_ago, "date": "2026-07-18"}
+             if cross_dir else None)
     return {"indices": {"000300": {
         "name": "沪深300", "valid": valid,
         "diagnosis": {
             "breakout": {"direction": breakout_dir, "grade": grade},
+            "cross": cross,
             "trend": {"above_ma": above_ma, "ma_trend_up": ma_trend_up},
             "choppy": choppy,
         }}}, "valuation": {}, "style": {}, "period": 60}
@@ -98,26 +102,38 @@ def test_stock_no_alerts_when_clean():
 
 
 def test_E2_breakdown_and_F1():
-    a = alerts.evaluate({}, _idx(breakout_dir="down", grade=3, above_ma=False, ma_trend_up=False))
+    a = alerts.evaluate({}, _idx(breakout_dir="down", grade=3, above_ma=False, ma_trend_up=False,
+                                cross_dir="down"))
     assert "E2" in _rules(a) and "F1" in _rules(a)
     assert any(x["rule"] == "E2" and x["level"] == "warn" for x in a)
 
 
 def test_E1_breakout_info():
-    a = alerts.evaluate({}, _idx(breakout_dir="up", grade=3, above_ma=True, ma_trend_up=True))
+    a = alerts.evaluate({}, _idx(breakout_dir="up", grade=3, above_ma=True, ma_trend_up=True,
+                                cross_dir="up"))
     assert any(x["rule"] == "E1" and x["level"] == "info" for x in a)
 
 
 def test_E1_choppy_suppressed():
     # 震荡市的突破信号被抑制(E1 不触发 info)
-    a = alerts.evaluate({}, _idx(breakout_dir="up", grade=3, choppy=True))
+    a = alerts.evaluate({}, _idx(breakout_dir="up", grade=3, choppy=True, cross_dir="up"))
     assert not any(x["rule"] == "E1" and x["level"] == "info" for x in a)
 
 
 def test_E_low_grade_not_triggered():
     # grade 1(< 2 有效阈值)不触发 E1/E2
-    a = alerts.evaluate({}, _idx(breakout_dir="up", grade=1))
+    a = alerts.evaluate({}, _idx(breakout_dir="up", grade=1, cross_dir="up"))
     assert "E1" not in _rules(a) and "E2" not in _rules(a)
+
+
+def test_E1_stale_above_no_recent_cross_not_triggered():
+    # 一直在均线上(grade3)但无近期穿越 → 不应误触发 E1(修复前的 bug:在线上就叫突破)
+    a = alerts.evaluate({}, _idx(breakout_dir="up", grade=3, above_ma=True, ma_trend_up=True,
+                                cross_dir=None))
+    assert "E1" not in _rules(a)
+    # 穿越但太久远(30 天前)也不算「有效突破」
+    a2 = alerts.evaluate({}, _idx(breakout_dir="up", grade=3, cross_dir="up", cross_ago=30))
+    assert "E1" not in _rules(a2)
 
 
 def test_D_chip_phase_bear_and_bull():

@@ -101,9 +101,14 @@ def _trend_table_html(diag: dict) -> str:
         above = "线上▲" if t["above_ma"] else "线下▼"
         above_c = _PAL["good"] if t["above_ma"] else _PAL["critical"]
         mtrend = "↑" if t["ma_trend_up"] else ("↓" if t["ma_trend_up"] is False else "—")
-        bo_dir = bo["direction"]
-        bo_label = {"up": "突破", "down": "跌破", "none": "中性"}[bo_dir] + f" g{bo['grade']}"
-        bo_c = _PAL["good"] if bo_dir == "up" else _PAL["critical"] if bo_dir == "down" else _PAL["muted"]
+        # 突破/跌破 只在「近期真穿越」时标;仅在线上/下但无穿越 → 中性(不再误称突破)
+        fresh = ti.fresh_cross_direction(dg.get("cross"))
+        if fresh == "up":
+            bo_label, bo_c = f"突破 g{bo['grade']}", _PAL["good"]
+        elif fresh == "down":
+            bo_label, bo_c = f"跌破 g{bo['grade']}", _PAL["critical"]
+        else:
+            bo_label, bo_c = "中性", _PAL["muted"]
         choppy = f'<span style="color:{_PAL["warning"]}">⚠震荡</span>' if dg["choppy"] else "趋势"
         dev_txt = (f"{dev['cur_dev']:+.1%} / {dev['pct']:.0%}位"
                    if not pd.isna(dev["pct"]) and not pd.isna(dev["cur_dev"]) else "—")
@@ -115,8 +120,8 @@ def _trend_table_html(diag: dict) -> str:
             "<th>指数</th><th>60日线</th><th>均线趋势</th><th>突破跌破</th><th>市态</th><th>偏离度</th>"
             "</tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
             "<div class='hint' style='margin-top:8px'>列定义:60日线=价 vs 均线(线上/下) · "
-            "均线趋势=均线升降 · 突破跌破 gN=穿越强度(N越大越确定) · 市态=趋势/震荡(震荡时信号谨慎) · "
-            "偏离度=(价格−均线)÷均线%(绝对值 / 历史分位;近 0% 超卖 / 近 100% 超买)</div>")
+            "均线趋势=均线升降 · 突破跌破=近5日真穿越才标(无穿越=中性;gN=偏离≥2%/3% 强度) · "
+            "市态=趋势/震荡(震荡时信号谨慎) · 偏离度=(价格−均线)÷均线%(绝对值 / 历史分位)</div>")
 
 
 # ---- ③ 估值开关 stat tile ----
@@ -209,13 +214,16 @@ def _signals_html(diag: dict) -> str:
         if not info.get("valid"):
             continue
         dg = info["diagnosis"]; bo = dg["breakout"]
-        if bo["direction"] in ("up", "down") and bo["grade"] >= 2:
-            dir_cn = "有效突破▲" if bo["direction"] == "up" else "有效跌破▼"
-            c = _PAL["good"] if bo["direction"] == "up" else _PAL["critical"]
+        fresh = ti.fresh_cross_direction(dg.get("cross"))   # 真穿越闸门(非「在线上」)
+        if fresh in ("up", "down") and bo["grade"] >= 2:
+            ago = (dg.get("cross") or {}).get("bars_ago", "?")
+            dir_cn = "有效突破▲" if fresh == "up" else "有效跌破▼"
+            c = _PAL["good"] if fresh == "up" else _PAL["critical"]
             warn = " <span class='hint'>(震荡市,信号谨慎)</span>" if dg["choppy"] else ""
-            sigs.append(f"<li>{info['name']}({sym}): {_chip(dir_cn + ' g' + str(bo['grade']), c)}{warn}</li>")
+            sigs.append(f"<li>{info['name']}({sym}): {_chip(dir_cn + ' g' + str(bo['grade']), c)}"
+                        f" <span class='hint'>{ago}日前穿越</span>{warn}</li>")
     if not sigs:
-        return "<p class='hint'>当前无有效突破/跌破信号(grade ≥ 2)</p>"
+        return "<p class='hint'>当前无有效突破/跌破信号(近5日真穿越 + 偏离≥2%)</p>"
     return "<ul class='sig-list'>" + "".join(sigs) + "</ul>"
 
 
@@ -281,8 +289,9 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<h2>④ 蓝筹 vs 成长 仓位倾向</h2><section>{_style_card_html(diag['style'])}</section>"
         f"<h2>② 趋势状态</h2><section>{_trend_table_html(diag)}</section>"
         f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}"
-        f"<div class='hint' style='margin-top:8px'>有效突破/跌破 = 收盘价穿越 60 日线 ±2% 以上(S13);"
-        f"gN = 强度档位(2=±2%、3=±3%,+1 若均线方向确认),N 越大越确定。仅列 grade≥2;震荡市标注信号谨慎。</div></section>"
+        f"<div class='hint' style='margin-top:8px'>有效突破/跌破 = 近 5 日内真正穿越 60 日线 + 偏离≥2%"
+        f"(S13「收盘价穿越 60 日线 ±2% 以上」);gN=强度(2=±2%、3=±3%)。仅在线上/下但无近期穿越者不计;"
+        f"震荡市标注信号谨慎。</div></section>"
         f"<h2>① 偏离极值曲线</h2><section>"
         f"<div class='hint' style='margin-bottom:10px'>主图:收盘价 vs 60日线;副图:偏离度(价格−均线)÷均线,"
         f"虚线=历史极值(红=正极值/超买,蓝=负极值/超卖),黑点=当前。"

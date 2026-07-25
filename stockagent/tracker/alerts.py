@@ -17,6 +17,8 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
+from . import indicators as ti
+
 _DIV_THRESHOLD = 0.05  # B1: 股息率 > 5% 视为偏高(买入窗口)
 
 # ---- C2 个股提醒阈值(Phase 2)----
@@ -59,15 +61,17 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
             if not info.get("valid"):
                 continue
             dg = info["diagnosis"]; bo = dg["breakout"]
+            # 有效突破/跌破 = 近期真穿越(fresh_cross_direction) + 偏离≥2%(grade≥2),非「在线上」
+            fresh = ti.fresh_cross_direction(dg.get("cross"))
             # E1: 有效突破(震荡市抑制 — 趋势信号是噪音)
-            if bo["direction"] == "up" and bo["grade"] >= 2 and not dg["choppy"]:
+            if bo["direction"] == "up" and bo["grade"] >= 2 and fresh == "up" and not dg["choppy"]:
                 alerts.append({"level": "info", "scope": f"指数·{info['name']}", "rule": "E1",
-                               "msg": f"{info['name']} 60日线有效突破(grade{bo['grade']})→ 右侧买点"})
+                               "msg": f"{info['name']} 60日线有效突破(grade{bo['grade']},近期穿越)→ 右侧买点"})
             # E2: 有效跌破(震荡市仍提示,但标注谨慎)
-            elif bo["direction"] == "down" and bo["grade"] >= 2:
+            elif bo["direction"] == "down" and bo["grade"] >= 2 and fresh == "down":
                 chop = "(震荡市,信号谨慎)" if dg["choppy"] else ""
                 alerts.append({"level": "warn", "scope": f"指数·{info['name']}", "rule": "E2",
-                               "msg": f"{info['name']} 60日线有效跌破(grade{bo['grade']})→ 止盈止损{chop}"})
+                               "msg": f"{info['name']} 60日线有效跌破(grade{bo['grade']},近期穿越)→ 止盈止损{chop}"})
         # F1: 沪深300 大盘风险开关
         hs = index_diag.get("indices", {}).get("000300", {})
         if hs.get("valid"):
