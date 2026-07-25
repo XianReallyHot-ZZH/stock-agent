@@ -9,7 +9,7 @@ def _snap(**kw):
 
 
 def _idx(breakout_dir="none", grade=0, above_ma=False, ma_trend_up=False, choppy=False, valid=True,
-         cross_dir=None, cross_ago=3, rc_env_pos=None):
+         cross_dir=None, cross_ago=3, rc_env_pos=None, tv_dry=None):
     cross = ({"direction": cross_dir, "bars_ago": cross_ago, "date": "2026-07-18"}
              if cross_dir else None)
     base = {"indices": {"000300": {
@@ -22,6 +22,10 @@ def _idx(breakout_dir="none", grade=0, above_ma=False, ma_trend_up=False, choppy
         }}}, "valuation": {}, "style": {}, "period": 60}
     if rc_env_pos is not None:
         base["relative_cycle"] = {"valid": True, "env_pos": rc_env_pos}
+    if tv_dry is not None:
+        base["turnover"] = {"valid": True, "is_dry": tv_dry,
+                            "ratio_now": 0.5 if tv_dry else 0.9,
+                            "turnover_yi": 5000.0, "win_rate_20": 0.5, "sample": 134}
     return base
 
 
@@ -154,6 +158,17 @@ def test_E5_no_fire_at_center():
     # 中枢(env_pos 20-80%)不发 E5
     a = alerts.evaluate({}, _idx(rc_env_pos=0.50))
     assert not any(x["rule"] == "E5" for x in a)
+
+
+# ---- V1 ⑧成交量地量(两市成交额/MA250≤0.6 → 量底信号)----
+def test_V1_volume_dry_fires():
+    a = alerts.evaluate({}, _idx(tv_dry=True))
+    assert any(x["rule"] == "V1" and x["level"] == "info" for x in a)
+
+
+def test_V1_not_dry_no_fire():
+    a = alerts.evaluate({}, _idx(tv_dry=False))
+    assert not any(x["rule"] == "V1" for x in a)
 
 
 def test_D_chip_phase_bear_and_bull():

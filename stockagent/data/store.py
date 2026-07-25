@@ -108,6 +108,13 @@ CREATE TABLE IF NOT EXISTS market_pb (
     pct_10y   REAL,
     source    TEXT
 );
+CREATE TABLE IF NOT EXISTS market_turnover (
+    date   TEXT PRIMARY KEY,
+    sse    REAL,
+    sz     REAL,
+    total  REAL,
+    source TEXT
+);
 CREATE TABLE IF NOT EXISTS etf_dividend (
     symbol              TEXT NOT NULL,
     date                TEXT NOT NULL,
@@ -710,6 +717,53 @@ class Store:
     def last_market_pb_date(self) -> Optional[str]:
         with self._conn() as c:
             row = c.execute("SELECT MAX(date) FROM market_pb").fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- 两市日成交额(⑧ 成交量地量监测 · baostock)----
+    def upsert_market_turnover(self, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with sse/sz/total (yuan). SSE=sh.000001, SZ=sz.399001."""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = [
+            (str(d), _f(r.get("sse")), _f(r.get("sz")), _f(r.get("total")), source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO market_turnover(date,sse,sz,total,source) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
+                "sse=excluded.sse,sz=excluded.sz,total=excluded.total,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_market_turnover_series(self, start: Optional[str] = None,
+                                   end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,sse,sz,total FROM market_turnover"
+        params: list = []
+        clauses = []
+        if start:
+            clauses.append("date>=?")
+            params.append(start)
+        if end:
+            clauses.append("date<=?")
+            params.append(end)
+        if clauses:
+            q += " WHERE " + " AND ".join(clauses)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_market_turnover_date(self) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(date) FROM market_turnover").fetchone()
             return row[0] if row and row[0] else None
 
     # ---- ETF dividend (V4 tracker · 价值型股息率) ----

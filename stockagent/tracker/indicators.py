@@ -24,6 +24,14 @@ MA_PERIOD = 60  # S12-13: 60日均线(中线趋势;短线可用20)
 
 CYCLE_PCT_LOW, CYCLE_PCT_HIGH = 0.20, 0.80  # ⑦周期分位极点阈值(镜像 PE_PCT_LOW/HIGH)
 
+TURNOVER_LOW_WINDOW = 252 * 3      # (保留:成交额创近 3 年新低,仅作辅助 chip;event-study 不用)
+TURNOVER_MA = 250                    # ⑧地量基准:成交额 / MA250(1 年均线)
+TURNOVER_DRY_THRESHOLD = 0.6         # ⑧地量 = 成交额萎缩到 MA250 的 0.6 以下(regime 自适应,消除名义额长期上行)
+TURNOVER_COOLDOWN = 20               # ⑧地量事件间至少 20 个交易日(去簇,避免一次地量期反复计数)
+TURNOVER_FORWARD = (5, 10, 20, 40, 60)  # ⑧ event-study 前瞻窗口(交易日;20≈1月,60≈3月)
+TURNOVER_MATURE_START = "2000-01-01"  # ⑧ event-study 仅取成熟市场(排除 90s 幼年期:成交额百万级+指数暴升会虚高胜率)
+TURNOVER_EXTREME_LOOKBACK = 0.5       # ⑧极端地量 = 近 >0.5 年最低(lookback 大于此;实测胜率有梯度 42%→71%)
+
 
 def ma_series(close: pd.Series, period: int = MA_PERIOD) -> pd.Series:
     """Rolling SMA over the whole series (NaN for the first period-1 bars).
@@ -317,3 +325,110 @@ def consecutive_run(spread: pd.Series, window: int = 60) -> dict:
             break
     return {"direction": "上证跑盈" if last_sign > 0 else "创业板跑盈",
             "run": run, "valid": True}
+
+
+# ---- ⑧ 成交量地量监测(两市成交额/MA250 萎缩 → 量底/价底 event-study)----
+def turnover_percentile(turnover: pd.Series, lookback: int | None = None) -> float:
+    """当前成交额在历史的分位(0=最低/地量, 1=最高/天量)。去零;lookback>0 仅末尾窗口。
+    NaN if <20 点。仅作'当前量级在哪'参考;地量判定用 turnover_dry_events(相对口径)。"""
+    s = pd.Series(turnover, dtype=float).dropna()
+    s = s[s > 0]
+    if lookback:
+        s = s.iloc[-lookback:]
+    if len(s) < 20:
+        return float("nan")
+    cur = float(s.iloc[-1])
+    return float((s < cur).sum()) / len(s)
+
+
+def turnover_dry_events(turnover: pd.Series, ma: int = TURNOVER_MA,
+                        threshold: float = TURNOVER_DRY_THRESHOLD,
+                        cooldown: int = TURNOVER_COOLDOWN,
+                        start: str | None = None) -> list:
+    """地量事件日:成交额 / MA(ma) ≤ threshold(regime 自适应——除以 1 年均值,自动消除名义额
+    长期上行的影响,每个熊市都能触发,而非只抓极罕见的绝对新低)。事件间 ≥cooldown 个交易日去簇。
+    start(YYYY-MM-DD) 仅取该日及之后的事件(event-study 排除 90s 幼年期用)。返回事件 index 列表。"""
+    s = pd.Series(turnover, dtype=float).dropna()
+    s = s[s > 0]
+    if len(s) < ma + 1:
+        return []
+    ratio = s / s.rolling(ma).mean()
+    is_dry = ratio <= threshold
+    cands = [idx for idx in s.index[is_dry.to_numpy()]
+             if start is None or str(idx) >= start]
+    out, last_pos = [], -(10 ** 9)
+    for idx in cands:
+        pos = s.index.get_loc(idx)
+        if pos - last_pos >= cooldown:
+            out.append(idx)
+            last_pos = pos
+    return out
+
+
+def volume_bottom_stats(turnover: pd.Series, index_close: pd.Series,
+                        ma: int = TURNOVER_MA, threshold: float = TURNOVER_DRY_THRESHOLD,
+                        forward: tuple = TURNOVER_FORWARD,
+                        cooldown: int = TURNOVER_COOLDOWN,
+                        start: str | None = None,
+                        min_lookback: float | None = None) -> dict:
+    """event-study(⑧ 核心,dashboard 与 validate 脚本共用):历史每次地量(成交额/MA≤threshold)
+    后,指数前瞻收益 + 量底到价底天数。turnover 与 index_close 需同索引对齐(按日)。
+
+    返回 {detected, sample, win_rate_{N}, median_ret_{N} (N∈forward),
+          time_to_bottom_median, time_to_bottom_max}。
+    start 排除 90s 幼年期;min_lookback>0 仅取 lookback(近X年最低)≥该值的事件(极端子集)。
+    实测(成熟市场 2000+):时效(量底→价底中位~30 交易日)扎实;但各 horizon 胜率均~50%(无 edge)。
+    极端子集(lookback>0.5)60日胜率~71% 但样本薄(p≈0.09 未显著)→ 暗示非定律。"""
+    df = pd.DataFrame({"t": pd.Series(turnover, dtype=float),
+                       "px": pd.Series(index_close, dtype=float)}).dropna()
+    df = df[df["t"] > 0]
+    if len(df) < ma + max(forward) + 1:
+        return {"detected": 0, "sample": 0, "time_to_bottom_median": float("nan"),
+                "time_to_bottom_max": float("nan")}
+    events = turnover_dry_events(df["t"], ma, threshold, cooldown, start)
+    if min_lookback is not None:
+        lby_map = turnover_new_low_years(df["t"]).to_dict()
+        events = [e for e in events
+                  if not np.isnan(lby_map.get(e, np.nan)) and lby_map[e] >= min_lookback]
+    max_fwd = max(forward)
+    rets = {N: [] for N in forward}
+    ttbs = []
+    sample = 0
+    for idx in events:
+        pos = df.index.get_loc(idx)
+        if pos + max_fwd >= len(df):    # 太近,前瞻数据不足 → 跳过(不计 sample)
+            continue
+        px0 = float(df["px"].iloc[pos])
+        seg = df["px"].iloc[pos + 1: pos + 1 + max_fwd]
+        if len(seg) == 0:
+            continue
+        ttbs.append(int(seg.values.argmin()) + 1)   # 最低收盘距事件日的交易日数
+        sample += 1
+        for N in forward:
+            rets[N].append(float(df["px"].iloc[pos + N]) / px0 - 1.0)
+    out = {"detected": len(events), "sample": sample}
+    for N in forward:
+        r = rets[N]
+        out[f"win_rate_{N}"] = float(np.mean([1 if x > 0 else 0 for x in r])) if r else float("nan")
+        out[f"median_ret_{N}"] = float(np.median(r)) if r else float("nan")
+    out["time_to_bottom_median"] = float(np.median(ttbs)) if ttbs else float("nan")
+    out["time_to_bottom_max"] = float(np.max(ttbs)) if ttbs else float("nan")
+    return out
+
+
+def turnover_new_low_years(turnover: pd.Series) -> pd.Series:
+    """每个 bar 的成交额'创多少年新低' = 距上一个更低成交额日的年数(无更低 → 距序列起点的年数)。
+    单调栈 O(n);值越大 = 越极端(要回溯越久才找到更冷清的一天)。用于地量事件的'多么地'悬停标注。"""
+    s = pd.Series(turnover, dtype=float).dropna()
+    s = s[s > 0]
+    vals = s.to_numpy(dtype=float)
+    n = len(vals)
+    res = np.full(n, np.nan)
+    stack: list[int] = []
+    for i in range(n):
+        while stack and vals[stack[-1]] >= vals[i]:
+            stack.pop()
+        prev = stack[-1] if stack else -1
+        res[i] = (i - prev) / 252.0 if prev >= 0 else i / 252.0
+        stack.append(i)
+    return pd.Series(res, index=s.index)

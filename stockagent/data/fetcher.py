@@ -168,6 +168,53 @@ def _fetch_baostock(symbol, adjust, start, end, timeout):
     return _normalize(df), f"baostock_{adjust}"
 
 
+def fetch_market_turnover(start=None, end=None, timeout=60.0):
+    """两市日成交额(元,baostock)= 上交所(sh.000001 amount) + 深交所(sz.399001 amount)。
+    baostock 的指数 amount = 交易所总成交额(已验证 sz.399001 与 399106 完全一致 → 交易所总数,非成分和)。
+    返回 DataFrame indexed by date(str), cols: sse/sz/total。历史回溯 ~1991。"""
+    import baostock as bs
+    end = end or today_str()
+    start = start or "1991-01-01"
+
+    def _query(code):
+        rs = bs.query_history_k_data_plus(
+            code, "date,amount", start_date=start, end_date=end,
+            frequency="d", adjustflag="3",
+        )
+        out = {}
+        while rs.error_code == "0" and rs.next():
+            r = rs.get_row_data()
+            if r[1] not in ("", None):
+                try:
+                    out[r[0]] = float(r[1])
+                except ValueError:
+                    pass
+        return out
+
+    def _do():
+        lg = bs.login()
+        if lg.error_code != "0":
+            raise FetchError(f"baostock login {lg.error_msg}")
+        try:
+            return _query("sh.000001"), _query("sz.399001")
+        finally:
+            try:
+                bs.logout()
+            except Exception:  # noqa: BLE001
+                pass
+
+    sse, sz = _run_with_timeout(_do, timeout)
+    dates = sorted(set(sse) | set(sz))
+    if not dates:
+        raise FetchError("empty market turnover")
+    rows = []
+    for d in dates:
+        s, z = sse.get(d), sz.get(d)
+        parts = [v for v in (s, z) if v is not None]
+        rows.append((d, s, z, sum(parts) if parts else None))
+    return pd.DataFrame(rows, columns=["date", "sse", "sz", "total"]).set_index("date")
+
+
 _SOURCES = [_fetch_eastmoney, _fetch_sina, _fetch_baostock]
 
 

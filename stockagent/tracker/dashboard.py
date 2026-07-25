@@ -1,4 +1,4 @@
-"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 七件套(V4 tracker)。
+"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 八件套(V4 tracker)。
 
 ① 偏离极值曲线(close+MA60 主图 / 偏离度副图+历史极值线+当前点)
 ② 6宽基趋势状态表(60日线上下/均线趋势/突破跌破档位/震荡市)
@@ -7,6 +7,7 @@
 ⑤ 当前有效突破/跌破信号列表
 ⑥ 市场温度·大小盘温差(全市场 PB 分位 vs 沪深300 PB 分位)
 ⑦ 相对周期律·沪深成长温差(创业板 vs 上证 点差:5年包络位置 → 极点/中枢 + 历史稀有度 + 漂移)
+⑧ 成交量地量监测(两市成交额/MA250 → 地量 flag + 量价 event-study 时效/胜率)
 
 配色遵循 dataviz skill 中性参考调色板:文字用 ink token 不穿 series 色;状态用 status
 chip(icon+label,不单靠色);A股语义下正偏离(超买)暖红、负偏离(超卖)冷蓝。
@@ -337,6 +338,123 @@ def _cycle_stage_chip(diag: dict) -> str:
             f" → 估值+趋势极值合成读大盘阶段(定性参考,非交易信号)</div>")
 
 
+# ---- ⑧ 成交量地量监测(两市成交额/MA250 → 地量 + 量价 event-study)----
+def _turnover_figure(turnover_df: pd.DataFrame, index_close: pd.Series,
+                     dry_events: list) -> go.Figure:
+    """上证综指(左轴) + 两市成交额(右轴) 双轴;地量事件(成交额/MA250≤0.6)打点标注。"""
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Scatter(x=pd.to_datetime(index_close.index), y=index_close.to_numpy(),
+                             name="上证综指", line=dict(color=_PAL["series_1"], width=1.6)),
+                  secondary_y=False)
+    fig.add_trace(go.Scatter(x=pd.to_datetime(turnover_df.index),
+                             y=(turnover_df["total"] / 1e8).to_numpy(),
+                             name="两市成交额(亿)", line=dict(color=_PAL["series_2"], width=1.3),
+                             opacity=0.85), secondary_y=True)
+    if len(dry_events):
+        tot = turnover_df["total"]
+        vmap = tot.to_dict()
+        ratio = (tot / tot.rolling(ti.TURNOVER_MA).mean()).to_dict()
+        lby = ti.turnover_new_low_years(tot).to_dict()
+
+        def _dry_trace(subset, name, color, size, opacity):
+            if not subset:
+                return
+            customdata = [[vmap.get(d, float("nan")) / 1e8,
+                           ratio.get(d, float("nan")),
+                           lby.get(d, float("nan"))] for d in subset]
+            fig.add_trace(go.Scatter(
+                x=pd.to_datetime([str(d) for d in subset]),
+                y=[vmap.get(d, float("nan")) / 1e8 for d in subset],
+                name=name, mode="markers",
+                marker=dict(color=color, size=size, opacity=opacity,
+                            line=dict(color=_PAL["ink"], width=0.5)),
+                customdata=customdata,
+                hovertemplate=("<b>%{x|%Y-%m-%d}</b> " + name + "<br>"
+                               "成交额 %{customdata[0]:.0f} 亿<br>"
+                               "/MA250 = %{customdata[1]:.2f}(越低越地)<br>"
+                               "近 %{customdata[2]:.1f} 年最低成交额<extra></extra>")),
+                secondary_y=True)
+
+        ext_lb = ti.TURNOVER_EXTREME_LOOKBACK
+        extreme = [d for d in dry_events if lby.get(d, float("nan")) >= ext_lb]
+        normal = [d for d in dry_events if not (lby.get(d, float("nan")) >= ext_lb)]
+        _dry_trace(normal, "地量(普通)", _PAL["warning"], 6, 0.55)
+        _dry_trace(extreme, "地量(极端·近>0.5年最低)", _PAL["critical"], 10, 0.9)
+    fig.update_layout(
+        height=460, margin=dict(l=55, r=60, t=30, b=30),
+        paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+        font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=True)
+    fig.update_yaxes(title_text="上证综指", secondary_y=False, gridcolor=_PAL["grid"],
+                     zerolinecolor=_PAL["baseline"])
+    fig.update_yaxes(title_text="成交额(亿)", secondary_y=True, gridcolor=_PAL["grid"])
+    fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m-%d",
+                     rangeslider_visible=True,
+                     rangeselector=dict(buttons=[
+                         dict(count=1, label="1年", step="year", stepmode="backward"),
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(count=5, label="5年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
+    return fig
+
+
+def _turnover_html(t: dict, fig_html: str = "") -> str:
+    if not t.get("valid"):
+        return "<p class='hint'>成交量地量监测数据不足(需 两市成交额 + 上证综指 各 ≥1 年)</p>"
+    dry = t["is_dry"]
+    dry_chip = _chip("⚠ 地量区" if dry else "非地量",
+                     _PAL["warning"] if dry else _PAL["ink_sec"])
+    dsd = t["days_since_dry"]
+    row1 = (
+        f"<div class='tile'><div class='tile-label'>当前两市成交额</div>"
+        f"<div class='tile-value'>{t['turnover_yi']:.0f}<span style='font-size:14px'>亿</span></div>"
+        f"<div class='tile-sub'>/MA250 = {t['ratio_now']:.2f} · 地量阈值 0.6</div></div>"
+        f"{_meter('3年成交额分位', t['pct_3yr'], '低=地量区 · 高=天量')}"
+        f"{_meter('5年成交额分位', t['pct_5yr'], '低=地量区 · 高=天量')}"
+        f"<div class='tile'><div class='tile-label'>距上次地量</div>"
+        f"<div class='tile-value'>{dsd if dsd is not None else '—'}<span style='font-size:14px'>交易日</span></div>"
+        f"<div class='tile-sub'>地量=成交额/MA250≤0.6</div></div>")
+    wr20, wr60, mr60 = t["win_rate_20"], t["win_rate_60"], t["median_ret_60"]
+    row2 = (
+        f"<div class='tile'><div class='tile-label'>量底→价底(经验)</div>"
+        f"<div class='tile-value' style='color:{_PAL['good']}'>中位 {t['time_to_bottom_median']:.0f}日</div>"
+        f"<div class='tile-sub'>最长 {t['time_to_bottom_max']:.0f}日 · 时效扎实</div></div>"
+        f"<div class='tile'><div class='tile-label'>地量后20日胜率</div>"
+        f"<div class='tile-value' style='color:{_PAL['ink_sec']}'>{wr20 * 100:.0f}%</div>"
+        f"<div class='tile-sub'>≈抛硬币(价仍跌向底)</div></div>"
+        f"<div class='tile'><div class='tile-label'>地量后60日胜率</div>"
+        f"<div class='tile-value' style='color:{_PAL['ink_sec']}'>{wr60 * 100:.0f}%</div>"
+        f"<div class='tile-sub'>中位收益 {mr60 * 100:+.1f}% · 成熟市场无优势</div></div>"
+        f"<div class='tile'><div class='tile-label'>样本数</div>"
+        f"<div class='tile-value'>{t['sample']}</div>"
+        f"<div class='tile-sub'>成熟市场(2000+)地量事件</div></div>")
+    hint = ("量价框架:地量 = 成交额/MA250≤0.6(regime 自适应)。"
+            "<b>时效扎实</b>:量底→价底中位 ~1 月(唯一站得住的论断)。"
+            "<b>胜率无优势</b>:各 horizon 均~50%(成熟市场 2000+;90s 幼年期会虚高,已排除)。"
+            "→ 地量≠高胜率买点,只提示'价底临近'。样本偏稀(~80 次/20 年)→ 经验参考。叠估值开关③更可信。")
+    ex_n = t.get("extreme_sample") or 0
+    ex_wr = t.get("extreme_win_rate_60")
+    ex_p = t.get("extreme_pvalue")
+    ex_box = ""
+    if ex_n and not pd.isna(ex_wr) and not pd.isna(ex_p):
+        cmp = ("高于" if (not pd.isna(t.get("win_rate_60")) and ex_wr > t["win_rate_60"])
+               else "未高于")
+        ex_box = (f"<div style='margin-top:10px;padding:8px 12px;background:{_PAL['warning']}1A;"
+                  f"border-left:3px solid {_PAL['critical']};border-radius:4px;font-size:13px'>"
+                  f"🔥 <b>极端地量(近>0.5年最低)</b>: 60日胜率 <b>{ex_wr * 100:.0f}%</b>"
+                  f" · 样本 {ex_n} · p={ex_p:.2f}(未显著) — "
+                  f"<span class='hint'>较全样本{cmp},但样本薄、非定律,不能据此加仓</span></div>")
+    out = (f"<div class='tiles-row'>{row1}</div>"
+           f"<div style='margin-top:10px'>{dry_chip} <span class='hint'>"
+           f"{'成交额萎缩,处地量区' if dry else '成交额未萎缩(非地量)'}</span></div>"
+           f"<div class='tiles-row' style='margin-top:12px'>{row2}</div>"
+           f"{ex_box}"
+           f"<div class='hint' style='margin-top:8px'>{hint}</div>")
+    if fig_html:
+        out += f"<div style='margin-top:10px'>{fig_html}</div>"
+    return out
+
+
 _CSS = """
 :root{--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink-sec:#52514e;--muted:#898781;--grid:#e1e0d9;--hover:#f4f3ef}
 [data-theme="dark"]{--surface:#1a1a19;--plane:#0d0d0d;--ink:#ffffff;--ink-sec:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--hover:#262624}
@@ -391,6 +509,19 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                     full_html=False, include_plotlyjs=True)
         except Exception:  # noqa: BLE001
             rc_fig_html = ""
+    # ⑧ 成交量地量监测 figure (plotly.js 已由 ⑦ 或 ① 首图加载 → include_plotlyjs=False)
+    tv = diag.get("turnover") or {}
+    tv_fig_html = ""
+    if tv.get("valid"):
+        try:
+            _mt = store.get_market_turnover_series()
+            _ipx = store.get_index_daily_series(tv["index"])["close"]
+            _iev = ti.turnover_dry_events(_mt["total"], start=ti.TURNOVER_MATURE_START)
+            if len(_mt) and len(_ipx):
+                tv_fig_html = _turnover_figure(_mt, _ipx, _iev).to_html(
+                    full_html=False, include_plotlyjs=False)
+        except Exception:  # noqa: BLE001
+            tv_fig_html = ""
     figs_html, first = [], (rc_fig_html == "")   # ⑦ 已加载 plotly.js → ① 首图不再重复
     for sym, nm in dz.BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -411,6 +542,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<h2>③ 估值开关</h2><section>{_valuation_tile_html(diag['valuation'])}</section>"
         f"<h2>⑥ 市场温度·大小盘温差</h2><section>{_market_temp_html(diag['market_temp'])}</section>"
         f"<h2>⑦ 相对周期律·沪深成长温差</h2><section>{_relative_cycle_html(rc, rc_fig_html)}</section>"
+        f"<h2>⑧ 成交量地量监测</h2><section>{_turnover_html(tv, tv_fig_html)}</section>"
         f"<h2>④ 蓝筹 vs 成长 仓位倾向</h2><section>{_style_card_html(diag['style'])}</section>"
         f"<h2>② 趋势状态</h2><section>{_trend_table_html(diag)}</section>"
         f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}"

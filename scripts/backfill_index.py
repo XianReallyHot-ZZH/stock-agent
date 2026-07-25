@@ -53,19 +53,26 @@ def _summary(dm: DataManager):
               f"最新PB={float(df['pb'].iloc[-1]):.3f}")
     else:
         print("  全市场PB: (无)")
+    df = store.get_market_turnover_series()
+    if len(df):
+        print(f"  两市成交额: {len(df)} 行, {df.index.min()}..{df.index.max()} | "
+              f"最新={float(df['total'].iloc[-1]) / 1e8:.0f}亿")
+    else:
+        print("  两市成交额: (无)")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--daily", action="store_true", help="only 5 broad-index daily OHLCV")
+    ap.add_argument("--daily", action="store_true", help="only 6 broad-index daily OHLCV")
     ap.add_argument("--pe", action="store_true", help="指数 PE+PB (沪深300/上证50/中证500)")
     ap.add_argument("--pb", action="store_true", help="only whole-market PB")
+    ap.add_argument("--turnover", action="store_true", help="only 两市日成交额(⑧地量监测,baostock)")
     args = ap.parse_args()
     setup_logging()
     cfg = get_config()
     dm = DataManager(config=cfg)
 
-    selective = args.daily or args.pe or args.pb
+    selective = args.daily or args.pe or args.pb or args.turnover
     if args.daily or not selective:
         dm.update_index_daily()
     if args.pe or not selective:
@@ -73,6 +80,8 @@ def main():
         dm.update_index_pb()
     if args.pb or not selective:
         dm.update_market_pb()
+    if args.turnover or not selective:
+        dm.update_market_turnover()
 
     _summary(dm)
 

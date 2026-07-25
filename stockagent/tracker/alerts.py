@@ -8,6 +8,7 @@ evaluate 接收 ETF snapshots + 指数层 diagnose,返回 alert 列表。
   E1  60日线有效突破 → 右侧买点(震荡市抑制)
   E2  60日线有效跌破 → 止盈止损
   E5  ⑦相对周期极点(创业板vs上证 点差处5年包络上/下沿)→ 相对回归方向(info,非绝对买卖)
+  V1  ⑧成交量地量(两市成交额/MA250≤0.6)→ 量底信号(info;经验上价底~1月内,短期胜率≈50%)
   C1/C2 周期 PB 触底/顶 —— 当前跳过:板块 PB 无数据源(cyclic 不估值),待 Phase 2
   B1  价值股息率偏高(>5%)→ 买入窗口
   A1/A2 业绩预告承压/恶化 → 抱着颗雷/戴维斯双杀前兆
@@ -92,6 +93,12 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
             elif rc["env_pos"] <= _E5_LOW:
                 alerts.append({"level": "info", "scope": "大盘·相对周期", "rule": "E5",
                                "msg": f"上证−创业板点差处5年包络下沿(位置{rc['env_pos']:.0%})→ 回归方向:上证相对跑盈"})
+        # V1: ⑧成交量地量(两市成交额/MA250≤0.6)→ 量底信号(info;经验上价底~1月内,但短期胜率≈50%)
+        tv = index_diag.get("turnover") or {}
+        if tv.get("valid") and tv.get("is_dry"):
+            alerts.append({"level": "info", "scope": "大盘·量能", "rule": "V1",
+                           "msg": f"两市成交额/MA250={tv['ratio_now']:.2f}(≤0.6 地量,{tv['turnover_yi']:.0f}亿)"
+                                  f"→ 经验上价底~1月内临近(但各horizon胜率~50%非高胜率,样本{tv['sample']};提示时机非买点)"})
 
     # ---- ETF 层(D/B1/A1A2)----
     for sym, snap in etf_snapshots.items():

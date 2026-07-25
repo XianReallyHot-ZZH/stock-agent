@@ -196,3 +196,52 @@ def test_consecutive_run_rise_and_fall():
     assert rise["direction"] == "上证跑盈" and rise["run"] == 29
     fall = ti.consecutive_run(_line([float(29 - i) for i in range(30)]))
     assert fall["direction"] == "创业板跑盈" and fall["run"] == 29
+
+
+# ---- ⑧ 成交量地量监测(turnover/MA250 → 地量 + event-study)----
+def test_turnover_percentile():
+    s = _line([float(i) for i in range(30)])   # 单调升,末尾最大 → 分位高
+    assert ti.turnover_percentile(s) >= 0.9
+
+
+def test_turnover_dry_events_threshold_and_cooldown():
+    # 250 高值(100) 后 50 个低值(50) → ratio 0.5≤0.6 触发;cooldown=20 → 每 20 日 1 个事件
+    s = _line([100.0] * 250 + [50.0] * 50)
+    ev = ti.turnover_dry_events(s, ma=250, threshold=0.6, cooldown=20)
+    assert len(ev) == 3    # 第250/270/290 个 bar(50 个 dry 日,每 20 日去簇 → 3 次)
+
+
+def test_turnover_dry_events_no_trigger_when_high():
+    s = _line([100.0] * 300)   # 全程平稳高 → ratio=1.0 > 0.6,不触发
+    assert ti.turnover_dry_events(s, ma=250, threshold=0.6) == []
+
+
+def test_volume_bottom_stats_known_returns():
+    # 构造: 1 次地量(成交额骤降)后 px 单调涨 → 胜率应 100%、量底即价底(ttb=1)
+    t = _line([100.0] * 250 + [50.0] + [100.0] * 30)     # 仅第 250 bar dry
+    px = _line([100.0] * 251 + [100.0 + i * 2 for i in range(1, 31)])  # 地量后线性涨
+    stats = ti.volume_bottom_stats(t, px, ma=250, threshold=0.6, forward=(5, 10, 20), cooldown=20)
+    assert stats["sample"] >= 1
+    assert stats["win_rate_20"] == 1.0          # 地量后 px 只涨
+    assert stats["time_to_bottom_median"] == 1  # 地量当日即最低(之后只涨)
+
+
+def test_volume_bottom_stats_min_lookback():
+    # 第250 bar dry(值50), 之前全100 → 无更低 → lookback=250/252≈0.99yr
+    t = _line([100.0] * 250 + [50.0] + [100.0] * 30)
+    px = _line([100.0] * 251 + [100.0 + i * 2 for i in range(1, 31)])
+    base = dict(ma=250, threshold=0.6, forward=(5, 10, 20), cooldown=20)
+    assert ti.volume_bottom_stats(t, px, **base)["sample"] == 1          # 不过滤 → 1
+    assert ti.volume_bottom_stats(t, px, min_lookback=2.0, **base)["sample"] == 0   # 0.99<2 → 滤掉
+    assert ti.volume_bottom_stats(t, px, min_lookback=0.5, **base)["sample"] == 1   # 0.99>=0.5 → 留
+
+
+def test_turnover_new_low_years():
+    # [50, 100, 80]: 第2个(80)的 prev-lower = 第0个(50) → lookback (2-0)/252
+    s = _line([50.0, 100.0, 80.0])
+    lby = ti.turnover_new_low_years(s)
+    assert abs(float(lby.iloc[0])) < 1e-9             # 第一个无更低 → 0
+    assert abs(float(lby.iloc[2]) - 2 / 252) < 1e-6   # 距 index0
+    # 单调递减: 每个 bar 都是新低 → 无更低 → lookback = i/252
+    dec = ti.turnover_new_low_years(_line([100.0 - i for i in range(5)]))
+    assert abs(float(dec.iloc[3]) - 3 / 252) < 1e-6

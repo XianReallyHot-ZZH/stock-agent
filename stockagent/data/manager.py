@@ -481,12 +481,25 @@ class DataManager:
         log.info("market_pb: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
         return n
 
+    def update_market_turnover(self) -> int:
+        """Fetch + store 两市日成交额(baostock sh.000001 + sz.399001 amount 求和)。⑧地量监测数据源。"""
+        try:
+            df = fetcher.fetch_market_turnover()
+        except Exception as e:  # noqa: BLE001
+            log.warning("market_turnover failed: %s", str(e)[:120])
+            return 0
+        n = self.store.upsert_market_turnover(df, source="baostock")
+        self.store.set_meta("last_market_turnover_update", fetcher.today_str())
+        log.info("market_turnover: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
+        return n
+
     def update_index_all(self) -> None:
-        """Convenience: refresh all index-layer data (daily + PE + PB + market PB)."""
+        """Convenience: refresh all index-layer data (daily + PE + PB + market PB + turnover)."""
         self.update_index_daily()
         self.update_index_pe()
         self.update_index_pb()
         self.update_market_pb()
+        self.update_market_turnover()
 
     # ---- ETF dividend (V4 tracker · 价值型股息率数据) ----
     def update_etf_dividend(self, symbols: Optional[list[str]] = None) -> dict:

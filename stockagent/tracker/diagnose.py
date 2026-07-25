@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -174,12 +176,75 @@ def diagnose_relative_cycle(store, growth: str = "399006", benchmark: str = "000
     return out
 
 
+def _binom_p_one_sided(w: int, n: int) -> float:
+    """单边二项检验 p = P(X ≥ w | n, p=0.5)。w = 胜次, n = 样本。用 math.comb 精确计算。"""
+    if n <= 0 or w <= 0:
+        return float("nan") if n <= 0 else 1.0
+    w = min(w, n)
+    return sum(math.comb(n, i) for i in range(w, n + 1)) / (2 ** n)
+
+
+def diagnose_turnover(store, index_sym: str = "000001", ma: int = ti.TURNOVER_MA,
+                     threshold: float = ti.TURNOVER_DRY_THRESHOLD) -> dict:
+    """⑧ 成交量地量监测(只读诊断旁路): 两市成交额 / MA250 → 地量 flag + event-study 经验值。
+
+    地量 = 成交额/MA250 ≤ threshold(regime 自适应,消除名义额长期上行)。event-study 给
+    '量底→价底时效'(中位~1月,扎实)与'各 horizon 胜率'(成熟市场均~50%无 edge)作经验参考。
+    极端子集(近>0.5年最低)60日胜率~71%但样本薄(p≈0.09未显著)→ 暗示非定律。index_sym 默认上证综指。"""
+    mt = store.get_market_turnover_series()
+    px_df = store.get_index_daily_series(index_sym)
+    out = {"index": index_sym, "turnover_now": np.nan, "turnover_yi": np.nan,
+           "ratio_now": np.nan, "is_dry": False, "pct_3yr": np.nan, "pct_5yr": np.nan,
+           "days_since_dry": None, "sample": 0,
+           "time_to_bottom_median": np.nan, "time_to_bottom_max": np.nan,
+           "win_rate_20": np.nan, "win_rate_60": np.nan, "median_ret_60": np.nan,
+           "extreme_sample": 0, "extreme_win_rate_60": np.nan,
+           "extreme_median_ret_60": np.nan, "extreme_pvalue": np.nan,
+           "valid": False}
+    if len(mt) < ma + 61 or len(px_df) < 252:
+        return out
+    tseries = mt["total"]
+    pos = tseries[tseries > 0]
+    if len(pos) < ma:
+        return out
+    t_now = float(pos.iloc[-1])
+    mean_ma = float(tseries.iloc[-ma:].mean())
+    ratio_now = t_now / mean_ma if mean_ma > 0 else float("nan")
+    events = ti.turnover_dry_events(tseries, ma, threshold, start=ti.TURNOVER_MATURE_START)
+    days_since = len(pos[pos.index > events[-1]]) if events else None
+    stats = ti.volume_bottom_stats(tseries, px_df["close"], ma, threshold,
+                                   start=ti.TURNOVER_MATURE_START)
+    stats_x = ti.volume_bottom_stats(tseries, px_df["close"], ma, threshold,
+                                     start=ti.TURNOVER_MATURE_START,
+                                     min_lookback=ti.TURNOVER_EXTREME_LOOKBACK)
+    ex_n = stats_x["sample"]
+    ex_wins = int(round(stats_x["win_rate_60"] * ex_n)) if ex_n and not np.isnan(stats_x["win_rate_60"]) else 0
+    return {
+        "index": index_sym, "turnover_now": t_now, "turnover_yi": t_now / 1e8,
+        "ratio_now": ratio_now, "is_dry": (not np.isnan(ratio_now)) and ratio_now <= threshold,
+        "pct_3yr": ti.turnover_percentile(tseries, 252 * 3),
+        "pct_5yr": ti.turnover_percentile(tseries, 252 * 5),
+        "days_since_dry": days_since,
+        "sample": stats["sample"],
+        "time_to_bottom_median": stats["time_to_bottom_median"],
+        "time_to_bottom_max": stats["time_to_bottom_max"],
+        "win_rate_20": stats.get("win_rate_20", np.nan),
+        "win_rate_60": stats.get("win_rate_60", np.nan),
+        "median_ret_60": stats.get("median_ret_60", np.nan),
+        "extreme_sample": ex_n,
+        "extreme_win_rate_60": stats_x["win_rate_60"],
+        "extreme_median_ret_60": stats_x.get("median_ret_60", np.nan),
+        "extreme_pvalue": _binom_p_one_sided(ex_wins, ex_n) if ex_n else float("nan"),
+        "valid": True,
+    }
+
+
 def diagnose_layer(store, period: int = ti.MA_PERIOD,
                    lookback: int | None = None) -> dict:
     """顶层:整个指数择时层诊断(给 dashboard)。
 
     返回 {indices: {symbol: {name, close_last, date_last, diagnosis, valid}},
-          valuation, market_temp, style, relative_cycle, period}."""
+          valuation, market_temp, style, relative_cycle, turnover, period}."""
     indices = {}
     for sym, nm in BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -200,5 +265,6 @@ def diagnose_layer(store, period: int = ti.MA_PERIOD,
         "market_temp": diagnose_market_temp(store),
         "style": diagnose_style(store, period),
         "relative_cycle": diagnose_relative_cycle(store),
+        "turnover": diagnose_turnover(store),
         "period": period,
     }
