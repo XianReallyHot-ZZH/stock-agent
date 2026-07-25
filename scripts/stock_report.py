@@ -24,6 +24,7 @@ from stockagent.data import Store
 from stockagent.data.manager import DataManager
 from stockagent.tracker import stock_diagnose as sd
 from stockagent.tracker import stock_report as srep
+from stockagent.tracker import stock_commentary as sc
 from stockagent.tracker import alerts as talerts
 from stockagent.utils.logging_setup import setup_logging
 
@@ -47,6 +48,7 @@ def main():
     ap.add_argument("--as-of", default=None, help="评估日 YYYY-MM-DD(默认今天)")
     ap.add_argument("--output", default="data/stock_diagnose.html")
     ap.add_argument("--push-alerts", action="store_true", help="推送信号提醒到微信/飞书(触发时)")
+    ap.add_argument("--no-llm", action="store_true", help="跳过 AI 评估的 LLM 调用,全走规则模板(快速预览/无 key)")
     args = ap.parse_args()
     setup_logging()
 
@@ -70,7 +72,11 @@ def main():
     alerts_list = sd.collect_stock_alerts(codes, store, cfg, index_diag=index_diag,
                                            asof=asof, names=names)
 
-    html = srep.render(diagnoses, alerts_list, as_of=asof, names=names, store=store)
+    # AI 评估:每只股 LLM 解读 + 条件化买卖建议(基于诊断事实 + 投资心法三类打法)。
+    # 失败/无 key/含禁词 → 该股走规则模板兜底(--no-llm 全走模板)。
+    ai_evals = sc.stock_eval(diagnoses, alerts_list, names, store, use_llm=not args.no_llm)
+
+    html = srep.render(diagnoses, alerts_list, as_of=asof, names=names, store=store, ai_evals=ai_evals)
     out = srep.write_html(html, args.output)
 
     # 推送

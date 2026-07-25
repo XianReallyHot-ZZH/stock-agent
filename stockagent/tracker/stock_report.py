@@ -98,7 +98,8 @@ def _alerts_region(alerts_list: list) -> str:
             + "".join(rows) + "</div>")
 
 
-def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
+def _card(sym: str, d: dict, name: str, with_charts: bool = False,
+          with_ai: bool = False) -> str:
     cls = d.get("classification") or {}
     primary = cls.get("primary") or "未分类"
     secondary = "+".join(cls.get("secondary") or [])
@@ -147,6 +148,9 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
     chart_link = ('<button type="button" class="chart-link" title="查看时序图" '
                   'onclick="openChart(\'' + sym + '\')">📊</button>'
                   if with_charts else "")
+    ai_link = ('<button type="button" class="chart-link" title="AI 评估" '
+               'onclick="openAiEval(\'' + sym + '\')">🤖</button>'
+               if with_ai else "")
 
     # E3:诚实展示 —— 当前相对 60 日线的位置(线上/线下+偏离)+ 最近一次真正穿越(≤5 日=新突破/跌破,
     # 否则只标上穿/下穿日期)。不再把「在线上」误称「突破」。
@@ -168,7 +172,7 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
         <span class="stock-name">{html.escape(name)}</span>
         <span class="stock-code">{sym}</span>
         <span class="stock-price">¥{_num(d.get("price_last"))} <span class="muted">{d.get("date_last","")}</span></span>
-        {chart_link}
+        {chart_link}{ai_link}
       </div>
       <div class="card-row">{cls_badge} {zone_badge} {dv_badge}</div>
       <table class="metrics">
@@ -240,6 +244,8 @@ h2 { font-size:16px; margin:0 0 10px; }
 .modal-close:hover { background:var(--border); color:var(--text); }
 .modal-body { padding:10px 14px 18px; }
 .modal-chart { margin-bottom:6px; }
+.ai-box { max-width:820px; }                       /* AI 评估弹窗比图表窄,文本更易读 */
+.ai-body { white-space:pre-wrap; word-wrap:break-word; line-height:1.75; font-size:13.5px; padding:4px 2px; }
 """
 
 
@@ -321,6 +327,51 @@ document.addEventListener('DOMContentLoaded', function(){
 """
 
 
+_AI_EVAL_MODAL_HTML = """
+<div id="ai-modal" class="modal-overlay" hidden>
+  <div class="modal-box ai-box">
+    <div class="modal-head">
+      <span id="ai-modal-title">—</span>
+      <button type="button" class="modal-close" onclick="closeAiEval()" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="ai-body" class="ai-body"></div>
+    </div>
+  </div>
+</div>"""
+
+
+# AI 评估弹窗交互(依赖运行时 AI_EVALS / _NAMES)。openAiEval 用 textContent 渲染(天然防 XSS,
+# 无需 markdown);标题/遮罩/Esc 关闭镜像 _CHART_MODAL_JS。独立 id(ai-modal-title/ai-body)避免与
+# 图表弹窗的 modal-title 冲突(getElementById 只返第一个匹配)。
+_AI_EVAL_MODAL_JS = """
+function openAiEval(sym){
+  var t = AI_EVALS[sym];
+  if(!t) return;
+  var nm = (typeof _NAMES!=='undefined' && _NAMES[sym]) ? _NAMES[sym] : sym;
+  document.getElementById('ai-modal-title').textContent = nm + ' · AI 评估';
+  document.getElementById('ai-body').textContent = t;            // textContent 天然防 XSS
+  var ov = document.getElementById('ai-modal');
+  ov.hidden = false;
+  document.body.style.overflow = 'hidden';
+}
+function closeAiEval(){
+  var ov = document.getElementById('ai-modal');
+  if(!ov) return;
+  ov.hidden = true;
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', function(e){
+  var ov = document.getElementById('ai-modal');
+  if(ov && !ov.hidden && (e.key==='Escape' || e.keyCode===27)) closeAiEval();
+});
+document.addEventListener('DOMContentLoaded', function(){
+  var ov = document.getElementById('ai-modal');
+  if(ov) ov.addEventListener('click', function(e){ if(e.target===ov) closeAiEval(); });
+});
+"""
+
+
 def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str:
     """点卡片 📊 弹模态窗看该股 4 张时序图(价格+偏离 / 估值分位 / 业绩年报 / 分红)。
     store=None → 空串(向后兼容)。图表以 JSON 嵌入 CHARTS dict,点开时才 Plotly.newPlot
@@ -360,20 +411,44 @@ def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str
     return modal_html + "\n<script>\n" + body + "</script>"
 
 
+def _ai_eval_assets(ai_evals: dict, names: dict) -> str:
+    """点卡片 🤖 弹模态窗看该股 AI 评估(五段文本,基于诊断事实+投资心法框架)。
+
+    文本以 JSON 嵌入 AI_EVALS dict(openAiEval 用 textContent 渲染,天然防 XSS,无需 markdown)。
+    无评估数据 → 空串(按钮也不渲染,由 render 的 with_ai 控制)。_NAMES 自带注入以防
+    store=None(无图表)时 _chart_assets 未注入 _NAMES;重复声明无害。
+    """
+    if not ai_evals:
+        return ""
+    import json
+    import re
+    entries = ",\n".join(
+        f'"{sym}":{json.dumps(txt, ensure_ascii=False)}'
+        for sym, txt in ai_evals.items() if txt)
+    names_js = ", ".join(f'"{sym}":"{html.escape(names.get(sym, sym))}"' for sym in ai_evals)
+    entries = re.sub(r"</script", r"<\\/script", entries, flags=re.I)   # 防御 LLM 输出含 </script>
+    body = ("var AI_EVALS={" + entries + "};\n"
+            + "var _NAMES={" + names_js + "};\n"
+            + _AI_EVAL_MODAL_JS)
+    return _AI_EVAL_MODAL_HTML + "\n<script>\n" + body + "</script>"
+
+
 def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
            names: dict | None = None, title: str = "个股诊断看板",
-           store=None, period: int | None = None) -> str:
+           store=None, period: int | None = None, ai_evals: dict | None = None) -> str:
     """渲染个股诊断 HTML。stock_diagnoses = {symbol: diagnose_stock_full 输出}。
     names = {symbol: 显示名}(可选)。alerts_list = collect_stock_alerts 输出。
     store 非空时追加「个股时序图」区(价格/估值/业绩/分红);period 默认 MA_PERIOD。"""
     names = names or {}
     prd = period or ti.MA_PERIOD
     with_charts = store is not None
+    with_ai = bool(ai_evals)
     cards = "\n".join(
-        _card(sym, d, names.get(sym, sym), with_charts=with_charts)
+        _card(sym, d, names.get(sym, sym), with_charts=with_charts, with_ai=with_ai)
         for sym, d in stock_diagnoses.items())
     n = len(stock_diagnoses)
     chart_section = _chart_assets(stock_diagnoses, names, store, prd)
+    ai_section = _ai_eval_assets(ai_evals or {}, names)
     return f"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)}</title><style>{_CSS}</style></head>
@@ -390,6 +465,7 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
 {cards}
 </div>
 {chart_section}
+{ai_section}
 <script>{_THEME_JS}</script>
 </body></html>"""
 
