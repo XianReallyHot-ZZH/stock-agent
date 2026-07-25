@@ -55,6 +55,24 @@ _C_DAVIS = {  # 戴维斯
 }
 
 
+# 卡片指标说明(统一小字,每卡一份;<details> 默认收起,零 JS)。改指标时同步这里。
+_LEGEND_HTML = """
+<details class="legend"><summary>ℹ️ 指标说明</summary>
+<div class="legend-body">
+<div><b>主分类/次分类</b> · 三类自动判定:价值(高股息+低 PE 分位)/成长(营收·净利高增)/周期(利润波动大,结构优先)</div>
+<div><b>估值 zone</b> · PE+PB 历史分位四档:双低=便宜 / 双高=偏贵 / 跨中线=分化 / 都中间=中性</div>
+<div><b>戴维斯</b> · 业绩方向 × 估值方向 → 六档(双击 / 双杀 / 观察 / 预警…)</div>
+<div><b>营收·净利 CAGR</b> · 最近 N 年复合年增速 =(末/首)^(1/N)−1</div>
+<div><b>利润波动</b> · 年度净利同比增速的 std(高=周期信号)</div>
+<div><b>股息率</b> · 近 12 月每股现金分红 ÷ 现价</div>
+<div><b>PE(TTM)/PB 分位</b> · 当前值在历史中的分位(0=最便宜,1=最贵)</div>
+<div><b>避坑</b> · 异常高增速(低基数幻觉)→ 用 2 年 CAGR;含公告时间差</div>
+<div><b>预告链</b> · 业绩预告拐点(A1 增速下滑 / A2 多转空)</div>
+<div><b>披露</b> · 最新财报期 + 法定截止日 + 是否已披露</div>
+<div><b>E3 偏离</b> · (价−60 日线)÷60 日线 的历史分位;突破/跌破档位 gN(N 越大越确定)</div>
+</div></details>"""
+
+
 def _alerts_region(alerts_list: list) -> str:
     if not alerts_list:
         return '<div class="alerts"><h2>📡 信号提醒</h2><p class="muted">当前无触发(观察池稳定,偏离/营收/预告均在正常区)。</p></div>'
@@ -153,6 +171,8 @@ body.dark { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --bor
 body { background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif; margin:0; padding:20px; font-size:14px; }
 h1 { font-size:20px; margin:0 0 4px; }
 h2 { font-size:16px; margin:0 0 10px; }
+.cards-head { display:flex; align-items:baseline; flex-wrap:wrap; gap:12px; margin-bottom:10px; }
+.cards-head h2 { margin:0; }
 .muted { color:var(--muted); font-size:12px; }
 .header { margin-bottom:16px; }
 .toggle { float:right; margin-top:4px; cursor:pointer; background:var(--card); border:1px solid var(--border); color:var(--text); padding:4px 10px; border-radius:6px; }
@@ -178,6 +198,14 @@ h2 { font-size:16px; margin:0 0 10px; }
 .metrics td:nth-child(odd) { color:var(--muted); width:18%; }
 .metrics td:nth-child(even) { font-weight:600; }
 .warn-txt { color:#dc2626; font-weight:600; }
+.legend { margin:0 0 8px; }
+.legend > summary { cursor:pointer; display:inline-block; color:var(--muted); font-size:12px; list-style:none; }
+.legend > summary::-webkit-details-marker { display:none; }
+.legend > summary::before { content:"▸ "; }
+.legend[open] > summary::before { content:"▾ "; }
+.legend > summary:hover { color:var(--text); }
+.legend-body { margin-top:6px; padding:8px 10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; font-size:11px; line-height:1.75; color:var(--muted); }
+.legend-body b { color:var(--text); font-weight:600; }
 .chart-link { margin-left:8px; background:transparent; border:none; color:var(--text); font-size:15px; cursor:pointer; padding:0 2px; line-height:1; opacity:.7; }
 .chart-link:hover { opacity:1; }
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:flex-start; justify-content:center; padding:28px 14px; z-index:1000; overflow:auto; }
@@ -333,7 +361,8 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
   <p class="muted">as_of {html.escape(as_of)} · {n} 只个股 · 数据底座 C0/C0.5/C0.6(price/估值/财报/分红/预告)</p>
 </div>
 {_alerts_region(alerts_list)}
-<h2>个股诊断卡片</h2>
+<div class="cards-head"><h2>个股诊断卡片</h2>
+{_LEGEND_HTML}</div>
 <div class="grid">
 {cards}
 </div>

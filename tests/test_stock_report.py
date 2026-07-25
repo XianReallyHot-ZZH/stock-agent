@@ -41,6 +41,7 @@ def test_render_contains_key_sections():
     assert "双击观察" in h
     assert "营收增速下滑" in h                           # 告警区
     assert "⚠1 💡0" in h                               # 告警计数
+    assert h.count("<details") == 1 and "指标说明" in h  # 单一说明,放卡片标题旁
 
 
 def test_render_no_alerts_message():
