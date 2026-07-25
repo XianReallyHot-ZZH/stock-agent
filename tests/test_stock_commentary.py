@@ -157,6 +157,23 @@ def test_system_branches_framework_by_style(monkeypatch, primary, keyword):
     assert "通用纪律" in captured["system"]     # 通用纪律所有类型都带
 
 
+def test_system_multi_class_injects_all_frameworks(monkeypatch):
+    """多类股(primary+secondary 命中多个)注入全部打法 + 综合引导(模拟宁德 cyclic+growth+value)。"""
+    captured = {}
+    monkeypatch.setattr(sc.llm_client, "llm_available", lambda: True)
+
+    def fake(prompt, system=None, max_tokens=4000):
+        captured["system"] = system
+        return "【估值】x\n【业绩与归因】x\n【择时位置】x\n【风险与避坑】x\n【行动建议】观望"
+    monkeypatch.setattr(sc.llm_client, "chat", fake)
+    d = _diag(primary="cyclic")
+    d["classification"]["secondary"] = ["growth", "value"]
+    sc.stock_eval({"300750": d}, [], {"300750": "宁德时代"}, store=None, use_llm=True)
+    s = captured["system"]
+    assert "周期股打法" in s and "成长股打法" in s and "价值股打法" in s   # 三套都注入
+    assert "兼具多类" in s                                                  # 综合引导
+
+
 # ---------------- _facts_for 结构 ----------------
 def test_facts_for_structure_has_all_sections():
     facts = sc._facts_for(_diag(), [{"year": "2024", "earnings": 0.2, "valuation": 0.05,

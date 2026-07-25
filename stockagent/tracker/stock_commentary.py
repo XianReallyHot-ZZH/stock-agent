@@ -98,12 +98,26 @@ def has_banned_word(text: str) -> bool:
     return any(b in (text or "") for b in _BANNED)
 
 
-def _system_for(style: str | None) -> str:
-    """按个股类型组装 system prompt(角色+五段格式+约束+对应打法+通用纪律)。"""
-    fw = _FRAMEWORK.get(style or "", "")
-    hint = _STYLE_HINT.get(style or "", "未分类")
-    if not fw:  # 未分类/None:给中性提示,不强加某类打法
-        fw = f"(该股自动分类为「{hint}」,无强匹配打法,按通用估值与趋势原则评估即可。)"
+def _system_for(primary: str | None, secondary: list | None = None) -> str:
+    """按个股类型组装 system prompt(角色+五段格式+约束+对应打法+通用纪律)。
+
+    多类股(primary + secondary 同时命中,如宁德 cyclic+growth+value)注入【全部】命中打法 +
+    「兼具多类、判断当前哪类主导」的引导——不同打法估值锚与纪律不同(周期看 PB 分位/成长看
+    PEG 与业绩拐点/价值看股息率与 PE),让模型综合而非机械套一类。
+    """
+    styles: list[str] = []
+    for s in [primary] + list(secondary or []):
+        if s in _FRAMEWORK and s not in styles:
+            styles.append(s)
+    if not styles:
+        fw = "(该股自动分类为「未分类」,无强匹配打法,按通用估值与趋势原则评估即可。)"
+    elif len(styles) == 1:
+        fw = _FRAMEWORK[styles[0]]
+    else:
+        names = "/".join(_STYLE_HINT[s] for s in styles)
+        fw = (f"该股兼具多类属性({names})——不同打法估值锚与纪律不同,需综合判断【当前哪类"
+              f"逻辑最主导】并兼顾其余属性的纪律(如兼具成长,业绩下滑须第一时间警觉;兼具"
+              f"价值,关注股息率与PE陷阱):\n" + "\n".join(_FRAMEWORK[s] for s in styles))
     return _SYSTEM_PREFIX + "\n" + fw + "\n\n" + _COMMON
 
 
@@ -289,8 +303,8 @@ def _eval_one(sym: str, d: dict, names: dict, store, by_scope: dict) -> tuple[st
     attribution = sd.attribution_by_year(sym, store, 6)
     this_alerts = by_scope.get(name) or by_scope.get(sym) or []
     facts = _facts_for(d, attribution, this_alerts, name)
-    style = (d.get("classification") or {}).get("primary")
-    system = _system_for(style)
+    cls = d.get("classification") or {}
+    system = _system_for(cls.get("primary"), cls.get("secondary"))
     prompt = ("基于以下该股诊断事实,按五段格式生成「当下评估与买卖建议」"
               "(行动建议必须给明确标签+触发条件,禁止纯涨跌预测):\n"
               + json.dumps(facts, ensure_ascii=False, indent=2))
