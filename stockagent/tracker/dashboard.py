@@ -128,6 +128,47 @@ def _trend_table_html(diag: dict) -> str:
 
 
 # ---- ③ 估值开关 stat tile ----
+def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go.Figure:
+    """沪深300 PE-TTM(上行) / PB(下行) 全历史 + 20%/80% 分位线 + 便宜/贵区阴影 + 当前点。
+    分位线/阴影基于全历史;tile 的分位用近 10 年口径(更近期),两者互补。"""
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.55, 0.45],
+                        vertical_spacing=0.12, subplot_titles=("沪深300 PE-TTM", "沪深300 PB"))
+    for row, df, col, color, label in [(1, pe_df, "pe_ttm", _PAL["series_1"], "PE"),
+                                       (2, pb_df, "pb", _PAL["series_2"], "PB")]:
+        if df is None or len(df) == 0 or col not in df.columns:
+            continue
+        s = pd.to_numeric(df[col], errors="coerce").dropna()
+        if len(s) < 20:
+            continue
+        idx = pd.to_datetime(s.index)
+        fig.add_trace(go.Scatter(x=idx, y=s.to_numpy(), name=label,
+                                 line=dict(color=color, width=1.6)), row=row, col=1)
+        lo = float(s.quantile(0.20))
+        hi = float(s.quantile(0.80))
+        cur = float(s.iloc[-1])
+        pct = float((s < cur).sum()) / len(s)
+        fig.add_hrect(y0=float(s.min()), y1=lo, row=row, col=1,
+                      fillcolor=_PAL["good"], opacity=0.08, line_width=0)
+        fig.add_hrect(y0=hi, y1=float(s.max()), row=row, col=1,
+                      fillcolor=_PAL["critical"], opacity=0.08, line_width=0)
+        fig.add_hline(y=lo, row=row, col=1, line=dict(color=_PAL["good"], width=1, dash="dot"),
+                      annotation_text=f"20% {lo:.1f}", annotation_position="bottom left")
+        fig.add_hline(y=hi, row=row, col=1, line=dict(color=_PAL["critical"], width=1, dash="dot"),
+                      annotation_text=f"80% {hi:.1f}", annotation_position="top left")
+        fig.add_trace(go.Scatter(x=[idx[-1]], y=[cur], mode="markers+text",
+                                 marker=dict(size=10, color=_PAL["ink"]),
+                                 text=[f"现在 {cur:.1f} ({pct * 100:.0f}%)"],
+                                 textposition="top center", showlegend=False),
+                      row=row, col=1)
+    fig.update_layout(height=480, margin=dict(l=50, r=20, t=50, b=30),
+                      paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+                      font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=False)
+    fig.update_xaxes(gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"], type="date",
+                     hoverformat="%Y-%m-%d", rangeslider_visible=True, row=2, col=1)
+    fig.update_yaxes(gridcolor=_PAL["grid"])
+    return fig
+
+
 def _meter(label: str, pct: float, sub: str = "") -> str:
     p = 0.0 if pd.isna(pct) else max(0.0, min(1.0, float(pct)))
     zc = _PAL["good"] if p < 0.2 else _PAL["critical"] if p > 0.8 else _PAL["ink_sec"]
@@ -138,7 +179,7 @@ def _meter(label: str, pct: float, sub: str = "") -> str:
             f"<div class='tile-sub'>{sub}</div></div>")
 
 
-def _valuation_tile_html(val: dict) -> str:
+def _valuation_tile_html(val: dict, fig_html: str = "") -> str:
     zone = val.get("zone", "—")
     if "低位" in zone:
         zc = _PAL["good"]
@@ -163,11 +204,16 @@ def _valuation_tile_html(val: dict) -> str:
         hint = f"沪深300 PE+PB 同口径双{side}(PE {pe_txt} / PB {pb_txt})"
     else:  # 中位·中性
         hint = f"沪深300 PE+PB 都在历史中间区(PE {pe_txt} / PB {pb_txt})"
-    return (f"<div class='tiles-row'>{tiles}</div>"
-            f"<div style='margin-top:10px'>{_chip('估值开关: ' + zone, zc)} "
-            f"<span class='hint'>{hint}</span></div>"
-            f"<div class='hint' style='margin-top:6px'>指标:PE(TTM)=市值÷净利润 · PB=市值÷净资产 · "
-            f"ROE=净利润÷净资产 · 故 PE=PB÷ROE</div>")
+    out = (f"<div class='tiles-row'>{tiles}</div>"
+           f"<div style='margin-top:10px'>{_chip('估值开关: ' + zone, zc)} "
+           f"<span class='hint'>{hint}</span></div>"
+           f"<div class='hint' style='margin-top:6px'>指标:PE(TTM)=市值÷净利润 · PB=市值÷净资产 · "
+           f"ROE=净利润÷净资产 · 故 PE=PB÷ROE</div>")
+    if fig_html:
+        out += (f"<div class='hint' style='margin:10px 0 4px'>实线=全历史;虚线=全历史 20%/80% 分位"
+                f"(便宜区淡绿 / 贵区淡红);点=当前(含全历史分位)。可拖底部窗口看时段。</div>"
+                f"<div>{fig_html}</div>")
+    return out
 
 
 # ---- ⑥ 市场温度·大小盘温差 ----
@@ -496,7 +542,19 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                         lookback: int | None = None, title: str = "指数择时层看板") -> str:
     """组装六件套 + ⑦相对周期律,写出离线自包含 HTML。返回输出路径。"""
     diag = dz.diagnose_layer(store, period=period, lookback=lookback)
-    # ⑦ 相对周期律: 点差图(若有效,它最先出现 → 承载 plotly.js 首加载;① 首图改 False 避免重复加载 ~3MB)
+    # ③ 估值开关: PE/PB 时序图(③ 在 HTML 最前 → 由它承载 plotly.js 首加载)
+    val = diag.get("valuation") or {}
+    val_fig_html = ""
+    if val.get("valid"):
+        try:
+            _pe = store.get_index_pe_series("沪深300")
+            _pb = store.get_index_pb_series("沪深300")
+            if len(_pe) or len(_pb):
+                val_fig_html = _valuation_figure(val, _pe, _pb).to_html(
+                    full_html=False, include_plotlyjs=True)
+        except Exception:  # noqa: BLE001
+            val_fig_html = ""
+    # ⑦ 相对周期律: 点差图(plotly.js 已由 ③ 承载 → ⑦ include=False;③ 缺则 ⑦ 承载)
     rc = diag.get("relative_cycle") or {}
     rc_fig_html = ""
     if rc.get("valid"):
@@ -506,7 +564,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                 store.get_index_daily_series(rc["growth"])["close"])
             if len(_sp):
                 rc_fig_html = _relative_cycle_figure(rc, _sp).to_html(
-                    full_html=False, include_plotlyjs=True)
+                    full_html=False, include_plotlyjs=(val_fig_html == ""))
         except Exception:  # noqa: BLE001
             rc_fig_html = ""
     # ⑧ 成交量地量监测 figure (plotly.js 已由 ⑦ 或 ① 首图加载 → include_plotlyjs=False)
@@ -522,7 +580,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                     full_html=False, include_plotlyjs=False)
         except Exception:  # noqa: BLE001
             tv_fig_html = ""
-    figs_html, first = [], (rc_fig_html == "")   # ⑦ 已加载 plotly.js → ① 首图不再重复
+    figs_html, first = [], (val_fig_html == "" and rc_fig_html == "")   # ③/⑦ 已加载 plotly.js → ① 首图不再重复
     for sym, nm in dz.BROAD_INDICES:
         df = store.get_index_daily_series(sym)
         if len(df) < period:
@@ -539,7 +597,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<button id='theme-btn' onclick='toggleTheme()'>🌙</button></div>"
         f"<div class='meta'>数据截至 {last_date} · {period}日线 · 生成于 {datetime.now():%Y-%m-%d %H:%M}</div>"
         f"{_cycle_stage_chip(diag)}"
-        f"<h2>③ 估值开关</h2><section>{_valuation_tile_html(diag['valuation'])}</section>"
+        f"<h2>③ 估值开关</h2><section>{_valuation_tile_html(diag['valuation'], val_fig_html)}</section>"
         f"<h2>⑥ 市场温度·大小盘温差</h2><section>{_market_temp_html(diag['market_temp'])}</section>"
         f"<h2>⑦ 相对周期律·沪深成长温差</h2><section>{_relative_cycle_html(rc, rc_fig_html)}</section>"
         f"<h2>⑧ 成交量地量监测</h2><section>{_turnover_html(tv, tv_fig_html)}</section>"
