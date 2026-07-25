@@ -186,27 +186,25 @@ def test_facts_for_structure_has_all_sections():
     assert facts["S07利润归因_近6年"][0]["业绩贡献"] == "+20%"
 
 
-# ---------------- _ai_eval_assets HTML 嵌入(stock_report)----------------
-def test_ai_eval_assets_empty_returns_empty():
-    assert srep._ai_eval_assets({}, {"600519": "贵州茅台"}) == ""
+# ---------------- _ai_eval_assets(纯服务,无预计算嵌入)----------------
+def test_ai_eval_assets_injects_modal_and_fetch():
+    """_ai_eval_assets 只注入 modal + fetch JS + _NAMES(评估文本由前端点击时 fetch 服务获取)。"""
+    html = srep._ai_eval_assets({"600519": "贵州茅台"})
+    assert "openAiEval" in html and "closeAiEval" in html
+    assert "ai-modal" in html                       # 独立 modal(不与 chart-modal 冲突)
+    assert "fetch(" in html and "127.0.0.1:8765" in html   # 前端 fetch 服务
+    assert "_NAMES" in html and "贵州茅台" in html  # _NAMES 注入(title 用)
+    assert "var AI_EVALS" not in html               # 纯服务,不再预计算嵌入
 
 
-def test_ai_eval_assets_embeds_json_and_modal():
-    html = srep._ai_eval_assets({"600519": "【估值】x\n【行动建议】观望"}, {"600519": "贵州茅台"})
-    assert "var AI_EVALS=" in html
+def test_ai_eval_assets_empty_names_still_renders_modal():
+    """空 names(render 无股时)仍注入 modal+JS,不报错(按钮依赖服务,非预计算数据)。"""
+    html = srep._ai_eval_assets({})
     assert "openAiEval" in html
-    assert "ai-modal" in html                      # 独立 modal(不与 chart-modal 冲突)
-    assert "贵州茅台" in html                       # _NAMES 注入
-    # </script> 转义防御(即使内容含 </script> 也不截断 script 块)
-    bad = srep._ai_eval_assets({"600519": "x</script><img>"}, {"600519": "t"})
-    assert "<\\/script>" in bad
 
 
-def test_card_renders_ai_button_when_ai_evals_present():
-    """render 传入 ai_evals 时,卡片出现 🤖 按钮;不传时不出现。"""
+def test_card_always_renders_ai_button():
+    """render 总是渲染 🤖 按钮(点击时 fetch 服务,不依赖预计算数据)。"""
     d = {"600519": _diag()}
-    with_ai = srep.render(d, [], as_of="2026-07-24", names={"600519": "贵州茅台"},
-                          ai_evals={"600519": "评估文本"})
-    assert "🤖" in with_ai and "openAiEval('600519')" in with_ai
-    without_ai = srep.render(d, [], as_of="2026-07-24", names={"600519": "贵州茅台"})
-    assert "🤖" not in without_ai
+    html = srep.render(d, [], as_of="2026-07-24", names={"600519": "贵州茅台"})
+    assert "🤖" in html and "openAiEval('600519')" in html

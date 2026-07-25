@@ -35,9 +35,9 @@ python scripts/validate_volume_bottom.py    # ⑧地量 event-study 深度报告
 
 # 个股层（tracker，Phase 2 · 只读诊断，三类分类+归因+戴维斯+避坑+预告链）
 python scripts/backfill_stock_data.py             # 回填观察池 个股日线/估值(baidu PE·PB)/财报/分红/业绩预告（幂等，--daily/--val/--fin/--div/--forecast）
-python scripts/stock_report.py                    # 生成个股诊断看板（data/stock_diagnose.html，告警区+个股卡片+🤖AI评估，深浅色可切）
+python scripts/stock_report.py                    # 生成个股诊断看板（data/stock_diagnose.html，告警区+个股卡片，深浅色可切；🤖按钮点击时实时生成AI评估）
 python scripts/stock_report.py --push-alerts      # 生成看板 + 推送个股信号提醒到微信（A1/A2/A3/G1/G2/E3/E4 触发时）
-python scripts/stock_report.py --no-llm           # 跳过🤖AI评估的LLM调用，走规则模板兜底（秒级预览/无 key）
+python scripts/ai_eval_server.py                  # 🤖AI评估本地服务（首个长驻·127.0.0.1:8765，看板🤖按钮点击时实时调LLM生成；先起它再点🤖）
 
 # 实盘
 python scripts/run_morning_report.py --force   # 生成+推送晨报
@@ -56,7 +56,7 @@ python scripts/record_actual.py --executed     # 对账自律度
 - **行业研究模块（`research/`）是只读旁路**：算 ETF 性价比（三类分类 Phase 1-A：价值=股息率+PE分位 / 成长=业绩+PE / 周期=筹码+趋势,板块PB无源→不估值待P2）。`scoring.py` 按 `etf_pool.yaml` 的 style 标签分流；三类分页看板 + 锚点导航。信号提醒（`tracker/alerts.py`）九条（D筹码×估值交叉/E1E2趋势/B1股息/A1A2业绩/F1大盘），双通道（看板告警区+微信 `--push-alerts`）。筹码相位用非单调 6 相位表（文章「末期见底」逻辑：兑现中段最空、深回撤+卖盘枯竭=见底最看多）
 - **指数择时层（`tracker/`）是只读诊断旁路**：基于课程 S12-13 + 周期律/量价实证，算大盘估值开关（沪深300 同口径 PE+PB → 四档 zone，③带 PE/PB 时序图）·大小盘温差·蓝筹vs成长·60日线趋势/突破跌破/偏离极值·**⑦相对周期律**（创业板 vs 上证 点差在 5 年包络的位置 → 极点/中枢）·**⑧成交量地量监测**（两市成交额/MA250 → 地量 + 量底→价底 event-study，实证：仅时效成立、胜率无 edge），出本地交互式看板（`data/index_timing.html`，八 section，深浅色可切），**不喂交易引擎**
   - **突破/跌破 = 真穿越**：`last_ma_cross`(严格变号)+`fresh_cross_direction`(≤5 日内) + 偏离≥2%(grade≥2) 才算「有效突破/跌破」；仅在线上/下但无近期穿越 = 中性。`breakout_grade` 只给位置强度，**不是**突破事件。指数看板趋势表/信号区 + alerts E1/E2 + 个股卡 E3 三处一致
-- **个股层（`tracker/stock_diagnose.py` + `stock_report.py` + `stock_commentary.py`，Phase 2）是只读诊断旁路**：个股级三类自动判定（增速→成长 / 高股息低PE→价值 / 利润波动→周期）+ 利润来源归因 S07（业绩/分红/估值三段，EPS 由 P/PE 反推）+ 戴维斯双击/双杀 S10（业绩方向×估值方向六档）+ 避坑 S08（公告时间差 G2·两年复合增速·异常高增速最小值分母·预告链 G1）。数据栈 C0/C0.5/C0.6（价格/百度 PE·PB/sina 财报17指标/分红/eastmoney 业绩预告）。`alerts.evaluate_stocks` 七条个股提醒（A1/A2/A3/G1/G2/E3/E4）双通道（看板告警区+微信）。出 `data/stock_diagnose.html`（告警区+个股卡片+点📊弹模态看 6 张时序图[价格+偏离/PE/PB/业绩同比/S07归因/分红]，深浅色可切），**不喂交易引擎**。时序图 Plotly 懒渲染（图数据 JSON 嵌入、点开才 newPlot，可扩展多股票）。**🤖 AI 评估按钮**（`tracker/stock_commentary.py`）：点卡片 🤖 弹模态看大模型基于「全量诊断 + 投资心法三类打法（value/growth/cyclic 分流）」生成的五段评估（估值/业绩与归因/择时位置/风险与避坑/行动建议+条件化买卖标签）——守门只禁纯涨跌预测（允许条件化动作建议，宽于 research 推送场景，因是用户主动点开的只读参考不喂引擎），LLM 并行调用、无 key/失败/含禁词走规则模板兜底（`--no-llm` 全走模板），文本 JSON 嵌入 + textContent 渲染（防 XSS）
+- **个股层（`tracker/stock_diagnose.py` + `stock_report.py` + `stock_commentary.py`，Phase 2）是只读诊断旁路**：个股级三类自动判定（增速→成长 / 高股息低PE→价值 / 利润波动→周期）+ 利润来源归因 S07（业绩/分红/估值三段，EPS 由 P/PE 反推）+ 戴维斯双击/双杀 S10（业绩方向×估值方向六档）+ 避坑 S08（公告时间差 G2·两年复合增速·异常高增速最小值分母·预告链 G1）。数据栈 C0/C0.5/C0.6（价格/百度 PE·PB/sina 财报17指标/分红/eastmoney 业绩预告）。`alerts.evaluate_stocks` 七条个股提醒（A1/A2/A3/G1/G2/E3/E4）双通道（看板告警区+微信）。出 `data/stock_diagnose.html`（告警区+个股卡片+点📊弹模态看 6 张时序图[价格+偏离/PE/PB/业绩同比/S07归因/分红]，深浅色可切），**不喂交易引擎**。时序图 Plotly 懒渲染（图数据 JSON 嵌入、点开才 newPlot，可扩展多股票）。**🤖 AI 评估按钮**（`tracker/stock_commentary.py` + `scripts/ai_eval_server.py`）：点卡片 🤖 时前端 fetch 本地服务 `ai_eval_server.py`（首个长驻进程·http.server 绑 127.0.0.1:8765、持 .env key）实时调 LLM 生成五段评估（估值/业绩与归因/择时位置/风险与避坑/行动建议+条件化买卖标签）——基于全量诊断 + 投资心法三类打法（value/growth/cyclic 分流，多类注入全部命中打法）；守门只禁纯涨跌预测，无 key/失败/含禁词走规则模板兜底，服务未开则 🤖 报错提示。**纯服务、无预计算嵌入**（看板生成不调 LLM，点击时按需单股调）
 
 ## 6 个可插拔信号
 

@@ -539,6 +539,11 @@ class DataManager:
         "300124",  # 汇川  创业板    工控·成长
         "600276",  # 恒瑞  上证主板  创新药·成长
     ]
+    STOCK_NAMES = {  # 显示名(server/scripts 共享,避免两处维护;C1 迁 stock_pool.yaml 时带 name 字段)
+        "600519": "贵州茅台", "600036": "招商银行", "300750": "宁德时代",
+        "000651": "格力电器", "688981": "中芯国际",
+        "300760": "迈瑞医疗", "002475": "立讯精密", "300124": "汇川技术", "600276": "恒瑞医药",
+    }
 
     def update_stock_daily(self, symbols: Optional[list[str]] = None,
                            adjust: Optional[str] = None) -> dict:

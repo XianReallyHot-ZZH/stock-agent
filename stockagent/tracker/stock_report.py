@@ -345,15 +345,23 @@ _AI_EVAL_MODAL_HTML = """
 # 无需 markdown);标题/遮罩/Esc 关闭镜像 _CHART_MODAL_JS。独立 id(ai-modal-title/ai-body)避免与
 # 图表弹窗的 modal-title 冲突(getElementById 只返第一个匹配)。
 _AI_EVAL_MODAL_JS = """
-function openAiEval(sym){
-  var t = AI_EVALS[sym];
-  if(!t) return;
-  var nm = (typeof _NAMES!=='undefined' && _NAMES[sym]) ? _NAMES[sym] : sym;
-  document.getElementById('ai-modal-title').textContent = nm + ' · AI 评估';
-  document.getElementById('ai-body').textContent = t;            // textContent 天然防 XSS
-  var ov = document.getElementById('ai-modal');
+async function openAiEval(sym){
+  var ov=document.getElementById('ai-modal'),
+      title=document.getElementById('ai-modal-title'),
+      body=document.getElementById('ai-body');
+  var nm=(typeof _NAMES!=='undefined' && _NAMES[sym]) ? _NAMES[sym] : sym;
+  title.textContent = nm + ' · AI 评估';
   ov.hidden = false;
   document.body.style.overflow = 'hidden';
+  body.textContent = '⏳ 生成中…(实时调大模型,约 10-30 秒,请勿关闭)';
+  try{
+    var r = await fetch('http://127.0.0.1:8765/ai-eval?sym=' + sym);
+    var data = await r.json();
+    body.textContent = data.ok ? data.text
+      : '⚠ 生成失败: ' + (data.error||'未知') + '\n(检查 ai_eval_server 是否运行、LLM key 是否配置)';
+  }catch(e){
+    body.textContent = '⚠ AI 评估服务未启动或不可达。\n请先在新终端运行: python scripts/ai_eval_server.py';
+  }
 }
 function closeAiEval(){
   var ov = document.getElementById('ai-modal');
@@ -411,44 +419,35 @@ def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str
     return modal_html + "\n<script>\n" + body + "</script>"
 
 
-def _ai_eval_assets(ai_evals: dict, names: dict) -> str:
-    """点卡片 🤖 弹模态窗看该股 AI 评估(五段文本,基于诊断事实+投资心法框架)。
+def _ai_eval_assets(names: dict) -> str:
+    """点卡片 🤖 弹模态窗 → 前端 fetch 本地 ai_eval_server 实时生成评估(纯服务,无预计算嵌入)。
 
-    文本以 JSON 嵌入 AI_EVALS dict(openAiEval 用 textContent 渲染,天然防 XSS,无需 markdown)。
-    无评估数据 → 空串(按钮也不渲染,由 render 的 with_ai 控制)。_NAMES 自带注入以防
-    store=None(无图表)时 _chart_assets 未注入 _NAMES;重复声明无害。
+    本函数只注入 modal HTML + openAiEval/closeAiEval JS + _NAMES(标题显示用)。评估文本在
+    用户点 🤖 时由前端 fetch http://127.0.0.1:8765/ai-eval 实时获取(服务持 key 调 LLM);
+    服务未启动时前端显示"请先运行 ai_eval_server.py"提示。_NAMES 自带注入以防 store=None
+    (无图表)时 _chart_assets 未注入 _NAMES。
     """
-    if not ai_evals:
-        return ""
-    import json
-    import re
-    entries = ",\n".join(
-        f'"{sym}":{json.dumps(txt, ensure_ascii=False)}'
-        for sym, txt in ai_evals.items() if txt)
-    names_js = ", ".join(f'"{sym}":"{html.escape(names.get(sym, sym))}"' for sym in ai_evals)
-    entries = re.sub(r"</script", r"<\\/script", entries, flags=re.I)   # 防御 LLM 输出含 </script>
-    body = ("var AI_EVALS={" + entries + "};\n"
-            + "var _NAMES={" + names_js + "};\n"
-            + _AI_EVAL_MODAL_JS)
+    names_js = ", ".join(f'"{sym}":"{html.escape(names.get(sym, sym))}"' for sym in names)
+    body = "var _NAMES={" + names_js + "};\n" + _AI_EVAL_MODAL_JS
     return _AI_EVAL_MODAL_HTML + "\n<script>\n" + body + "</script>"
 
 
 def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
            names: dict | None = None, title: str = "个股诊断看板",
-           store=None, period: int | None = None, ai_evals: dict | None = None) -> str:
+           store=None, period: int | None = None) -> str:
     """渲染个股诊断 HTML。stock_diagnoses = {symbol: diagnose_stock_full 输出}。
     names = {symbol: 显示名}(可选)。alerts_list = collect_stock_alerts 输出。
-    store 非空时追加「个股时序图」区(价格/估值/业绩/分红);period 默认 MA_PERIOD。"""
+    store 非空时追加「个股时序图」区(价格/估值/业绩/分红);period 默认 MA_PERIOD。
+    🤖 AI 评估按钮始终渲染(点击时 fetch 本地 ai_eval_server 实时生成,无需预计算数据)。"""
     names = names or {}
     prd = period or ti.MA_PERIOD
     with_charts = store is not None
-    with_ai = bool(ai_evals)
     cards = "\n".join(
-        _card(sym, d, names.get(sym, sym), with_charts=with_charts, with_ai=with_ai)
+        _card(sym, d, names.get(sym, sym), with_charts=with_charts, with_ai=True)
         for sym, d in stock_diagnoses.items())
     n = len(stock_diagnoses)
     chart_section = _chart_assets(stock_diagnoses, names, store, prd)
-    ai_section = _ai_eval_assets(ai_evals or {}, names)
+    ai_section = _ai_eval_assets(names)
     return f"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)}</title><style>{_CSS}</style></head>
