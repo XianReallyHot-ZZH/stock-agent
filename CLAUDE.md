@@ -6,7 +6,7 @@ A股板块轮动 ETF 决策助手。规则引擎出决策、大模型出解释�
 
 ```bash
 # 开发
-python -m pytest tests/ -q                    # 跑全部测试（160 个）
+python -m pytest tests/ -q                    # 跑全部测试（333 个）
 python scripts/run_backtest.py                 # 单次回测（默认信号）
 python scripts/sweep_params.py                 # 参数扫描（全部信号）
 python scripts/walk_forward.py                 # 样本外验证
@@ -53,7 +53,8 @@ python scripts/record_actual.py --executed     # 对账自律度
 - 大盘择时层（RegimeFilter A+B）是最高优先级
 - **行业研究模块（`research/`）是只读旁路**：算 ETF 性价比（三类分类 Phase 1-A：价值=股息率+PE分位 / 成长=业绩+PE / 周期=筹码+趋势,板块PB无源→不估值待P2）。`scoring.py` 按 `etf_pool.yaml` 的 style 标签分流；三类分页看板 + 锚点导航。信号提醒（`tracker/alerts.py`）九条（D筹码×估值交叉/E1E2趋势/B1股息/A1A2业绩/F1大盘），双通道（看板告警区+微信 `--push-alerts`）。筹码相位用非单调 6 相位表（文章「末期见底」逻辑：兑现中段最空、深回撤+卖盘枯竭=见底最看多）
 - **指数择时层（`tracker/`）是只读诊断旁路**：基于课程 S12-13，算大盘估值开关（沪深300 同口径 PE+PB → 四档 zone）·大小盘温差·蓝筹vs成长·60日线趋势/突破跌破/偏离极值，出本地交互式看板（`data/index_timing.html`，深浅色可切），**不喂交易引擎**
-- **个股层（`tracker/stock_diagnose.py` + `stock_report.py`，Phase 2）是只读诊断旁路**：个股级三类自动判定（增速→成长 / 高股息低PE→价值 / 利润波动→周期）+ 利润来源归因 S07（业绩/分红/估值三段，EPS 由 P/PE 反推）+ 戴维斯双击/双杀 S10（业绩方向×估值方向六档）+ 避坑 S08（公告时间差 G2·两年复合增速·异常高增速最小值分母·预告链 G1）。数据栈 C0/C0.5/C0.6（价格/百度 PE·PB/sina 财报17指标/分红/eastmoney 业绩预告）。`alerts.evaluate_stocks` 七条个股提醒（A1/A2/A3/G1/G2/E3/E4）双通道（看板告警区+微信）。出 `data/stock_diagnose.html`（告警区+个股卡片，深浅色可切），**不喂交易引擎**
+  - **突破/跌破 = 真穿越**：`last_ma_cross`(严格变号)+`fresh_cross_direction`(≤5 日内) + 偏离≥2%(grade≥2) 才算「有效突破/跌破」；仅在线上/下但无近期穿越 = 中性。`breakout_grade` 只给位置强度，**不是**突破事件。指数看板趋势表/信号区 + alerts E1/E2 + 个股卡 E3 三处一致
+- **个股层（`tracker/stock_diagnose.py` + `stock_report.py`，Phase 2）是只读诊断旁路**：个股级三类自动判定（增速→成长 / 高股息低PE→价值 / 利润波动→周期）+ 利润来源归因 S07（业绩/分红/估值三段，EPS 由 P/PE 反推）+ 戴维斯双击/双杀 S10（业绩方向×估值方向六档）+ 避坑 S08（公告时间差 G2·两年复合增速·异常高增速最小值分母·预告链 G1）。数据栈 C0/C0.5/C0.6（价格/百度 PE·PB/sina 财报17指标/分红/eastmoney 业绩预告）。`alerts.evaluate_stocks` 七条个股提醒（A1/A2/A3/G1/G2/E3/E4）双通道（看板告警区+微信）。出 `data/stock_diagnose.html`（告警区+个股卡片+点📊弹模态看 6 张时序图[价格+偏离/PE/PB/业绩同比/S07归因/分红]，深浅色可切），**不喂交易引擎**。时序图 Plotly 懒渲染（图数据 JSON 嵌入、点开才 newPlot，可扩展多股票）
 
 ## 6 个可插拔信号
 
@@ -95,3 +96,4 @@ python scripts/record_actual.py --executed     # 对账自律度
 - 拆分修正：`fix_splits.py`（检测 >25% 单日跌幅/ >100% 单日涨幅）
 - 持仓上限：回测严格 ≤K 持仓（已修 bug：rotated-out 标的必须 sell_all）
 - 再平衡阈值：10%（避免每周微调产生的噪音交易）
+- 股息率：`stock_dividend_yield` 按最近分红节奏（季/半年/年，最近 3 次间隔中位数判定）取最近 N 次年化，**非** 365 天窗口求和——频率切换年（年付→半年付）窗口会多吃近 2 倍。价为 raw 不复权（只压低历史价，当前价=现价，分母正确）
