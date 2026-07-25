@@ -22,8 +22,9 @@ rotation_pool:
   # 大金融
   - {symbol: "512800", name: "银行ETF",     sector: "银行",     csrc_industry: "货币金融服务",                      style: "value",  style_alt: []}
   - {symbol: "512880", name: "证券ETF",     sector: "券商",     csrc_industry: "资本市场服务",                      style: "cyclic", style_alt: []}
+  - {symbol: "512070", name: "证券保险ETF", sector: "证券保险", style: "value",  style_alt: []}  # 易方达中证800证券保险;含券商+保险混合,无纯行业PE→走无PE路径(像宽基)
   # 大消费
-  - {symbol: "512690", name: "食品饮料ETF", sector: "食品饮料", csrc_industry: "酒、饮料和精制茶制造业",            style: "value",  style_alt: ["growth"]}
+  - {symbol: "512690", name: "酒ETF",         sector: "酒",         csrc_industry: "酒、饮料和精制茶制造业",    style: "value",  style_alt: ["growth"]}  # 鹏华中证酒(白酒龙头茅五泸在此),原名"食品饮料"系误标
   - {symbol: "512010", name: "医药ETF",     sector: "医药",     csrc_industry: "医药制造业",                        style: "growth", style_alt: ["value"]}
   - {symbol: "159992", name: "创新药ETF",   sector: "创新药",   csrc_industry: "医药制造业",                        style: "growth", style_alt: []}  # 与512010同属医药制造业→PE分位相同（行业粒度上限）
   - {symbol: "159865", name: "养殖ETF",     sector: "养殖",     csrc_industry: "畜牧业",                            style: "cyclic", style_alt: []}  # 猪周期(S11)
@@ -44,6 +45,8 @@ rotation_pool:
   - {symbol: "159611", name: "电力ETF",     sector: "电力",     csrc_industry: "电力、热力生产和供应业",            style: "cyclic", style_alt: []}
   - {symbol: "518880", name: "黄金ETF",     sector: "黄金",     style: "cyclic", style_alt: []}     # 商品ETF，无PE（不走估值因子）
   - {symbol: "159870", name: "化工ETF",     sector: "化工",     csrc_industry: "化学原料和化学制品制造业",          style: "cyclic", style_alt: []}
+  - {symbol: "515210", name: "钢铁ETF",     sector: "钢铁",     csrc_industry: "黑色金属冶炼和压延加工业",          style: "cyclic", style_alt: []}
+  - {symbol: "159745", name: "建材ETF",     sector: "建材",     csrc_industry: "非金属矿物制品业",                  style: "cyclic", style_alt: []}
   # 国防 / 地产 / 汽车
   - {symbol: "512660", name: "军工ETF",     sector: "军工",     csrc_industry: "铁路、船舶、航空航天和其他运输设备制造业", style: "growth", style_alt: []}
   - {symbol: "512200", name: "房地产ETF",   sector: "房地产",   csrc_industry: "房地产业",                          style: "cyclic", style_alt: []}
@@ -55,5 +58,6 @@ rotation_pool:
   - {symbol: "513180", name: "恒生科技ETF", sector: "恒生科技", style: "growth", style_alt: []}
   - {symbol: "513050", name: "中概互联ETF", sector: "中概互联", style: "growth", style_alt: []}
   - {symbol: "159941", name: "纳指ETF",     sector: "纳指",     style: "growth", style_alt: []}
+  - {symbol: "513060", name: "恒生医疗ETF", sector: "恒生医疗", style: "growth", style_alt: []}  # 跨境医药,分散科技集中
   # 防御/收益（策略宽基，无单一行业，不走估值因子）
   - {symbol: "512890", name: "红利低波ETF", sector: "红利",     style: "value",  style_alt: []}
