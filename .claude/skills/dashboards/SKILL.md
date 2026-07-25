@@ -11,7 +11,7 @@ description: One-click refresh + generate + open all three read-only diagnostic 
 |---|---|---|
 | ETF 行业研究（三类分类·性价比·9 信号） | `data/research_report.html` | `research-dashboard` |
 | 指数择时（估值开关·趋势·相对周期·地量·偏离） | `data/index_timing.html` | `tracker-dashboard` |
-| 个股诊断（三类·S07 归因·S10 戴维斯·S08 避坑·时序图） | `data/stock_diagnose.html` | （无，本 skill 覆盖） |
+| 个股诊断（三类·S07 归因·S10 戴维斯·S08 避坑·时序图·🤖AI评估） | `data/stock_diagnose.html` | （无，本 skill 覆盖） |
 
 ## 触发场景
 - 日常：「刷新所有看板 / 盘前看板 / 周五全套报表 / dashboards」
@@ -66,7 +66,7 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/research_report.py        # 冷启动时已由 setup 渲染过,这里重跑无妨(秒级);默认 1 次 LLM 全池综合(无 key 走规则模板),--no-llm 最快
 PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（8 section，深浅色可切）
-PYTHONIOENCODING=utf-8 python scripts/stock_report.py           # 个股诊断（卡片+弹窗时序图，深浅色可切）
+PYTHONIOENCODING=utf-8 python scripts/stock_report.py           # 个股诊断（卡片+弹窗时序图+🤖按钮，深浅色可切；生成不调LLM，🤖点击时实时生成）
 ```
 要推送信号提醒：各自加 `--push-alerts`（触发时推微信/飞书）。
 
@@ -93,3 +93,4 @@ Win/mac/linux 通用。失败就手动双击 `data/*.html`，或 Win 用 `start 
 - 冷启动首次 ~1hr 不可避免（PE 回填 cninfo 限流 + 多源历史）；`--skip-pe` 可快速预览。
 - `setup_research_dashboard.py` 已含依赖/.env 检查，但最好先按 README 跑过 `pip install` + `cp .env.example .env`。
 - 所有 backfill 幂等，中断重跑即可；纯只读诊断侧，不改交易引擎数据。
+- 个股看板 🤖 AI 评估是**点击时实时生成**（非预计算，生成看板不调 LLM）：要用 🤖 需另起 `python scripts/ai_eval_server.py`（首个长驻服务·127.0.0.1:8765，起一次可反复点；不点 🤖 则不需要它）。
