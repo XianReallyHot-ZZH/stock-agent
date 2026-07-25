@@ -398,9 +398,10 @@ class DataManager:
         return n
 
     # ---- Broad-index daily / valuation (V4 tracker) — 指数择时层数据 ----
-    # 5 broad indices. Note 创业板指(399006)/科创50(000688) daily prices ARE fetchable,
+    # 6 broad indices. 000001(上证综指) added for ⑦相对周期律: 创业板 vs 上证 点差周期(只读诊断)。
+    # Note 创业板指(399006)/科创50(000688)/上证综指(000001) daily prices ARE fetchable,
     # but their PE/PB series are NOT in stock_index_pe/pb_lg's supported set (only the 3 below).
-    BROAD_INDICES = ["000016", "000300", "000905", "399006", "000688"]  # 上证50/沪深300/中证500/创业板/科创50
+    BROAD_INDICES = ["000016", "000300", "000905", "399006", "000688", "000001"]  # 上证50/沪深300/中证500/创业板/科创50/上证综指
     INDEX_PE_NAMES = ["沪深300", "上证50", "中证500"]  # stock_index_pe_lg supported subset
 
     def update_index_daily(self, symbols: Optional[list[str]] = None) -> dict:

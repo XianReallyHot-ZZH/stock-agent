@@ -126,3 +126,73 @@ def test_style_allocation_lean():
     assert ti.style_allocation(up, dn, 60)["lean"] == "blue_chip"
     # blue down, growth up → growth
     assert ti.style_allocation(dn, up, 60)["lean"] == "growth"
+
+
+# ---- ⑦ 相对周期律(创业板 vs 上证 点差:包络位置 → 极点/中枢)----
+def test_relative_spread_series_aligns():
+    bm = _line([3000 + i for i in range(10)])
+    gr = _line([2000 + i for i in range(10)])
+    sp = ti.relative_spread_series(bm, gr)
+    assert sp.name == "spread" and len(sp) == 10
+    assert abs(float(sp.iloc[0]) - 1000.0) < 1e-9     # 3000 − 2000
+
+
+def test_relative_spread_series_inner_join():
+    bm = _line([3000.0] * 5, start="2024-01-01")
+    gr = _line([2000.0] * 5, start="2024-01-03")        # 错开 2 个工作日
+    sp = ti.relative_spread_series(bm, gr)
+    assert len(sp) == 3                                  # 仅共同交易日
+
+
+def test_cycle_extremes_envelope_position_top():
+    # flat 1000 然后 spike 到 1500 → 当前=上沿,env_pos/rank_pct 都 ≈1
+    sp = _line([1000.0] * 599 + [1500.0])
+    ce = ti.cycle_extremes(sp, envelope=600)
+    assert ce["valid"]
+    assert ce["max_spread"] == 1500.0 and ce["spread_now"] == 1500.0
+    assert ce["env_pos"] >= 0.99 and ce["rank_pct"] >= 0.99
+
+
+def test_cycle_extremes_drift_slope():
+    # 线性下降 slope=−1/bar → drift_pts_per_yr ≈ −252(<0 = 成长结构性跑赢)
+    sp = _line([1000.0 - i for i in range(600)])
+    ce = ti.cycle_extremes(sp, envelope=600, drift_lookback=600)
+    assert ce["valid"] and ce["drift_pts_per_yr"] < 0
+    assert abs(ce["drift_pts_per_yr"] + 252.0) < 5.0
+
+
+def test_cycle_extremes_short_invalid():
+    assert ti.cycle_extremes(_line([1.0] * 100), envelope=50)["valid"] is False  # <252*2
+
+
+def test_classify_cycle_zones():
+    assert ti.classify_cycle(0.05) == "下沿极点"
+    assert ti.classify_cycle(0.95) == "上沿极点"
+    assert ti.classify_cycle(0.50) == "中枢·无edge"
+    assert ti.classify_cycle(float("nan")) == "—"
+
+
+def test_linear_fit_line_linear_series():
+    # 完全线性 series → 拟合线 == 原线(无残差)
+    sp = _line([1000.0 + 2 * i for i in range(30)])
+    line = ti.linear_fit_line(sp)
+    assert len(line) == 30
+    assert abs(float(line.iloc[0]) - 1000.0) < 1e-6
+    assert abs(float(line.iloc[-1]) - (1000.0 + 2 * 29)) < 1e-6
+
+
+def test_linear_fit_line_short_empty():
+    assert len(ti.linear_fit_line(_line([1.0] * 10))) == 0   # <20 点 → 空
+
+
+def test_relative_momentum_window():
+    sp = _line([float(i) for i in range(30)])           # slope 1/bar
+    m = ti.relative_momentum(sp, short_window=5)
+    assert m["valid"] and abs(m["mom_now"] - 5.0) < 1e-9   # 29 − 24
+
+
+def test_consecutive_run_rise_and_fall():
+    rise = ti.consecutive_run(_line([float(i) for i in range(30)]))
+    assert rise["direction"] == "上证跑盈" and rise["run"] == 29
+    fall = ti.consecutive_run(_line([float(29 - i) for i in range(30)]))
+    assert fall["direction"] == "创业板跑盈" and fall["run"] == 29

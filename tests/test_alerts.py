@@ -9,10 +9,10 @@ def _snap(**kw):
 
 
 def _idx(breakout_dir="none", grade=0, above_ma=False, ma_trend_up=False, choppy=False, valid=True,
-         cross_dir=None, cross_ago=3):
+         cross_dir=None, cross_ago=3, rc_env_pos=None):
     cross = ({"direction": cross_dir, "bars_ago": cross_ago, "date": "2026-07-18"}
              if cross_dir else None)
-    return {"indices": {"000300": {
+    base = {"indices": {"000300": {
         "name": "沪深300", "valid": valid,
         "diagnosis": {
             "breakout": {"direction": breakout_dir, "grade": grade},
@@ -20,6 +20,9 @@ def _idx(breakout_dir="none", grade=0, above_ma=False, ma_trend_up=False, choppy
             "trend": {"above_ma": above_ma, "ma_trend_up": ma_trend_up},
             "choppy": choppy,
         }}}, "valuation": {}, "style": {}, "period": 60}
+    if rc_env_pos is not None:
+        base["relative_cycle"] = {"valid": True, "env_pos": rc_env_pos}
+    return base
 
 
 def _rules(a): return [x["rule"] for x in a]
@@ -134,6 +137,23 @@ def test_E1_stale_above_no_recent_cross_not_triggered():
     # 穿越但太久远(30 天前)也不算「有效突破」
     a2 = alerts.evaluate({}, _idx(breakout_dir="up", grade=3, cross_dir="up", cross_ago=30))
     assert "E1" not in _rules(a2)
+
+
+# ---- E5 ⑦相对周期极点(创业板 vs 上证 点差处5年包络上/下沿)----
+def test_E5_cycle_extreme_high():
+    a = alerts.evaluate({}, _idx(rc_env_pos=0.90))
+    assert any(x["rule"] == "E5" and x["level"] == "info" and "创业板" in x["msg"] for x in a)
+
+
+def test_E5_cycle_extreme_low():
+    a = alerts.evaluate({}, _idx(rc_env_pos=0.10))
+    assert any(x["rule"] == "E5" and "上证" in x["msg"] for x in a)
+
+
+def test_E5_no_fire_at_center():
+    # 中枢(env_pos 20-80%)不发 E5
+    a = alerts.evaluate({}, _idx(rc_env_pos=0.50))
+    assert not any(x["rule"] == "E5" for x in a)
 
 
 def test_D_chip_phase_bear_and_bull():

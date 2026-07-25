@@ -7,6 +7,7 @@ evaluate 接收 ETF snapshots + 指数层 diagnose,返回 alert 列表。
   D   筹码相位转兑现中段/见顶预警(空)、见底/低位加仓(多)
   E1  60日线有效突破 → 右侧买点(震荡市抑制)
   E2  60日线有效跌破 → 止盈止损
+  E5  ⑦相对周期极点(创业板vs上证 点差处5年包络上/下沿)→ 相对回归方向(info,非绝对买卖)
   C1/C2 周期 PB 触底/顶 —— 当前跳过:板块 PB 无数据源(cyclic 不估值),待 Phase 2
   B1  价值股息率偏高(>5%)→ 买入窗口
   A1/A2 业绩预告承压/恶化 → 抱着颗雷/戴维斯双杀前兆
@@ -26,6 +27,7 @@ _A3_DECEL_MARGIN = 0.05      # A3: 营收增速下滑 >5pp 触发(滤噪音)
 _G1_RECENT_DAYS = 90         # G1: 预告公告在 90 天内 = 披露窗口刚开
 _G2_DEADLINE_NEAR_DAYS = 45  # G2: 法定披露截止日在 45 天内 = 临近
 _E3_LOW, _E3_HIGH = 0.05, 0.95  # E3: 偏离极值套利阈值(≤5% 超卖买点 / ≥95% 超买卖点)
+_E5_LOW, _E5_HIGH = 0.20, 0.80  # E5: ⑦相对周期包络位置阈值(≤20% 下沿 / ≥80% 上沿)
 
 
 def _nan(v) -> bool:
@@ -79,6 +81,17 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
             if t["above_ma"] is False and t["ma_trend_up"] is False:
                 alerts.append({"level": "warn", "scope": "大盘", "rule": "F1",
                                "msg": "沪深300 在60日线下且均线向下 → 风险开关(趋势信号谨慎)"})
+        # E5: ⑦相对周期极点(创业板 vs 上证 点差在5年包络的上/下沿)→ 相对回归方向
+        # level=info(相对回归信号,绝不写成绝对买卖);中枢(env_pos 20-80%)不发。仅经 research/stock
+        # 推送通路触发(index_timing_report.py 不推送)。上沿=上证相对过强→回归利创业板;下沿反之。
+        rc = index_diag.get("relative_cycle") or {}
+        if rc.get("valid") and not _nan(rc.get("env_pos")):
+            if rc["env_pos"] >= _E5_HIGH:
+                alerts.append({"level": "info", "scope": "大盘·相对周期", "rule": "E5",
+                               "msg": f"上证−创业板点差处5年包络上沿(位置{rc['env_pos']:.0%})→ 回归方向:创业板相对跑盈"})
+            elif rc["env_pos"] <= _E5_LOW:
+                alerts.append({"level": "info", "scope": "大盘·相对周期", "rule": "E5",
+                               "msg": f"上证−创业板点差处5年包络下沿(位置{rc['env_pos']:.0%})→ 回归方向:上证相对跑盈"})
 
     # ---- ETF 层(D/B1/A1A2)----
     for sym, snap in etf_snapshots.items():

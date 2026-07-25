@@ -1,10 +1,12 @@
-"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 五件套(V4 tracker)。
+"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 七件套(V4 tracker)。
 
 ① 偏离极值曲线(close+MA60 主图 / 偏离度副图+历史极值线+当前点)
-② 5宽基趋势状态表(60日线上下/均线趋势/突破跌破档位/震荡市)
+② 6宽基趋势状态表(60日线上下/均线趋势/突破跌破档位/震荡市)
 ③ 估值开关 stat tile(沪深300 PE 分位 + 全市场 PB 分位 + zone)
 ④ 蓝筹 vs 成长 仓位倾向 lean 指标卡
 ⑤ 当前有效突破/跌破信号列表
+⑥ 市场温度·大小盘温差(全市场 PB 分位 vs 沪深300 PB 分位)
+⑦ 相对周期律·沪深成长温差(创业板 vs 上证 点差:5年包络位置 → 极点/中枢 + 历史稀有度 + 漂移)
 
 配色遵循 dataviz skill 中性参考调色板:文字用 ink token 不穿 series 色;状态用 status
 chip(icon+label,不单靠色);A股语义下正偏离(超买)暖红、负偏离(超卖)冷蓝。
@@ -227,6 +229,114 @@ def _signals_html(diag: dict) -> str:
     return "<ul class='sig-list'>" + "".join(sigs) + "</ul>"
 
 
+# ---- ⑦ 相对周期律(创业板 vs 上证 点差:包络位置 → 极点/中枢)----
+def _relative_cycle_figure(rc: dict, spread: pd.Series) -> go.Figure:
+    """点差(上证−创业板,点)长历史 + 振幅通道线性趋势线(上/下/中) + 当前点。
+
+    上/下沿 = 5年滚动 max/min 的 OLS 线性拟合(直线,看漂移方向,精度让位于趋势);
+    中线 = (上沿+下沿)/2。两直线收敛/发散 = 振幅带收窄/展宽。当前精确包络见 tile。"""
+    idx = pd.to_datetime(spread.index)
+    win = 252 * rc.get("envelope_years", 5)
+    yrs = rc.get("envelope_years", 5)
+    upper = ti.linear_fit_line(spread.rolling(win).max())    # 上沿趋势(直线)
+    lower = ti.linear_fit_line(spread.rolling(win).min())    # 下沿趋势(直线)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=idx, y=spread, name="点差(上证−创业板)",
+                             line=dict(color=_PAL["series_1"], width=2)))
+    if len(upper):
+        fig.add_trace(go.Scatter(x=pd.to_datetime(upper.index), y=upper.to_numpy(),
+                                 name=f"上沿·趋势线({yrs}年滚动最高·线性)",
+                                 line=dict(color=_PAL["pos_extreme"], width=1.5)))
+    if len(lower):
+        fig.add_trace(go.Scatter(x=pd.to_datetime(lower.index), y=lower.to_numpy(),
+                                 name=f"下沿·趋势线({yrs}年滚动最低·线性)",
+                                 line=dict(color=_PAL["neg_extreme"], width=1.5)))
+    if len(upper) and len(lower):
+        mid = ((upper + lower) / 2.0).dropna()
+        if len(mid):
+            fig.add_trace(go.Scatter(x=pd.to_datetime(mid.index), y=mid.to_numpy(),
+                                     name="中线·趋势(上沿+下沿)/2",
+                                     line=dict(color=_PAL["muted"], width=1.5, dash="dash")))
+    now = rc.get("spread_now")
+    if not pd.isna(now) and len(idx):
+        fig.add_trace(go.Scatter(x=[idx[-1]], y=[now], mode="markers+text",
+                                 marker=dict(size=10, color=_PAL["ink"]),
+                                 text=[f"现在 {now:+.0f}"], textposition="top center",
+                                 showlegend=False))
+    fig.update_layout(
+        height=460, margin=dict(l=50, r=20, t=30, b=30),
+        paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+        font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=True)
+    fig.update_yaxes(gridcolor=_PAL["grid"], zeroline=True, zerolinewidth=1,
+                     zerolinecolor=_PAL["baseline"])
+    fig.update_xaxes(gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"], type="date",
+                     hoverformat="%Y-%m-%d", rangeslider_visible=True,
+                     rangeselector=dict(buttons=[
+                         dict(count=1, label="1年", step="year", stepmode="backward"),
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(count=5, label="5年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
+    return fig
+
+
+def _relative_cycle_html(rc: dict, fig_html: str = "") -> str:
+    if not rc.get("valid"):
+        return "<p class='hint'>相对周期律数据不足(需 上证综指+创业板指 各 ≥2 年)</p>"
+    zone = rc["zone"]
+    zc = (_PAL["neg_extreme"] if zone == "下沿极点"
+          else _PAL["pos_extreme"] if zone == "上沿极点" else _PAL["ink_sec"])
+    now = rc["spread_now"]
+    tiles = (
+        f"<div class='tile'><div class='tile-label'>当前点差(上证−创业板)</div>"
+        f"<div class='tile-value' style='color:{_PAL['ink']}'>{now:+.0f}</div>"
+        f"<div class='tile-sub'>5年包络 {rc['min_spread']:+.0f} ~ {rc['max_spread']:+.0f}</div></div>"
+        f"{_meter('周期位置(包络·headline)', rc['env_pos'], '作者口径 · ' + zone)}"
+        f"{_meter('历史稀有度(5yr秩分位)', rc['rank_pct'], 'house口径 · 分布偏态时会与包络位置背离')}"
+        f"<div class='tile'><div class='tile-label'>结构漂移</div>"
+        f"<div class='tile-value' style='color:{_PAL['ink_sec']}'>{rc['drift_pts_per_yr']:+.0f} 点/年</div>"
+        f"<div class='tile-sub'>10yr OLS · &lt;0 = 创业板结构性跑赢</div></div>")
+    run_txt = f"{rc['run_dir'] or '—'} {rc['run']}日" if rc.get("run_dir") else "—"
+    b_tiles = (
+        f"<div class='tile'><div class='tile-label'>短期动量(20日)</div>"
+        f"<div class='tile-value'>{rc['mom_now']:+.0f} 点</div>"
+        f"<div class='tile-sub'>点差近20日净变动</div></div>"
+        f"<div class='tile'><div class='tile-label'>连续相对强弱</div>"
+        f"<div class='tile-value'>{run_txt}</div>"
+        f"<div class='tile-sub'>spread 同向连续天数</div></div>")
+    hint = ("相对周期律:点差 = 上证综指 − 创业板指(点)。<b>headline=当前点差在5年包络[下沿,上沿]内的位置</b>"
+            "(作者口径:极点才有回归方向,中枢无edge = 仅相对回归风险解除,非绝对涨跌)。"
+            "历史稀有度=同窗口秩分位(house口径:分布偏态时与包络位置背离,两者并存看)。"
+            "结构漂移 &lt;0 = 创业板长期跑赢(约 −40~−50 点/年)。上沿→回归利创业板,下沿→回归利上证。")
+    out = (f"<div class='tiles-row'>{tiles}</div>"
+           f"<div style='margin-top:10px'>{_chip('周期: ' + zone, zc)}</div>"
+           f"<div class='tiles-row' style='margin-top:12px'>{b_tiles}</div>"
+           f"<div class='hint' style='margin-top:8px'>{hint}</div>")
+    if fig_html:
+        out += (f"<div class='hint' style='margin-top:10px'>通道线 = 5年滚动上下沿的线性趋势拟合"
+                f"(看漂移方向 & 振幅收窄/展宽,非精确边缘);当前精确包络见上方 tile。</div>"
+                f"<div style='margin-top:4px'>{fig_html}</div>")
+    return out
+
+
+def _cycle_stage_chip(diag: dict) -> str:
+    """D: 顶部一行「周期定位」= ③估值zone + ①任一宽基偏离极值 → 定性合成。"""
+    val_zone = (diag.get("valuation") or {}).get("zone", "—")
+    extremes = []
+    for info in (diag.get("indices") or {}).values():
+        if not info.get("valid"):
+            continue
+        pct = ((info.get("diagnosis") or {}).get("deviation") or {}).get("pct")
+        if pct is not None and not pd.isna(pct) and (pct <= 0.05 or pct >= 0.95):
+            extremes.append((info["name"], pct))
+    if extremes:
+        ext_txt = "、".join(f"{n}偏离{p:.0%}" for n, p in extremes[:2])
+    else:
+        ext_txt = "宽基偏离均中性"
+    return (f"<div class='hint' style='margin-bottom:12px'>📍 周期定位:估值『{val_zone}』· {ext_txt}"
+            f" → 估值+趋势极值合成读大盘阶段(定性参考,非交易信号)</div>")
+
+
 _CSS = """
 :root{--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink-sec:#52514e;--muted:#898781;--grid:#e1e0d9;--hover:#f4f3ef}
 [data-theme="dark"]{--surface:#1a1a19;--plane:#0d0d0d;--ink:#ffffff;--ink-sec:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--hover:#262624}
@@ -266,9 +376,22 @@ window.addEventListener('DOMContentLoaded',function(){var b=document.getElementB
 
 def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                         lookback: int | None = None, title: str = "指数择时层看板") -> str:
-    """组装五件套,写出离线自包含 HTML。返回输出路径。"""
+    """组装六件套 + ⑦相对周期律,写出离线自包含 HTML。返回输出路径。"""
     diag = dz.diagnose_layer(store, period=period, lookback=lookback)
-    figs_html, first = [], True
+    # ⑦ 相对周期律: 点差图(若有效,它最先出现 → 承载 plotly.js 首加载;① 首图改 False 避免重复加载 ~3MB)
+    rc = diag.get("relative_cycle") or {}
+    rc_fig_html = ""
+    if rc.get("valid"):
+        try:
+            _sp = ti.relative_spread_series(
+                store.get_index_daily_series(rc["benchmark"])["close"],
+                store.get_index_daily_series(rc["growth"])["close"])
+            if len(_sp):
+                rc_fig_html = _relative_cycle_figure(rc, _sp).to_html(
+                    full_html=False, include_plotlyjs=True)
+        except Exception:  # noqa: BLE001
+            rc_fig_html = ""
+    figs_html, first = [], (rc_fig_html == "")   # ⑦ 已加载 plotly.js → ① 首图不再重复
     for sym, nm in dz.BROAD_INDICES:
         df = store.get_index_daily_series(sym)
         if len(df) < period:
@@ -284,8 +407,10 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<div class='topbar'><h1>{title}</h1>"
         f"<button id='theme-btn' onclick='toggleTheme()'>🌙</button></div>"
         f"<div class='meta'>数据截至 {last_date} · {period}日线 · 生成于 {datetime.now():%Y-%m-%d %H:%M}</div>"
+        f"{_cycle_stage_chip(diag)}"
         f"<h2>③ 估值开关</h2><section>{_valuation_tile_html(diag['valuation'])}</section>"
         f"<h2>⑥ 市场温度·大小盘温差</h2><section>{_market_temp_html(diag['market_temp'])}</section>"
+        f"<h2>⑦ 相对周期律·沪深成长温差</h2><section>{_relative_cycle_html(rc, rc_fig_html)}</section>"
         f"<h2>④ 蓝筹 vs 成长 仓位倾向</h2><section>{_style_card_html(diag['style'])}</section>"
         f"<h2>② 趋势状态</h2><section>{_trend_table_html(diag)}</section>"
         f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}"

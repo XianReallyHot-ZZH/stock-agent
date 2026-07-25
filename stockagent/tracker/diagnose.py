@@ -4,7 +4,8 @@
   diagnose_index(close, ...)  — 纯:单指数 60日线择时诊断(trend/deviation/breakout/choppy)
   diagnose_valuation(store)   — 估值开关(④):沪深300 PE 分位 + 全市场 PB 分位 → 敏感度建议
   diagnose_style(store)       — 蓝筹 vs 成长 → 仓位倾向(S13)
-  diagnose_layer(store)       — 顶层:遍历5宽基 + 估值 + 风格,返回完整指数择时诊断
+  diagnose_relative_cycle(store) — ⑦相对周期律: 创业板 vs 上证 点差在包络内的位置 → 极点/中枢
+  diagnose_layer(store)       — 顶层:遍历6宽基 + 估值 + 风格 + 相对周期,返回完整指数择时诊断
 """
 from __future__ import annotations
 
@@ -13,10 +14,11 @@ import pandas as pd
 
 from . import indicators as ti
 
-# 5 broad indices (same set as DataManager.BROAD_INDICES; duplicated here so the diagnose
-# layer has a stable iteration order independent of the manager).
+# 6 broad indices (same set as DataManager.BROAD_INDICES; duplicated here so the diagnose
+# layer has a stable iteration order independent of the manager). 000001(上证综指) is the
+# benchmark for ⑦相对周期律 (创业板 vs 上证 点差周期)。
 BROAD_INDICES = [("000016", "上证50"), ("000300", "沪深300"), ("000905", "中证500"),
-                 ("399006", "创业板指"), ("000688", "科创50")]
+                 ("399006", "创业板指"), ("000688", "科创50"), ("000001", "上证综指")]
 VALUATION_INDEX = "沪深300"            # ④估值开关以沪深300(大盘benchmark)为主
 PE_PCT_LOW, PE_PCT_HIGH = 0.20, 0.80   # 估值低/高位分位阈值(④ 敏感度建议)
 
@@ -132,12 +134,52 @@ def diagnose_style(store, period: int = ti.MA_PERIOD) -> dict:
     return ti.style_allocation(blue["close"], growth["close"], period)
 
 
+def diagnose_relative_cycle(store, growth: str = "399006", benchmark: str = "000001",
+                            envelope_years: int = 5, drift_years: int = 10,
+                            short_momentum_window: int = 20) -> dict:
+    """⑦ 相对周期律(只读诊断旁路): 创业板 vs 上证 点差在滚动包络内的位置。
+
+    作者框架: spread = 上证 − 创业板(点) 在「上一周期+本周期」振幅区间 [min_spread,
+    max_spread] 内的位置 env_pos ∈ [0,1] → 极点(有回归方向)/中枢(无edge,仅风险解除)。
+      env_pos        — headline(作者口径,三次调用皆由此复现)
+      rank_pct       — 同窗口 raw spread 秩分位 = 历史稀有度(house 口径,副指标)
+      drift_pts_per_yr — 长窗口 OLS 结构漂移率(info;<0 = 成长结构性跑赢,约 −40~−50/年)
+    B 风格轮动持续性(mom_now 短期动量 + 连续跑盈 run)折进同一节。pair 默认评论员原文口径
+    (399006 创业板指, 000001 上证综指)。硬编码常量(贴合 house style,不读 params.yaml)。"""
+    bm = store.get_index_daily_series(benchmark)
+    gr = store.get_index_daily_series(growth)
+    out = {"benchmark": benchmark, "growth": growth,
+           "min_spread": np.nan, "max_spread": np.nan, "envelope_mid": np.nan,
+           "spread_now": np.nan, "env_pos": np.nan, "zone": "—",
+           "rank_pct": np.nan, "drift_pts_per_yr": np.nan,
+           "mom_now": np.nan, "run_dir": None, "run": 0,
+           "envelope_years": envelope_years, "valid": False}
+    if len(bm) < 252 * 2 or len(gr) < 252 * 2:
+        return out
+    spread = ti.relative_spread_series(bm["close"], gr["close"])
+    if len(spread) < 252 * 2:
+        return out
+    ce = ti.cycle_extremes(spread, envelope=252 * envelope_years,
+                           drift_lookback=252 * drift_years)
+    mom = ti.relative_momentum(spread, short_momentum_window)
+    run = ti.consecutive_run(spread)
+    out.update({
+        "min_spread": ce["min_spread"], "max_spread": ce["max_spread"],
+        "envelope_mid": ce["envelope_mid"], "spread_now": ce["spread_now"],
+        "env_pos": ce["env_pos"], "zone": ti.classify_cycle(ce["env_pos"]),
+        "rank_pct": ce["rank_pct"], "drift_pts_per_yr": ce["drift_pts_per_yr"],
+        "mom_now": mom["mom_now"], "run_dir": run["direction"], "run": run["run"],
+        "valid": ce["valid"],
+    })
+    return out
+
+
 def diagnose_layer(store, period: int = ti.MA_PERIOD,
                    lookback: int | None = None) -> dict:
     """顶层:整个指数择时层诊断(给 dashboard)。
 
     返回 {indices: {symbol: {name, close_last, date_last, diagnosis, valid}},
-          valuation, style, period}."""
+          valuation, market_temp, style, relative_cycle, period}."""
     indices = {}
     for sym, nm in BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -157,5 +199,6 @@ def diagnose_layer(store, period: int = ti.MA_PERIOD,
         "valuation": diagnose_valuation(store),
         "market_temp": diagnose_market_temp(store),
         "style": diagnose_style(store, period),
+        "relative_cycle": diagnose_relative_cycle(store),
         "period": period,
     }

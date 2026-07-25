@@ -26,7 +26,7 @@ def _summary(dm: DataManager):
     store = dm.store
     print("\n=== 指数层数据覆盖 ===")
     names = [("000016", "上证50"), ("000300", "沪深300"), ("000905", "中证500"),
-             ("399006", "创业板指"), ("000688", "科创50")]
+             ("399006", "创业板指"), ("000688", "科创50"), ("000001", "上证综指")]
     for sym, nm in names:
         df = store.get_index_daily_series(sym)
         if len(df):
