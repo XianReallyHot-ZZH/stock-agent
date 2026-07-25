@@ -60,7 +60,7 @@ h2 { font-size:16px; margin:0 0 10px; }
 <div class="header">
   <button id="theme-btn" class="toggle" onclick="toggleTheme()">🌙 深浅色</button>
   <h1>个股诊断看板</h1>
-  <p class="muted">as_of 2026-07-25 · 9 只个股 · 数据底座 C0/C0.5/C0.6(price/估值/财报/分红/预告)</p>
+  <p class="muted">as_of 2026-07-26 · 9 只个股 · 数据底座 C0/C0.5/C0.6(price/估值/财报/分红/预告)</p>
 </div>
 <div class="alerts"><h2>📡 信号提醒 <span class="count">⚠5 💡3</span></h2><div class="alert alert-warn"><span class="alert-icon">⚠</span><span class="alert-rule">[A3]</span><span class="alert-scope">贵州茅台</span><span class="alert-msg">营收增速下滑(16%→-1%)→ 营收是利润之母,业绩前瞻预警</span></div><div class="alert alert-warn"><span class="alert-icon">⚠</span><span class="alert-rule">[A3]</span><span class="alert-scope">中芯国际</span><span class="alert-msg">营收增速下滑(28%→16%)→ 营收是利润之母,业绩前瞻预警</span></div><div class="alert alert-warn"><span class="alert-icon">⚠</span><span class="alert-rule">[A3]</span><span class="alert-scope">迈瑞医疗</span><span class="alert-msg">营收增速下滑(5%→-9%)→ 营收是利润之母,业绩前瞻预警</span></div><div class="alert alert-warn"><span class="alert-icon">⚠</span><span class="alert-rule">[A1]</span><span class="alert-scope">立讯精密</span><span class="alert-msg">业绩预告增速下滑(yoy +20%) → 抱着颗雷(拐点)</span></div><div class="alert alert-info"><span class="alert-icon">💡</span><span class="alert-rule">[G1]</span><span class="alert-scope">立讯精密</span><span class="alert-msg">业绩披露窗口已开(预告「略增」公告2026-04-29)→ 催化剂/风险事件</span></div><div class="alert alert-info"><span class="alert-icon">💡</span><span class="alert-rule">[E3]</span><span class="alert-scope">汇川技术</span><span class="alert-msg">股价偏离60日线接近历史底部(pct=4%)→ 超卖·套利买点</span></div><div class="alert alert-warn"><span class="alert-icon">⚠</span><span class="alert-rule">[A3]</span><span class="alert-scope">恒瑞医药</span><span class="alert-msg">营收增速下滑(23%→13%)→ 营收是利润之母,业绩前瞻预警</span></div><div class="alert alert-info"><span class="alert-icon">💡</span><span class="alert-rule">[E4]</span><span class="alert-scope">大盘</span><span class="alert-msg">蓝筹vs成长趋势背离(蓝筹上行/成长下行)→ 偏向蓝筹(上证50)</span></div></div>
 <div class="cards-head"><h2>个股诊断卡片</h2>
@@ -4257,11 +4257,9 @@ async function openAiEval(sym){
     var r = await fetch('http://127.0.0.1:8765/ai-eval?sym=' + sym);
     var data = await r.json();
     body.textContent = data.ok ? data.text
-      : '⚠ 生成失败: ' + (data.error||'未知') + '
-(检查 ai_eval_server 是否运行、LLM key 是否配置)';
+      : '⚠ 生成失败: ' + (data.error||'未知') + '\n(检查 ai_eval_server 是否运行、LLM key 是否配置)';
   }catch(e){
-    body.textContent = '⚠ AI 评估服务未启动或不可达。
-请先在新终端运行: python scripts/ai_eval_server.py';
+    body.textContent = '⚠ AI 评估服务未启动或不可达。\n请先在新终端运行: python scripts/ai_eval_server.py';
   }
 }
 function closeAiEval(){

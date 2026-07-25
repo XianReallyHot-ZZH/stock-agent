@@ -344,7 +344,7 @@ _AI_EVAL_MODAL_HTML = """
 # AI 评估弹窗交互(依赖运行时 AI_EVALS / _NAMES)。openAiEval 用 textContent 渲染(天然防 XSS,
 # 无需 markdown);标题/遮罩/Esc 关闭镜像 _CHART_MODAL_JS。独立 id(ai-modal-title/ai-body)避免与
 # 图表弹窗的 modal-title 冲突(getElementById 只返第一个匹配)。
-_AI_EVAL_MODAL_JS = """
+_AI_EVAL_MODAL_JS = r"""
 async function openAiEval(sym){
   var ov=document.getElementById('ai-modal'),
       title=document.getElementById('ai-modal-title'),

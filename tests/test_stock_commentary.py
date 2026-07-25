@@ -197,6 +197,17 @@ def test_ai_eval_assets_injects_modal_and_fetch():
     assert "var AI_EVALS" not in html               # 纯服务,不再预计算嵌入
 
 
+def test_ai_eval_js_strings_are_escaped_not_real_newlines():
+    """JS 单引号字符串不能跨行:Python '\n' 若被解释成真实换行写进 HTML,会让整个 script 块
+    SyntaxError、openAiEval 未定义(曾出此线上 bug)。raw 字符串保证 \\n 是字面 → JS 换行转义。"""
+    import re
+    html = srep._ai_eval_assets({"600519": "贵州茅台"})
+    m = re.search(r"function openAiEval.*?\n\}", html, re.S)
+    fn = m.group(0)
+    assert "\\n(检查" in fn      # 字面 反斜杠+n 存在(不是真实换行)
+    assert "\\n请先" in fn
+
+
 def test_ai_eval_assets_empty_names_still_renders_modal():
     """空 names(render 无股时)仍注入 modal+JS,不报错(按钮依赖服务,非预计算数据)。"""
     html = srep._ai_eval_assets({})
