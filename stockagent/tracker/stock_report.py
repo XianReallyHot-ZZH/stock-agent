@@ -25,6 +25,11 @@ def _pct(v, signed: bool = False) -> str:
     return f"{v*100:+.1f}%" if signed else f"{v*100:.0f}%"
 
 
+def _pct1(v) -> str:
+    """1 位小数百分比(股息率等需要细看对比的指标用)。"""
+    return "—" if _nan(v) else f"{v*100:.1f}%"
+
+
 def _num(v, nd: int = 2) -> str:
     return "—" if _nan(v) else f"{v:.{nd}f}"
 
@@ -170,7 +175,7 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False) -> str:
         <tr><td>{_rev_lbl}</td><td>{_pct(f.get('revenue_cagr'), True)}</td>
             <td>{_np_lbl}</td><td>{_pct(f.get('profit_cagr'), True)}</td></tr>
         <tr><td>{_vol_lbl}</td><td>{_pct(f.get('profit_vol'))}</td>
-            <td>股息率</td><td>{_pct(f.get('div_yield'))}</td></tr>
+            <td>股息率</td><td>{_pct1(f.get('div_yield'))}</td></tr>
         <tr><td>PE(TTM)</td><td>{_num(d.get('pe_ttm'),1)} <span class="muted">(分位{_pct(vz.get('pe_pct'))})</span></td>
             <td>PB</td><td>{_num(d.get('pb'))} <span class="muted">(分位{_pct(vz.get('pb_pct'))})</span></td></tr>
         <tr><td>戴维斯</td><td colspan="3"><span class="muted">净利YoY {_pct(dv.get('profit_yoy_latest'),True)} · PE变化 {_pct(dv.get('pe_change'),True)}</span></td></tr>

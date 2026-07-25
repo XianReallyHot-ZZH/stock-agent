@@ -73,12 +73,21 @@ def test_profit_volatility_nan_when_short():
     assert np.isnan(vol) and np.isnan(mn)
 
 
-# ---- stock_dividend_yield ----
-def test_stock_dividend_yield_trailing_12mo():
-    dv = pd.DataFrame({"cash_per_share": [3.0, 2.0, 5.0]},
-                      index=["2026-01-15", "2025-12-10", "2024-06-01"])
-    # 假设 "今天" = 2026-02-01(由 index.max() 推):近 365 天 = 3.0+2.0=5.0,价 100 → 5%
-    yld = sd.stock_dividend_yield(dv, price=100.0)
+# ---- stock_dividend_yield(按节奏年化,非 365 天窗口) ----
+def test_stock_dividend_yield_semi_annual():
+    # 半年付:最近 2 次 = 年化分红(~180 天间隔 → N=2)
+    dv = pd.DataFrame({"cash_per_share": [1.0, 1.0, 1.0, 1.0]},
+                      index=["2025-01-15", "2025-07-15", "2026-01-15", "2026-07-15"])
+    yld = sd.stock_dividend_yield(dv, price=100.0)    # last 2 = 2.0 → 2%
+    assert abs(yld - 0.02) < 1e-9
+
+
+def test_stock_dividend_yield_frequency_switch_not_double_counted():
+    # 年付→半年付 切换:旧整笔(2.0)+ 新两次(1.0+1.0)。旧 365 天窗口会把 3 笔全算→4.0/40=10%;
+    # 按节奏(中位间隔~180天→半年付→N=2)只取最近 2 次 = 2.0 → 5%,不重复计 FY2024 整笔
+    dv = pd.DataFrame({"cash_per_share": [2.0, 1.0, 1.0]},
+                      index=["2025-07-11", "2026-01-16", "2026-07-10"])
+    yld = sd.stock_dividend_yield(dv, price=40.0)
     assert abs(yld - 0.05) < 1e-9
 
 

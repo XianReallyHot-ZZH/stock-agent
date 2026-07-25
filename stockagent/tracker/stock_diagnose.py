@@ -82,29 +82,31 @@ def profit_growth_volatility(annual_series: pd.Series,
     return (float(g.std(ddof=0)), float(g.min()))
 
 
-def stock_dividend_yield(dividend_df: pd.DataFrame, price: float,
-                         lookback_days: int = 365) -> float:
-    """近 12 月(可配)每股现金分红之和 ÷ 当前价。dividend_df = store.get_stock_dividend_series
-    (indexed by ex_date, 有 cash_per_share 列)。NaN if 无数据/无价。
+def stock_dividend_yield(dividend_df: pd.DataFrame, price: float) -> float:
+    """年化股息率 = 最近 N 次每股现金分红之和 ÷ 现价。按最近分红节奏(季/半年/年)定 N,
+    非「过去 365 天窗口求和」——后者在频率切换年(年付→半年付)会把旧整笔 + 新分次都塞进窗口,
+    虚高近 2 倍(招行实测 10.6% vs 真实 ~5.3%)。NaN if 无数据/无价。
 
-    已知偏高(方向正确,绝对值偏大,C2/B1 精算时再修):
-      1) 项目 data.adjust=raw,高分红股的 raw 价被历年累计分红压低(招行 raw 38 vs 实际 ~42)→ 分母偏小。
-      2) 分红节奏切换年(如招行 2026 由年付转半年付),TTM 窗口会多吃 1 次 → 分子偏大。
-    分类器对此鲁棒(价值也经干净的 PE 分位识别);精确股息率留给 C2 价值提醒(可用一次性 qfq 价/派息率口径重算)。"""
+    价为 raw(不复权);不复权只压低历史价、不改当前价,故现价 = 真实现价,分母正确。
+    节奏用最近 3 次分红间隔的中位数判定:<130天=季付(N=4)/<270天=半年付(N=2)/余=年付(N=1)。"""
     if dividend_df is None or len(dividend_df) == 0 or _nan(price) or price <= 0:
         return np.nan
     if "cash_per_share" not in dividend_df.columns:
         return np.nan
-    cps = pd.to_numeric(dividend_df["cash_per_share"], errors="coerce").dropna()
+    cps = pd.to_numeric(dividend_df["cash_per_share"], errors="coerce")
+    idx = pd.to_datetime(cps.index, errors="coerce")
+    mask = cps.notna() & idx.notna()
+    cps = cps[mask].set_axis(idx[mask]).sort_index()
     if len(cps) == 0:
         return np.nan
-    idx = pd.to_datetime(cps.index, errors="coerce")
-    cutoff = idx.max() - pd.Timedelta(days=lookback_days)
-    # 严格 `>`(非 ≥):一年分红 2-4 次的股票,365 天窗口在边界会多吃 1 次(N+1)→ 股息率虚高 ~1.6x。
-    recent = cps[idx > cutoff]
-    if len(recent) == 0:
-        return np.nan
-    return float(recent.sum()) / float(price)
+    # 最近节奏(最近 3 次间隔中位数)→ 年化次数 N
+    if len(cps) >= 2:
+        gaps = cps.index.to_series().diff().dropna().dt.days
+        med = float(gaps.tail(3).median())
+    else:
+        med = 365.0
+    n = 4 if med < 130 else 2 if med < 270 else 1     # 季(~90)/半年(~180)/年(~365)
+    return float(cps.tail(n).sum()) / float(price)
 
 
 def valuation_percentile(value_series, lookback_years: int | None = None) -> float:
