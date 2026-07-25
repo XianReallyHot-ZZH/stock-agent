@@ -10,7 +10,7 @@ description: One-click refresh + generate + open all three read-only diagnostic 
 | 看板 | 产物 | 单看板 skill |
 |---|---|---|
 | ETF 行业研究（三类分类·性价比·9 信号） | `data/research_report.html` | `research-dashboard` |
-| 指数择时（S12-13：估值开关·趋势·突破跌破·偏离） | `data/index_timing.html` | `tracker-dashboard` |
+| 指数择时（估值开关·趋势·相对周期·地量·偏离） | `data/index_timing.html` | `tracker-dashboard` |
 | 个股诊断（三类·S07 归因·S10 戴维斯·S08 避坑·时序图） | `data/stock_diagnose.html` | （无，本 skill 覆盖） |
 
 ## 触发场景
@@ -45,7 +45,7 @@ else:
 # ETF 行业研究：全套历史(价格+份额+净值+PE)+ 渲染 research_report.html（自含依赖/.env 检查）
 PYTHONIOENCODING=utf-8 python scripts/setup_research_dashboard.py
 # 快速预览（跳过 ~30min 的 PE 回填，双因子排名照跑）：上行加 --skip-pe
-# 指数择时（全量幂等：5 宽基日线 + 沪深300 PE/PB + 全市场 PB）
+# 指数择时（全量幂等：6 宽基日线含000001 + 沪深300 PE/PB + 全市场 PB + 两市成交额）
 PYTHONIOENCODING=utf-8 python scripts/backfill_index.py
 # 个股诊断（全量幂等：日线 / baidu PE·PB / sina 财报 / 分红 / eastmoney 预告）
 PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py
@@ -65,7 +65,7 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py
 ### 2. 生成三个 HTML
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/research_report.py        # 冷启动时已由 setup 渲染过,这里重跑无妨(秒级);默认 1 次 LLM 全池综合(无 key 走规则模板),--no-llm 最快
-PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（6 section，深浅色可切）
+PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（8 section，深浅色可切）
 PYTHONIOENCODING=utf-8 python scripts/stock_report.py           # 个股诊断（卡片+弹窗时序图，深浅色可切）
 ```
 要推送信号提醒：各自加 `--push-alerts`（触发时推微信/飞书）。
@@ -80,7 +80,7 @@ Win/mac/linux 通用。失败就手动双击 `data/*.html`，或 Win 用 `start 
 - 走的是 **COLD 还是 WARM**（让用户知道这次是不是首次大回填）
 - 三个 HTML 路径 + 各自一行关键结论：
   - 研究：参与排名 N/27、性价比 top 3 + 相位
-  - 指数：估值 zone + 大小盘温差 + 是否有有效突破/跌破信号
+  - 指数：估值 zone + 大小盘温差 + ⑦相对周期位置 + ⑧地量状态 + 是否有有效突破/跌破信号
   - 个股：观察池触发提醒数 + 任何异常（避坑/戴维斯/预告拐点）
 - 本轮数据问题（某 ETF 缺失、某股 PE 稀疏、legulegu 限流需重跑等）
 
