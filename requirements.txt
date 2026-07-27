@@ -2,6 +2,7 @@
 pandas>=2.0
 numpy>=1.24
 akshare>=1.18
+baostock>=0.9   # 两市成交额(⑧地量监测 sh.000001+sz.399001 amount 求和) + ETF/个股日线第三容错源
 requests>=2.31
 python-dateutil>=2.8
 pyyaml>=6.0
