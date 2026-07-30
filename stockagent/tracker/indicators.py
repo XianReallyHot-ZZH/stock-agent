@@ -98,6 +98,28 @@ def deviation_extremes(close: pd.Series, period: int = MA_PERIOD,
     }
 
 
+def deviation_pct_expanding(close: pd.Series, period: int = MA_PERIOD,
+                            min_bars: int = 20) -> pd.Series:
+    """Expanding-window 偏离度分位(防前视): 每天只用当时及之前的数据算 close/MA−1 的分位。
+
+    与 deviation_extremes(全历史,给当前定位最准)的区别: 此处分位只用截至当天的历史 →
+    可用于回测触发判定 / 看板标注,不偷看未来。返回 Series(与 close 等长),
+    0=最负/超卖,1=最正/超买;前 period 根及样本<min_bars 为 NaN。
+    """
+    dev = deviation_series(close, period)
+    vals = dev.to_numpy()
+    out = np.full(len(vals), np.nan)
+    for i in range(len(vals)):
+        if np.isnan(vals[i]):
+            continue
+        seen = vals[:i + 1]
+        m = ~np.isnan(seen)
+        if m.sum() < min_bars:
+            continue
+        out[i] = float((seen[m] < vals[i]).sum()) / m.sum()
+    return pd.Series(out, index=dev.index)
+
+
 def breakout_grade(close: pd.Series, period: int = MA_PERIOD,
                    thresholds: tuple[float, float] = (0.02, 0.03)) -> dict:
     """60-day breakout/breakdown strength at the last bar (S13 确定性梯度).

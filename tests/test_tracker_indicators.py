@@ -45,6 +45,27 @@ def test_deviation_extremes_percentile():
     assert ex["pct"] >= 0.95                     # near the top of its history
 
 
+def test_deviation_pct_expanding_no_lookahead():
+    # 防前视核心: 末尾追加未来数据, 已发生的 expanding 分位应完全不变
+    base = _line([100.0] * 95 + [90.0] * 5)               # 100 根
+    ext = _line([100.0] * 95 + [90.0] * 5 + [50.0] * 10)  # 追加 10 根大跌(未来)
+    pb = ti.deviation_pct_expanding(base, 60).dropna().to_numpy()
+    pe = ti.deviation_pct_expanding(ext, 60).dropna().to_numpy()
+    assert np.allclose(pb, pe[:len(pb)])                  # 前 100 根分位不受未来影响
+    assert np.isnan(ti.deviation_pct_expanding(base, 60).iloc[0])  # 前 period 根 NaN
+
+
+def test_deviation_pct_expanding_last_bar_matches_full_history():
+    # 末根时 expanding == 全历史 deviation_extremes(无未来可偷, 两者必然一致)
+    s = _line([100.0] * 80 + [130.0])  # 末根大涨 → 历史最正偏离
+    pct = ti.deviation_pct_expanding(s, 60)
+    ex = ti.deviation_extremes(s, 60)
+    assert ex["valid"]
+    assert abs(float(pct.iloc[-1]) - ex["pct"]) < 1e-9
+    assert ex["cur_dev"] == ex["max_dev"]      # 末根是历史最正偏离
+    assert ex["pct"] > 0.9                     # (n-1)/n, 接近顶部分位
+
+
 def test_breakout_grade_levels():
     base = [100.0] * 80
     # well above 2% → 有效突破 (direction up, pct>2%); grade carries MA-confirm bonus so assert ≥2

@@ -49,6 +49,10 @@ def _deviation_figure(sym: str, name: str, df: pd.DataFrame, period: int = ti.MA
     ma = ti.ma_series(close, period)
     dev = ti.deviation_series(close, period)
     idx = pd.to_datetime(close.index)   # 转 date 类型 → hover 显示完整日期
+    # 超卖拐头模式(event-study 验证): expanding 偏离分位≤5% 且 不在过去5日创新低
+    pct_exp = ti.deviation_pct_expanding(close, period)
+    combo_mask = ((pct_exp <= 0.05) & (dev >= dev.shift(1).rolling(5).min())).fillna(False)
+    combo_arr = combo_mask.to_numpy()
     dc = dev.dropna()
     mx = float(dc.max()) if len(dc) else float("nan")
     mn = float(dc.min()) if len(dc) else float("nan")
@@ -67,10 +71,23 @@ def _deviation_figure(sym: str, name: str, df: pd.DataFrame, period: int = ti.MA
     if not pd.isna(mn):
         fig.add_hline(y=mn, row=2, col=1, line=dict(color=_PAL["neg_extreme"], width=1, dash="dot"),
                       annotation_text=f"负极值 {mn:.0%}", annotation_position="bottom right")
+    # 超卖拐头历史触发点(诊断参考,非交易信号)
+    if combo_arr.any():
+        fig.add_trace(go.Scatter(
+            x=idx[combo_arr], y=dev.to_numpy()[combo_arr], name="超卖拐头", mode="markers",
+            marker=dict(symbol="triangle-up", size=9, color=_PAL["good"],
+                        line=dict(color=_PAL["ink"], width=0.5)),
+            hovertemplate="<b>%{x|%Y-%m-%d}</b> 超卖拐头<br>偏离 %{y:.1%}(≤5%分位+不创新低)<extra></extra>"),
+            row=2, col=1)
+    # 当前点: 若触发超卖拐头 → 高亮绿
     if not pd.isna(dev.iloc[-1]):
+        cur_combo = bool(combo_arr[-1])
+        cur_color = _PAL["good"] if cur_combo else _PAL["ink"]
+        cur_text = f"现在 {dev.iloc[-1]:.1%}" + (" ·超卖拐头" if cur_combo else "")
         fig.add_trace(go.Scatter(x=[idx[-1]], y=[dev.iloc[-1]], mode="markers+text",
-                                 marker=dict(size=10, color=_PAL["ink"]),
-                                 text=[f"现在 {dev.iloc[-1]:.1%}"], textposition="top center",
+                                 marker=dict(size=11, color=cur_color,
+                                             line=dict(color=_PAL["ink"], width=0.5)),
+                                 text=[cur_text], textposition="top center",
                                  showlegend=False), row=2, col=1)
     fig.update_layout(
         height=540, margin=dict(l=50, r=20, t=50, b=30),
@@ -610,7 +627,10 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<h2>① 偏离极值曲线</h2><section>"
         f"<div class='hint' style='margin-bottom:10px'>主图:收盘价 vs 60日线;副图:偏离度(价格−均线)÷均线,"
         f"虚线=历史极值(红=正极值/超买,蓝=负极值/超卖),黑点=当前。"
-        f"S13:偏离接近历史极值(黑点贴近虚线)时有技术拉回力量,可套利。</div>"
+        f"<b style='color:{_PAL['good']}'>绿△=超卖拐头模式</b>"
+        f"(expanding偏离分位≤5% 且 不在过去5日创新低):独立 event-study 验证此形态持60日"
+        f"样本外胜率66-73%/edge+12~19pp,属<b>研究级参考非交易信号</b>(≤5%档OOS仅n=11·须长持·单次可亏14-27%)。"
+        f"S13:偏离接近历史极值(点贴近虚线)时有技术拉回力量。</div>"
         + "".join(figs_html) + "</section>"
         f"<script>{_JS}</script></body></html>"
     )
