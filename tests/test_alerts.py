@@ -70,6 +70,61 @@ def test_A3_revenue_deceleration():
     assert any(x["rule"] == "A3" and x["level"] == "warn" for x in a)
 
 
+def test_Q1_low_quality_fires():
+    # 归母高增但扣非掉队 → low_quality → Q1 warn
+    s = _stock(earnings_quality={"valid": True, "low_quality": True,
+                                 "reason": "增速背离归母+150%/扣非+1%",
+                                 "np_yoy": 1.5, "ded_yoy": 0.01, "non_recurring_frac": 0.36})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    assert any(x["rule"] == "Q1" and x["level"] == "warn" for x in a)
+
+
+def test_Q1_clean_no_fire():
+    s = _stock(earnings_quality={"valid": True, "low_quality": False,
+                                 "np_yoy": 0.25, "ded_yoy": 0.24, "non_recurring_frac": 0.05})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    assert not any(x["rule"] == "Q1" for x in a)
+
+
+def test_Q1_invalid_no_fire():
+    # 扣非稀疏/未对齐 → valid False → 不触发
+    s = _stock(earnings_quality={"valid": False, "low_quality": False})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    assert not any(x["rule"] == "Q1" for x in a)
+
+
+# ---- R1 周期反转候选(evaluate,ETF 层)----
+def test_R1_cyclical_reversal_fires():
+    snap = _snap(name="有色金属ETF", style="cyclic", reversal_score=75.0,
+                 days_since_report=30, earnings_yoy=1.2, drawdown=-0.55)
+    a = alerts.evaluate({"512400": snap}, None)
+    assert any(x["rule"] == "R1" and x["level"] == "info" for x in a)
+
+
+def test_R1_stale_no_fire():
+    # 财报超 150 天 → 时效过期,不发
+    snap = _snap(name="化工ETF", style="cyclic", reversal_score=75.0,
+                 days_since_report=200, earnings_yoy=1.2, drawdown=-0.55)
+    a = alerts.evaluate({"159870": snap}, None)
+    assert not any(x["rule"] == "R1" for x in a)
+
+
+def test_R1_low_score_no_fire():
+    # 综合分 <60 → 不发
+    snap = _snap(name="煤炭ETF", style="cyclic", reversal_score=40.0,
+                 days_since_report=30, earnings_yoy=0.3, drawdown=-0.2)
+    a = alerts.evaluate({"515220": snap}, None)
+    assert not any(x["rule"] == "R1" for x in a)
+
+
+def test_R1_non_cyclic_no_fire():
+    # 非 cyclic → 规则 gated,不发(即便高分)
+    snap = _snap(name="某成长ETF", style="growth", reversal_score=80.0,
+                 days_since_report=30, earnings_yoy=1.2, drawdown=-0.55)
+    a = alerts.evaluate({"X": snap}, None)
+    assert not any(x["rule"] == "R1" for x in a)
+
+
 def test_A3_no_fire_when_accelerating():
     s = _stock(pitfalls={"revenue": {"valid": True, "yoy": 0.30, "base": 130.0, "prev_base": 100.0},
                          "disclosure": {}})

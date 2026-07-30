@@ -276,6 +276,46 @@ def _ranking_rows(snapshots: dict, meta: dict, commentaries: dict, style_filter:
     return out
 
 
+def _cyclical_reversal_section(ranked: dict, meta: dict) -> str:
+    """周期反转候选 section(只读):cyclic ETF 按 业绩×回撤×时效 综合分降序。无数据 → 空串。
+
+    综合分来自 research.cyclical(build_snapshots 注入 reversal_score)。≥60 触发 R1。
+    案例逻辑:锂矿股=深跌+业绩爆发,但下个业绩窗口前须兑现,预期放缓后失效。"""
+    _pname = {"1231": "年报", "0331": "一季报", "0630": "中报", "0930": "三季报"}
+    rows = []
+    for sym, snap in ranked.items():
+        if snap.get("style") != "cyclic":
+            continue
+        rsc = snap.get("reversal_score")
+        if _nan(rsc):
+            continue
+        nm = meta.get(sym, {}).get("name", sym)
+        ey, dd, days = snap.get("earnings_yoy"), snap.get("drawdown"), snap.get("days_since_report")
+        period = snap.get("report_period") or ""
+        pn = f"{period[:4]}{_pname.get(period[4:8], '报')}" if len(period) >= 8 else "—"
+        ey_s = f"{ey:+.0f}%" if not _nan(ey) else "—"        # earnings_yoy 已是百分数
+        dd_s = f"{abs(dd) * 100:.0f}%" if not _nan(dd) else "—"  # drawdown 是分数
+        days_s = f"{int(days)}天" if not _nan(days) else "—"
+        hot = "background:#dcfce7" if rsc >= 60 else ""
+        rows.append((rsc,
+                     f"<tr><td><b>{nm}</b><br><span style='color:#64748b;font-size:11px'>{sym}</span></td>"
+                     f"<td style='text-align:center'>{ey_s}</td>"
+                     f"<td style='text-align:center'>{dd_s}</td>"
+                     f"<td style='text-align:center;color:#64748b'>{pn}</td>"
+                     f"<td style='text-align:center;color:#64748b'>{days_s}</td>"
+                     f"<td style='text-align:center;font-size:16px;font-weight:bold;{hot}'>{rsc:.0f}</td></tr>"))
+    if not rows:
+        return ""
+    rows.sort(key=lambda x: x[0], reverse=True)
+    head = ('<tr><th style="text-align:left">ETF</th><th>业绩YoY</th><th>250日回撤</th>'
+            '<th>报告期</th><th>时效</th><th>反转综合分</th></tr>')
+    return ('<h3 style="color:#ea580c">🔁 周期反转候选 · 业绩最猛 × 前期跌得最多 × 财报时效'
+            '<sup style="font-size:9px">只读</sup></h3>'
+            '<p class="sub">综合分=业绩因子×回撤因子×时效衰减(0-100);≥60 触发 R1 提醒。'
+            '案例逻辑:锂矿股=深跌+业绩爆发,但下个业绩窗口前须兑现,预期放缓后失效。</p>'
+            f'<table><thead>{head}</thead><tbody>{"".join(r for _, r in rows)}</tbody></table>')
+
+
 def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int) -> list:
     """Build detail figures for one ETF: value/growth = 3 (shares+NAV, PE, factor);
     cyclic = 2 (shares+NAV, factor) — 跳过行业PE图(cyclic 不用 PE,板块 PB 无源)。"""
@@ -346,6 +386,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, commentaries: dict,
     ranking_value = _ranking_rows(ranked, meta, commentaries, style_filter="value")
     ranking_growth = _ranking_rows(ranked, meta, commentaries, style_filter="growth")
     ranking_cyclic = _ranking_rows(ranked, meta, commentaries, style_filter="cyclic")
+    reversal_section = _cyclical_reversal_section(ranked, meta)
     _rank_header = ('<tr><th style="text-align:left">ETF</th><th>类型</th><th>综合性价比</th>'
                     '<th>估值(PE分位)</th><th>筹码(相位)</th><th>趋势</th>'
                     '<th>业绩预期<sup style="font-size:9px">信息</sup></th>'
@@ -413,6 +454,7 @@ html {{ scroll-behavior: smooth; }}
 <table><thead>{_rank_header}</thead><tbody>{ranking_growth}</tbody></table>
 <h3 style="color:#ea580c">🔄 周期型 · 筹码+趋势(板块 PB 无源,估值暂缺)</h3>
 <table><thead>{_rank_header_cyclic}</thead><tbody>{ranking_cyclic}</tbody></table>
+{reversal_section}
 <h3>📈 逐标的明细（份额·净值·估值·三因子）</h3>
 {charts_html}
 </body></html>"""

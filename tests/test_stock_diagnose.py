@@ -420,6 +420,94 @@ def test_growth_quality_invalid():
     assert sd.growth_quality(np.nan, 100.0)["valid"] is False
 
 
+# ---- earnings_quality (业绩含金量/一次性利润 Tier-1) ----
+def test_earnings_quality_non_recurring_high():
+    # 归母100(上年80) vs 扣非50(上年80):一次性占比50%≥30% → low_quality
+    q = sd.earnings_quality(np_latest=100.0, np_base=80.0, ded_latest=50.0, ded_base=80.0)
+    assert q["valid"] is True
+    assert abs(q["non_recurring_frac"] - 0.5) < 1e-9
+    assert q["low_quality"] is True
+
+
+def test_earnings_quality_deviation_only():
+    # 归母90→180(+100%) 扣非160→170(+6%):占比小(5.6%<30%)但增速背离≈94pp≥30% → low_quality
+    q = sd.earnings_quality(np_latest=180.0, np_base=90.0, ded_latest=170.0, ded_base=160.0)
+    assert q["valid"] is True
+    assert q["non_recurring_frac"] < 0.30                 # 不是占比路径触发
+    assert abs(q["np_yoy"] - 1.0) < 1e-9
+    assert q["deviation"] >= 0.30
+    assert q["low_quality"] is True
+
+
+def test_earnings_quality_clean():
+    # 归母与扣非同节奏:占比5%、增速背离≈0 → 干净
+    q = sd.earnings_quality(np_latest=100.0, np_base=80.0, ded_latest=95.0, ded_base=76.0)
+    assert q["valid"] is True
+    assert q["low_quality"] is False
+    assert q["reason"] == ""
+
+
+def test_earnings_quality_invalid_and_base_edge():
+    # 归母≤0 / 缺扣非 → invalid
+    assert sd.earnings_quality(-50.0, 100.0, 40.0, 80.0)["valid"] is False
+    assert sd.earnings_quality(100.0, 80.0, np.nan, 80.0)["valid"] is False
+    # 归母>0 但上年基数≤0 → valid 仍 True,只是 np_yoy 算不出(NaN),不崩
+    q = sd.earnings_quality(np_latest=100.0, np_base=-10.0, ded_latest=90.0, ded_base=80.0)
+    assert q["valid"] is True
+    assert np.isnan(q["np_yoy"])
+
+
+# ---- diagnose_earnings_quality store 集成 ----
+def test_diagnose_earnings_quality_store_integration():
+    st = _store()
+    # 归母 100→150(+50%) 扣非 95→110(+16%):占比小(27%<30%)但增速背离≈34pp≥30% → low_quality
+    fin = pd.DataFrame([
+        {"report_period": "20241231", "metric": "net_profit", "value": 100.0},
+        {"report_period": "20251231", "metric": "net_profit", "value": 150.0},
+        {"report_period": "20241231", "metric": "np_deducted", "value": 95.0},
+        {"report_period": "20251231", "metric": "np_deducted", "value": 110.0},
+    ])
+    st.upsert_stock_financials("TEST", fin)
+    q = sd.diagnose_earnings_quality("TEST", st)
+    assert q["valid"] is True
+    assert q["latest_period"] == "20251231"
+    assert q["low_quality"] is True
+    assert q["np_yoy"] > q["ded_yoy"]
+
+
+def test_diagnose_earnings_quality_misaligned_periods():
+    # 扣非只有 1 个年报 → 交集 <2 → invalid
+    st = _store()
+    fin = pd.DataFrame([
+        {"report_period": "20241231", "metric": "net_profit", "value": 100.0},
+        {"report_period": "20251231", "metric": "net_profit", "value": 130.0},
+        {"report_period": "20251231", "metric": "np_deducted", "value": 96.0},
+    ])
+    st.upsert_stock_financials("TEST", fin)
+    assert sd.diagnose_earnings_quality("TEST", st)["valid"] is False
+
+
+def test_diagnose_davis_quality_warning_flag():
+    # 归母高增(+150%)但扣非掉队(+1%)→ davis quality_warning=True,且六档 type 仍正常输出
+    st = _store()
+    fin = pd.DataFrame([
+        {"report_period": "20241231", "metric": "net_profit", "value": 100.0},
+        {"report_period": "20251231", "metric": "net_profit", "value": 250.0},
+        {"report_period": "20241231", "metric": "np_deducted", "value": 95.0},
+        {"report_period": "20251231", "metric": "np_deducted", "value": 96.0},
+    ])
+    st.upsert_stock_financials("TEST", fin)
+    pe_idx = [f"2024-{m:02d}-15" for m in range(1, 13)] + [f"2025-{m:02d}-15" for m in range(1, 13)]
+    pe_vals = [30.0] * 12 + [40.0] * 12
+    st.upsert_stock_valuation("TEST", "pe_ttm", pd.DataFrame({"value": pe_vals}, index=pe_idx))
+    d = sd.diagnose_davis("TEST", st)
+    assert d["valid"] is True
+    assert d["quality_warning"] is True
+    assert d["earnings_quality"]["low_quality"] is True
+    assert d["type"] in {"double_play", "double_play_setup", "double_play_watch",
+                         "double_kill", "double_kill_risk", "neutral"}
+
+
 # ---- diagnose_pitfalls store 集成 ----
 def test_diagnose_pitfalls_detects_low_base_spike():
     st = _store()

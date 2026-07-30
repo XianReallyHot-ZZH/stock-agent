@@ -108,6 +108,11 @@ research:
   earnings:                 # 业绩预期信号（V3.2，INFORMATIONAL 不计入 composite）
     min_coverage: 0.30      # 持仓权重覆盖 < 30% → 数据不足
     min_matched: 5          # 匹配到的持仓股票 < 5 只 → 数据不足
+  cyclical_reversal:        # 周期反转筛子（只读，业绩×前期回撤×财报时效；不喂引擎）
+    yoy_scale: 1.0          # weighted_yoy 100% → 业绩因子满分（ETF 加权 yoy 远小于个股，实盘校准）
+    drawdown_scale: 0.5     # 50% 回撤 → 回撤因子满分
+    freshness_half_life_days: 120  # 财报时效半衰期（天）
+    drawdown_lookback_days: 250    # 回撤回看窗口（~1 年交易日）
 
 # ---- Phase 2 个股层诊断 (V5 tracker · C1) ----
 # Read-only 诊断旁路（不喂交易引擎，同 research/tracker）。三类自动判定 + 估值分位/zone + E3 偏离极值。
@@ -131,3 +136,6 @@ stock:
   pitfalls:                    # S08 避坑（异常高增速 + 低基数 + 两年复合增速）
     abnormal_growth_threshold: 1.5   # YoY ≥150% 视为异常（可能低基数幻觉）
     low_base_frac: 0.5              # 上年值 < 前年 × 此值 = 低基数（分母被压低→增速虚高）
+  earnings_quality:            # 业绩含金量（Tier-1，归母 vs 扣非 → 一次性利润/纸面富贵识别）
+    non_recurring_frac: 0.30       # 一次性占比 (归母−扣非)/|归母| ≥30% → low_quality
+    deviation: 0.30                # 归母−扣非 增速背离 ≥30pp 且归母正增 → low_quality

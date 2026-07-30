@@ -29,6 +29,12 @@ _G1_RECENT_DAYS = 90         # G1: 预告公告在 90 天内 = 披露窗口刚�
 _G2_DEADLINE_NEAR_DAYS = 45  # G2: 法定披露截止日在 45 天内 = 临近
 _E3_LOW, _E3_HIGH = 0.05, 0.95  # E3: 偏离极值套利阈值(≤5% 超卖买点 / ≥95% 超买卖点)
 _E5_LOW, _E5_HIGH = 0.20, 0.80  # E5: ⑦相对周期包络位置阈值(≤20% 下沿 / ≥80% 上沿)
+# Q1 个股业绩含金量(一次性利润/纸面富贵)—— 判定在 diagnose_earnings_quality,params.yaml stock.earnings_quality
+_Q1_NON_RECURRING = 0.30   # 一次性占比 ≥30% → low_quality(展示用,实际阈值以 diagnose 为准)
+_Q1_DEVIATION = 0.30       # 归母-扣非增速背离 ≥30pp 且归母正增 → low_quality
+# R1 周期反转候选(cyclic 高业绩×深回撤×新鲜财报)—— 综合分由 research.cyclical 算
+_R1_SCORE_MIN = 60.0      # 综合分 ≥60 触发
+_R1_FRESH_DAYS = 150      # 财报窗口 150 天内才发(时效兑现要求;预期放缓后失效)
 
 
 def _nan(v) -> bool:
@@ -146,6 +152,19 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
             yoy_s = f"(yoy {yoy:+.0f}%)" if not _nan(yoy) else ""
             alerts.append({"level": "warn", "scope": nm, "rule": "A1/A2",
                            "msg": f"业绩预告「{elabel}」{yoy_s} → 抱着颗雷/戴维斯双杀前兆"})
+        # R1: 周期反转候选(cyclic 高业绩×深回撤×新鲜财报 → 综合分;下个业绩窗口前须兑现)
+        if snap.get("style") == "cyclic":
+            rsc = snap.get("reversal_score")
+            rdays = snap.get("days_since_report")
+            if (not _nan(rsc) and rsc >= _R1_SCORE_MIN
+                    and not _nan(rdays) and rdays <= _R1_FRESH_DAYS):
+                ey = snap.get("earnings_yoy")
+                dd = snap.get("drawdown")
+                ey_s = f"{ey:+.0f}%" if not _nan(ey) else "—"      # earnings_yoy 已是百分数
+                dd_s = f"{abs(dd) * 100:.0f}%" if not _nan(dd) else "—"  # drawdown 是分数
+                alerts.append({"level": "info", "scope": nm, "rule": "R1",
+                               "msg": f"周期反转候选:业绩YoY {ey_s} × 250日回撤 {dd_s} × 报告期时效"
+                                      f" → 综合分 {rsc:.0f}(下个业绩窗口前须兑现)"})
 
     return alerts
 
@@ -205,6 +224,17 @@ def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
                 if ly < py - _A3_DECEL_MARGIN:
                     alerts.append({"level": "warn", "scope": nm, "rule": "A3",
                                    "msg": f"营收增速下滑({py * 100:.0f}%→{ly * 100:.0f}%)→ 营收是利润之母,业绩前瞻预警"})
+
+        # Q1: 业绩含金量低(归母高增但扣非掉队 / 一次性占比高 → 一次性利润·纸面富贵)
+        eq = s.get("earnings_quality") or {}
+        if eq.get("valid") and eq.get("low_quality"):
+            npy, ded, frac = eq.get("np_yoy"), eq.get("ded_yoy"), eq.get("non_recurring_frac")
+            npy_s = f"{npy * 100:+.0f}%" if not _nan(npy) else "—"
+            ded_s = f"{ded * 100:+.0f}%" if not _nan(ded) else "—"
+            frac_s = f"{frac * 100:.0f}%" if not _nan(frac) else "—"
+            alerts.append({"level": "warn", "scope": nm, "rule": "Q1",
+                           "msg": f"业绩含金量低:{eq.get('reason', '')} → 一次性利润/纸面富贵风险"
+                                  f"(归母YoY {npy_s}/扣非 {ded_s}/一次性占比 {frac_s})"})
 
         # G2: 法定披露截止日临近(公告时间差:截止日=最晚影响日)
         disc = (s.get("pitfalls") or {}).get("disclosure") or {}

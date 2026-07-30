@@ -140,6 +140,7 @@ def _facts_for(d: dict, attribution: list, alerts: list, name: str) -> dict:
     np_ = pit.get("net_profit") or {}
     rev = pit.get("revenue") or {}
     disc = pit.get("disclosure") or {}
+    eq = d.get("earnings_quality") or {}
 
     # S07 归因:多年业绩/估值/分红贡献(绝对回报占比,可加);只取最近 6 年 + 各段均值概览
     attr_rows = []
@@ -198,6 +199,14 @@ def _facts_for(d: dict, attribution: list, alerts: list, name: str) -> dict:
             "净利可信YoY": _pct(np_.get("trustworthy"), True),
             "营收YoY": _pct(rev.get("yoy"), True),
             "营收2年CAGR": _pct(rev.get("cagr2"), True),
+        },
+        "业绩含金量": {
+            "一次性占比": _pct(eq.get("non_recurring_frac")),
+            "归母YoY": _pct(eq.get("np_yoy"), True),
+            "扣非YoY": _pct(eq.get("ded_yoy"), True),
+            "增速背离": _pct(eq.get("deviation")),
+            "low_quality": bool(eq.get("low_quality")),
+            "reason": eq.get("reason") or "",
         },
         "披露": {
             "最新财报期": disc.get("latest_period"),
@@ -267,6 +276,7 @@ def _rule_template(d: dict, alerts: list, name: str) -> str:
     np_ = pit.get("net_profit") or {}
     rev = pit.get("revenue") or {}
     trend = pt.get("trend") or {}
+    eq = d.get("earnings_quality") or {}
 
     label, reason = _action_label(d)
 
@@ -281,6 +291,8 @@ def _rule_template(d: dict, alerts: list, name: str) -> str:
     pit_items = []
     if np_.get("abnormal"):
         pit_items.append(f"净利增速 {_pct(np_.get('yoy'),True)} 疑低基数幻觉,可信值 {_pct(np_.get('trustworthy'),True)}")
+    if eq.get("valid") and eq.get("low_quality"):
+        pit_items.append(f"业绩含金量低(归母{_pct(eq.get('np_yoy'),True)}/扣非{_pct(eq.get('ded_yoy'),True)},一次性占比{_pct(eq.get('non_recurring_frac'))})→ 一次性利润/纸面富贵")
     pit_items.append(f"披露 {((pit.get('disclosure') or {}).get('latest_period') or '?')[:4]}期 截止 {(pit.get('disclosure') or {}).get('deadline','?')}")
     if alerts:
         pit_items.append("信号 " + "、".join(f"[{a.get('rule')}]{a.get('msg','')[:24]}" for a in alerts[:3]))

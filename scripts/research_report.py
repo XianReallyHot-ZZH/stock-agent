@@ -69,6 +69,7 @@ def do_backfill(dm: DataManager, kind: str, start: str, end: str, step: int, sle
 def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     from stockagent.data import fetcher
     from stockagent.research import earnings as ern
+    from stockagent.research import cyclical as cyc
     from stockagent.tracker import classifier as clf
     meta = cfg.symbol_meta()
     snapshots: dict[str, dict] = {}
@@ -114,6 +115,10 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
             snap["earnings_bear"] = earn["bear_ratio"]
             snap["earnings_cov"] = earn["coverage"]
             snap["earnings_period"] = earn["report_period"]
+
+        # 周期反转筛子(只读):cyclic ETF 注入 业绩×前期回撤×财报时效 综合分(R1/周期页 用)
+        if style_main == "cyclic":
+            snap.update(cyc.cyclical_reversal_snapshot(sym, close, earn, cfg.params, as_of))
 
         snapshots[sym] = snap
         series_map[sym] = {"close": close, "shares": shares_df, "nav": nav_df, "pe": pe_df}

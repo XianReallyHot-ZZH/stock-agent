@@ -72,6 +72,7 @@ _LEGEND_HTML = """
 <div><b>股息率</b> · 近 12 月每股现金分红 ÷ 现价</div>
 <div><b>PE(TTM)/PB 分位</b> · 当前值在历史中的分位(0=最便宜,1=最贵)</div>
 <div><b>避坑</b> · 异常高增速(低基数幻觉)→ 用 2 年 CAGR;含公告时间差</div>
+<div><b>业绩含金量</b> · (归母−扣非)/|归母|=一次性占比;归母高增但扣非掉队=一次性利润/纸面富贵(⚠ 低含金量)</div>
 <div><b>预告链</b> · 业绩预告拐点(A1 增速下滑 / A2 多转空)</div>
 <div><b>披露</b> · 最新财报期 + 法定截止日 + 是否已披露</div>
 <div><b>E3 偏离</b> · (价−60 日线)÷60 日线 的历史分位;突破/跌破档位 gN(N 越大越确定)</div>
@@ -145,6 +146,16 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False,
     disc_txt = (f'{disc.get("latest_period","?")[:4]}报 截止{disc.get("deadline","?")}'
                 f' <span class="muted">({"已披露" if disc.get("disclosed_by_asof") else "未披露"})</span>')
 
+    # 业绩含金量(一次性利润/纸面富贵):归母 vs 扣非 背离
+    eq = d.get("earnings_quality") or {}
+    if eq.get("valid"):
+        _eq_core = (f"一次性占比{_pct(eq.get('non_recurring_frac'))} · "
+                    f"归母{_pct(eq.get('np_yoy'), True)} · 扣非{_pct(eq.get('ded_yoy'), True)}")
+        eq_txt = (f'<span class="warn-txt">⚠ 业绩含金量低 {_eq_core}</span>'
+                  if eq.get("low_quality") else _eq_core)
+    else:
+        eq_txt = '<span class="muted">—</span>'
+
     chart_link = ('<button type="button" class="chart-link" title="查看时序图" '
                   'onclick="openChart(\'' + sym + '\')">📊</button>'
                   if with_charts else "")
@@ -184,6 +195,7 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False,
             <td>PB</td><td>{_num(d.get('pb'))} <span class="muted">(分位{_pct(vz.get('pb_pct'))})</span></td></tr>
         <tr><td>戴维斯</td><td colspan="3"><span class="muted">净利YoY {_pct(dv.get('profit_yoy_latest'),True)} · PE变化 {_pct(dv.get('pe_change'),True)}</span></td></tr>
         <tr><td>避坑</td><td colspan="3">{pit_txt} · 营收 {_pct(rev.get('yoy'),True)}</td></tr>
+        <tr><td>业绩含金量</td><td colspan="3">{eq_txt}</td></tr>
         <tr><td>预告链</td><td colspan="3">{fc_txt}</td></tr>
         <tr><td>披露</td><td colspan="3">{disc_txt}</td></tr>
         <tr><td>E3偏离</td><td colspan="3">{_pct(dev.get('pct'))}位 · <b>{_pos_txt}</b> {_cross_txt}</td></tr>

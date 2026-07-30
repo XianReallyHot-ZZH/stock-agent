@@ -465,6 +465,12 @@ def diagnose_davis(symbol: str, store, config=None) -> dict:
             pe_change = float(pe_vals.iloc[-1]) / float(past.iloc[-1]) - 1.0
 
     sig = davis_signal(yoy_latest, yoy_prev, pe_change, pe_pct, pe_low, pe_high)
+    # 业绩含金量(Tier-1):归母高增但扣非掉队 → 一次性利润/纸面富贵 → 戴维斯"业绩正"可能虚高。
+    # 不改六档核心逻辑,只附 earnings_quality + quality_warning 标志,供 commentary/看板提示。
+    eq = diagnose_earnings_quality(symbol, store, cfg)
+    sig["earnings_quality"] = eq
+    sig["quality_warning"] = bool(eq.get("valid") and eq.get("low_quality")
+                                  and not _nan(yoy_latest) and yoy_latest > 0)
     sig.update({"symbol": symbol,
                 "profit_yoy_latest": yoy_latest, "profit_yoy_prev": yoy_prev,
                 "pe_change": pe_change, "pe_pct": pe_pct})
@@ -525,6 +531,59 @@ def growth_quality(base: float, latest: float, prev_base: float = np.nan,
     }
 
 
+def earnings_quality(np_latest: float, np_base: float, ded_latest: float, ded_base: float,
+                     non_recurring_threshold: float = 0.30,
+                     deviation_threshold: float = 0.30) -> dict:
+    """业绩含金量(Tier-1):归母高增 vs 扣非掉队 → 一次性利润/纸面富贵识别。
+
+    案例:中国人寿 2026Q2 单季净利 +758%~823% 主因投资收益+FVTPL 浮盈+高位减持套现,是一次性
+    "纸面富贵"不可持续。扣非净利润按定义已剔除投资收益/公允价值变动/营业外收支,故「归母 vs 扣非」
+    背离是一次性利润的强代理(Tier-1,无需新抓投资收益/公允价值)。
+
+    输入(标量,年报最新期 + 上年同期,由 diagnose_earnings_quality 对齐报告期后传入):
+      np_latest/np_base    归母净利(当期/上年)
+      ded_latest/ded_base  扣非净利(当期/上年)
+    口径:
+      non_recurring_frac = (np_latest − ded_latest) / |np_latest|   一次性损益占比(≥0)
+      np_yoy  = np_latest/np_base − 1     归母增速
+      ded_yoy = ded_latest/ded_base − 1   扣非增速
+      deviation = np_yoy − ded_yoy         增速背离(归母高增但扣非掉队 → 正大)
+    low_quality 当(归母>0 且):
+      ① 一次性占比 ≥ non_recurring_threshold,或
+      ② 增速背离 ≥ deviation_threshold 且 归母正增(np_yoy>0)
+    归母≤0 / 缺归母或扣非 → valid=False(净利为负或亏转盈口径无意义)。"""
+    th_nr, th_dv = non_recurring_threshold, deviation_threshold
+    nan = float("nan")
+    if _nan(np_latest) or _nan(ded_latest) or np_latest <= 0:
+        return {"valid": False, "reason": "归母≤0 或缺归母/扣非数据",
+                "non_recurring_frac": nan, "np_yoy": nan, "ded_yoy": nan, "deviation": nan,
+                "low_quality": False, "non_recurring_amt": nan,
+                "thresholds": {"non_recurring": th_nr, "deviation": th_dv}}
+    np_l, np_b = float(np_latest), float(np_base)
+    ded_l = float(ded_latest)
+    frac = (np_l - ded_l) / abs(np_l)
+    np_yoy = (np_l / np_b - 1.0) if (not _nan(np_base) and np_base > 0) else nan
+    ded_yoy = (ded_l / float(ded_base) - 1.0) if (not _nan(ded_base) and ded_base > 0) else nan
+    deviation = (np_yoy - ded_yoy) if (not _nan(np_yoy) and not _nan(ded_yoy)) else nan
+
+    reasons = []
+    if frac >= th_nr:
+        reasons.append(f"一次性占比{frac:.0%}≥{th_nr:.0%}")
+    if (not _nan(deviation)) and deviation >= th_dv and (not _nan(np_yoy)) and np_yoy > 0:
+        reasons.append(f"增速背离归母{np_yoy:+.0%}/扣非{ded_yoy:+.0%}")
+    return {
+        "valid": True,
+        "non_recurring_frac": frac,
+        "np_yoy": np_yoy,
+        "ded_yoy": ded_yoy,
+        "deviation": deviation,
+        "low_quality": bool(reasons),
+        "reason": "；".join(reasons),
+        "non_recurring_amt": np_l - ded_l,
+        "thresholds": {"non_recurring": th_nr, "deviation": th_dv},
+    }
+
+
 def _metric_pitfall(np_annual: pd.Series, pp: dict) -> dict:
     """单指标(年报序列)的避坑诊断:最近一年 YoY + 2y CAGR + 异常标记。np_annual 已是年报、升序。"""
     s = np_annual.dropna().astype(float).sort_index() if np_annual is not None else pd.Series(dtype=float)
@@ -563,6 +622,29 @@ def diagnose_pitfalls(symbol: str, store, config=None, asof: str | None = None) 
                        "disclosed_by_asof": disclosed},
         "valid": np_p.get("valid") or rev_p.get("valid"),
     }
+
+
+def diagnose_earnings_quality(symbol: str, store, config=None, asof: str | None = None) -> dict:
+    """读 store(年报 net_profit + np_deducted)→ 业绩含金量诊断(Tier-1,一次性利润识别)。
+    对齐归母/扣非报告期(扣非可能稀疏)→ earnings_quality 纯函数。
+    签名 (symbol, store, config, asof) 与其他 diagnose_* 一致(config 第 3 位参)。"""
+    cfg = config or get_config()
+    eqp = (cfg.params.get("stock", {}) or {}).get("earnings_quality", {}) or {}
+    np_annual = annual_only(store.get_stock_financials_series(symbol, "net_profit")).dropna()
+    ded_annual = annual_only(store.get_stock_financials_series(symbol, "np_deducted")).dropna()
+    common = np_annual.index.intersection(ded_annual.index)
+    if len(common) < 2:
+        return {"valid": False, "reason": "年报<2 期(归母/扣非未对齐)",
+                "symbol": symbol, "low_quality": False}
+    np_a = np_annual.loc[common].astype(float).sort_index()
+    ded_a = ded_annual.loc[common].astype(float).sort_index()
+    out = earnings_quality(
+        float(np_a.iloc[-1]), float(np_a.iloc[-2]),
+        float(ded_a.iloc[-1]), float(ded_a.iloc[-2]),
+        non_recurring_threshold=float(eqp.get("non_recurring_frac", 0.30)),
+        deviation_threshold=float(eqp.get("deviation", 0.30)))
+    out.update({"symbol": symbol, "latest_period": str(np_a.index[-1])})
+    return out
 
 
 # ---------- S08-G1 业绩预告链(A1 拐点 / A2 转空 / G1 窗口) ----------
@@ -636,6 +718,7 @@ def collect_stock_alerts(symbols, store, config=None, index_diag=None,
             "price_timing": ds.get("price_timing") or {},
             "pitfalls": diagnose_pitfalls(sym, store, cfg, asof=asof),
             "forecast": diagnose_forecast_chain(sym, store, cfg),
+            "earnings_quality": diagnose_earnings_quality(sym, store, cfg, asof=asof),
         }
     return evaluate_stocks(stocks, index_diag=index_diag, asof=asof)
 
@@ -649,4 +732,5 @@ def diagnose_stock_full(symbol: str, store, config=None,
     base["pitfalls"] = diagnose_pitfalls(symbol, store, cfg, asof=asof)
     base["forecast"] = diagnose_forecast_chain(symbol, store, cfg)
     base["davis"] = diagnose_davis(symbol, store, cfg)
+    base["earnings_quality"] = base["davis"].get("earnings_quality") or {}  # 复用 davis 内嵌,零额外读
     return base
