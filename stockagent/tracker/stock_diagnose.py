@@ -584,6 +584,97 @@ def earnings_quality(np_latest: float, np_base: float, ded_latest: float, ded_ba
     }
 
 
+def positioning_score(leading: float, quality_ok: bool, pe_pct: float,
+                      days_to_deadline: float,
+                      quality_penalty: float = 0.2,
+                      timing_golden_days: float = 120.0) -> dict:
+    """提前埋伏分(只读,0-100):领先信号 × 含金量 × 估值空间 × 时效,**乘法合成**。
+
+    策略内核:用当期领先信号(预告转多/业绩正增)预判下期财报,披露前埋伏、兑现即离场。
+    任一致命因子(预告恶化/已兑现/估值透支)→ 低分,呼应"条件 AND"。
+      leading          1.0=预告转多且非减速 / 0.5=无预告但业绩正增 / 0=预告恶化或无信号
+      quality_ok       True=扣非干净(非一次性);False→ quality_penalty(0.2)重罚不归零(反弹仍可博)
+      pe_pct           PE 历史分位(0=最便宜);估值空间 = 1 − pe_pct;nan→0.5
+      days_to_deadline 报告期法定披露截止 − asof(天):
+                        <0 已披露 → 0.3(兑现期,埋伏窗已过);
+                        0..golden → 1.0(**黄金埋伏窗**,催化剂在近期未来);
+                        >golden → max(0.3, 1−(d−golden)/(2×golden)) 远期衰减;
+                        nan → 0.5
+    返回 {valid, score, leading_factor, quality_factor, valuation_factor, timing_factor}。"""
+    lf = float(leading)
+    qf = 1.0 if quality_ok else float(quality_penalty)
+    vf = 0.5 if _nan(pe_pct) else min(max(1.0 - float(pe_pct), 0.0), 1.0)
+    if _nan(days_to_deadline):
+        tf = 0.5
+    elif days_to_deadline < 0:
+        tf = 0.3
+    elif days_to_deadline <= timing_golden_days:
+        tf = 1.0
+    else:
+        tf = max(0.3, 1.0 - (days_to_deadline - timing_golden_days) / (2.0 * timing_golden_days))
+    return {"valid": True, "score": lf * qf * vf * tf * 100.0,
+            "leading_factor": lf, "quality_factor": qf,
+            "valuation_factor": vf, "timing_factor": tf}
+
+
+def _days_diff(a, b) -> float:
+    """a − b 的天数(YYYY-MM-DD)。解析失败 → NaN。"""
+    try:
+        da = datetime.strptime(str(a)[:10], "%Y-%m-%d")
+        db = datetime.strptime(str(b)[:10], "%Y-%m-%d")
+        return float((da - db).days)
+    except Exception:  # noqa: BLE001
+        return float("nan")
+
+
+def positioning_from_diag(d: dict, asof: str | None = None, config=None) -> dict:
+    """从 diagnose_stock_full 输出 dict 算提前埋伏分(装配 positioning_score,无 store 访问)。
+
+      leading: forecast 转多(bullish)且非减速(a1)→1.0「预告转多」;
+               elif davis.profit_yoy_latest>0 →0.5「业绩正增」;else 0(预告恶化/无信号)。
+      quality_ok: 业绩含金量非 low_quality。pe_pct: valuation_zone。days_to_deadline: 披露截止−asof。
+    附 signal_label + flags(新转多/含金量低/低基数),供看板展示。"""
+    cfg = config or get_config()
+    pp = (cfg.params.get("stock", {}) or {}).get("positioning", {}) or {}
+    fc = d.get("forecast") or {}
+    eq = d.get("earnings_quality") or {}
+    dv = d.get("davis") or {}
+    vz = d.get("valuation_zone") or {}
+    disc = (d.get("pitfalls") or {}).get("disclosure") or {}
+
+    new_bull = False
+    if fc.get("valid") and fc.get("latest_sentiment") == "bullish" and not fc.get("a1_deceleration"):
+        leading, label = 1.0, "预告转多"
+        prior = fc.get("prior")
+        if prior and prior.get("sentiment") and prior.get("sentiment") != "bullish":
+            new_bull = True
+    elif (not _nan(dv.get("profit_yoy_latest"))) and dv.get("profit_yoy_latest", 0) > 0:
+        leading, label = 0.5, "业绩正增"
+    else:
+        leading = 0.0
+        label = "预告恶化" if (fc.get("a1_deceleration") or fc.get("a2_turn_bearish")) else "无信号"
+
+    # 催化剂时效:优先用预告期(下个待披露期)的法定截止日,退回最新已报期截止
+    cat_period = (fc.get("latest") or {}).get("period")
+    cat_dl = disclosure_deadline(cat_period) if cat_period else disc.get("deadline")
+    days = _days_diff(cat_dl, asof) if (asof and cat_dl) else float("nan")
+    out = positioning_score(
+        leading, not bool(eq.get("low_quality")), vz.get("pe_pct"), days,
+        quality_penalty=float(pp.get("quality_penalty", 0.2)),
+        timing_golden_days=float(pp.get("timing_golden_days", 120.0)))
+    flags = []
+    if new_bull:
+        flags.append("新转多")
+    if eq.get("low_quality"):
+        flags.append("含金量低")
+    if ((d.get("pitfalls") or {}).get("net_profit") or {}).get("abnormal"):
+        flags.append("低基数")
+    out.update({"signal_label": label, "flags": flags, "days_to_deadline": days,
+                "pe_pct": vz.get("pe_pct"), "deadline": cat_dl,
+                "symbol": d.get("symbol")})
+    return out
+
+
 def _metric_pitfall(np_annual: pd.Series, pp: dict) -> dict:
     """单指标(年报序列)的避坑诊断:最近一年 YoY + 2y CAGR + 异常标记。np_annual 已是年报、升序。"""
     s = np_annual.dropna().astype(float).sort_index() if np_annual is not None else pd.Series(dtype=float)
@@ -719,6 +810,7 @@ def collect_stock_alerts(symbols, store, config=None, index_diag=None,
             "pitfalls": diagnose_pitfalls(sym, store, cfg, asof=asof),
             "forecast": diagnose_forecast_chain(sym, store, cfg),
             "earnings_quality": diagnose_earnings_quality(sym, store, cfg, asof=asof),
+            "valuation_zone": ds.get("valuation_zone") or {},   # P1 提前埋伏用(PE 分位)
         }
     return evaluate_stocks(stocks, index_diag=index_diag, asof=asof)
 

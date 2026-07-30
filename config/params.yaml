@@ -139,3 +139,7 @@ stock:
   earnings_quality:            # 业绩含金量（Tier-1，归母 vs 扣非 → 一次性利润/纸面富贵识别）
     non_recurring_frac: 0.30       # 一次性占比 (归母−扣非)/|归母| ≥30% → low_quality
     deviation: 0.30                # 归母−扣非 增速背离 ≥30pp 且归母正增 → low_quality
+  positioning:                 # 提前埋伏筛选器（只读，领先信号×含金量×估值空间×时效）
+    score_min: 40                  # 埋伏分 ≥40 进候选表/P1
+    timing_golden_days: 120        # 距披露 0..N 天 = 黄金埋伏窗（timing_factor=1.0）
+    quality_penalty: 0.2           # Q1 触发（一次性）时的含金量因子

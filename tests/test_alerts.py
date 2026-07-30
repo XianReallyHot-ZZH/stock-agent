@@ -125,6 +125,44 @@ def test_R1_non_cyclic_no_fire():
     assert not any(x["rule"] == "R1" for x in a)
 
 
+# ---- P1 提前埋伏候选(evaluate_stocks)----
+def test_P1_ambush_fires():
+    # 预告转多 + 干净 + 低 PE + 预告期(20260630→截止2026-08-31)在黄金窗 → P1
+    s = _stock(forecast={"valid": True, "latest_sentiment": "bullish", "a1_deceleration": False,
+                         "latest": {"type": "预增", "period": "20260630"}},
+               earnings_quality={"low_quality": False}, valuation_zone={"pe_pct": 0.15},
+               pitfalls={"disclosure": {"deadline": "2026-04-30"}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-30")
+    assert any(x["rule"] == "P1" and x["level"] == "info" for x in a)
+
+
+def test_P1_forecast_deceleration_no_fire():
+    s = _stock(forecast={"valid": True, "latest_sentiment": "bullish", "a1_deceleration": True,
+                         "latest": {"type": "预增"}},
+               earnings_quality={"low_quality": False}, valuation_zone={"pe_pct": 0.15},
+               pitfalls={"disclosure": {"deadline": "2026-08-30"}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-30")
+    assert not any(x["rule"] == "P1" for x in a)
+
+
+def test_P1_high_pe_no_fire():
+    # PE 分位过高(透支)→ 分低不发
+    s = _stock(forecast={"valid": True, "latest_sentiment": "bullish", "a1_deceleration": False,
+                         "latest": {"type": "预增"}},
+               earnings_quality={"low_quality": False}, valuation_zone={"pe_pct": 0.95},
+               pitfalls={"disclosure": {"deadline": "2026-08-30"}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-30")
+    assert not any(x["rule"] == "P1" for x in a)
+
+
+def test_P1_no_forecast_no_fire():
+    # 无预告(快照无 davis 退路)→ P1 不发(排名表仍会用 davis 退路)
+    s = _stock(forecast={"valid": False}, earnings_quality={"low_quality": False},
+               valuation_zone={"pe_pct": 0.15}, pitfalls={"disclosure": {"deadline": "2026-08-30"}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-30")
+    assert not any(x["rule"] == "P1" for x in a)
+
+
 def test_A3_no_fire_when_accelerating():
     s = _stock(pitfalls={"revenue": {"valid": True, "yoy": 0.30, "base": 130.0, "prev_base": 100.0},
                          "disclosure": {}})

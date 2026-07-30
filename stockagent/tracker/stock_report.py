@@ -99,6 +99,46 @@ def _alerts_region(alerts_list: list) -> str:
             + "".join(rows) + "</div>")
 
 
+def _ambush_region(diagnoses: dict, names: dict, as_of: str,
+                   score_min: float = 30.0) -> str:
+    """🎯 提前埋伏候选排名(只读):领先信号×含金量×估值空间×时效 综合分降序。无候选 → 空串。
+
+    分来自 positioning_from_diag(吃 diagnose_stock_full)。≥60 绿/≥40 黄高亮。不含涨跌预测。"""
+    from .stock_diagnose import positioning_from_diag
+    rows = []
+    for sym, d in diagnoses.items():
+        p = positioning_from_diag(d, asof=as_of)
+        sc = p.get("score")
+        if _nan(sc) or sc < score_min:
+            continue
+        nm = names.get(sym, sym)
+        days, pe = p.get("days_to_deadline"), p.get("pe_pct")
+        days_s = f"{int(days)}天" if not _nan(days) else "—"
+        pe_s = f"{pe:.0%}" if not _nan(pe) else "—"
+        flags = "".join(f" <span style='font-size:10px;color:#b45309'>{f}</span>"
+                        for f in (p.get("flags") or []))
+        hot = "background:#dcfce7" if sc >= 60 else ("background:#fef9c3" if sc >= 40 else "")
+        td = "padding:6px;border-bottom:1px solid var(--border)"
+        rows.append((sc,
+                     f"<tr><td style='{td}'><b>{html.escape(nm)}</b>"
+                     f"<br><span class='muted'>{sym}</span></td>"
+                     f"<td style='{td};text-align:center'>{html.escape(p.get('signal_label', ''))}{flags}</td>"
+                     f"<td style='{td};text-align:center'>{pe_s}</td>"
+                     f"<td style='{td};text-align:center'>{days_s}</td>"
+                     f"<td style='{td};text-align:center;font-size:16px;font-weight:bold;{hot}'>{sc:.0f}</td></tr>"))
+    if not rows:
+        return ""
+    rows.sort(key=lambda x: x[0], reverse=True)
+    th = "padding:8px;border-bottom:2px solid var(--border)"
+    head = (f"<tr><th style='{th};text-align:left'>股票</th><th style='{th}'>领先信号</th>"
+            f"<th style='{th}'>PE分位</th><th style='{th}'>距披露</th><th style='{th}'>埋伏分</th></tr>")
+    return ('<div class="alerts"><h2>🎯 提前埋伏候选 <span class="count">领先×含金量×估值×时效</span></h2>'
+            '<p class="muted">分=领先信号(预告转多为主)×含金量(非一次性)×估值空间(PE未透支)×时效(距披露窗);'
+            '黄金窗=催化剂在近期未来,兑现即离场。不含涨跌预测,非荐股。</p>'
+            f'<table style="width:100%;border-collapse:collapse;font-size:13px"><thead>{head}</thead>'
+            f'<tbody>{"".join(r for _, r in rows)}</tbody></table></div>')
+
+
 def _card(sym: str, d: dict, name: str, with_charts: bool = False,
           with_ai: bool = False) -> str:
     cls = d.get("classification") or {}
@@ -460,6 +500,7 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
     n = len(stock_diagnoses)
     chart_section = _chart_assets(stock_diagnoses, names, store, prd)
     ai_section = _ai_eval_assets(names)
+    ambush_section = _ambush_region(stock_diagnoses, names, as_of)
     return f"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)}</title><style>{_CSS}</style></head>
@@ -470,6 +511,7 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
   <p class="muted">as_of {html.escape(as_of)} · {n} 只个股 · 数据底座 C0/C0.5/C0.6(price/估值/财报/分红/预告)</p>
 </div>
 {_alerts_region(alerts_list)}
+{ambush_section}
 <div class="cards-head"><h2>个股诊断卡片</h2>
 {_LEGEND_HTML}</div>
 <div class="grid">

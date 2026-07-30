@@ -35,6 +35,7 @@ _Q1_DEVIATION = 0.30       # 归母-扣非增速背离 ≥30pp 且归母正增 �
 # R1 周期反转候选(cyclic 高业绩×深回撤×新鲜财报)—— 综合分由 research.cyclical 算
 _R1_SCORE_MIN = 60.0      # 综合分 ≥60 触发
 _R1_FRESH_DAYS = 150      # 财报窗口 150 天内才发(时效兑现要求;预期放缓后失效)
+_P1_SCORE_MIN = 40.0      # P1: 提前埋伏分 ≥40 触发(领先×含金量×估值×时效)
 
 
 def _nan(v) -> bool:
@@ -192,6 +193,7 @@ def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
     返回形状同 evaluate:[{level, scope, rule, msg}],可直接喂 format_for_push。"""
     alerts: list[dict] = []
     asof = asof or datetime.now().strftime("%Y-%m-%d")
+    from .stock_diagnose import positioning_score as _positioning_score, disclosure_deadline as _ddl  # lazy: 防循环
 
     for sym, s in stocks.items():
         nm = s.get("name", sym)
@@ -255,6 +257,24 @@ def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
             elif pct >= _E3_HIGH:
                 alerts.append({"level": "warn", "scope": nm, "rule": "E3",
                                "msg": f"股价偏离60日线接近历史顶部(pct={pct:.0%})→ 超买·减仓/套利卖点"})
+
+        # P1: 提前埋伏候选(预告转多 × 含金量 × 估值空间 × 时效;下个披露窗前埋伏,兑现即离场)
+        fc = s.get("forecast") or {}
+        if fc.get("valid") and fc.get("latest_sentiment") == "bullish" and not fc.get("a1_deceleration"):
+            eq = s.get("earnings_quality") or {}
+            vz = s.get("valuation_zone") or {}
+            L = fc.get("latest") or {}
+            dl = _ddl(L.get("period")) if L.get("period") else None   # 催化剂=预告期法定截止
+            days = _days(dl, asof) if dl else None
+            days_f = float(days) if days is not None else float("nan")
+            ps = _positioning_score(1.0, not bool(eq.get("low_quality")), vz.get("pe_pct"), days_f)
+            if ps["score"] >= _P1_SCORE_MIN:
+                pe = vz.get("pe_pct")
+                pe_s = f"{pe:.0%}" if not _nan(pe) else "—"
+                days_s = f"{days}天" if days is not None else "—"
+                alerts.append({"level": "info", "scope": nm, "rule": "P1",
+                               "msg": f"提前埋伏候选:预告转多 × PE分位 {pe_s} × 距披露 {days_s}"
+                                      f" → 埋伏分 {ps['score']:.0f}(下个披露窗前埋伏,兑现即离场)"})
 
     # E4: 蓝筹 vs 成长趋势背离 → 仓位倾向(市场级,复用指数层 style)
     if index_diag:
