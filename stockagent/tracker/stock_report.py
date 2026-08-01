@@ -175,17 +175,17 @@ def _commodity_charts(store) -> str:
 
 
 def _ambush_region(diagnoses: dict, names: dict, as_of: str,
-                   score_min: float = 30.0) -> str:
-    """🎯 提前埋伏候选排名(只读,基本面领先):深跌×业绩拐头×含金量×未兑现 综合分降序。无候选 → 空串。
+                   score_min: float = 30.0, show_below: int = 3) -> str:
+    """🎯 提前埋伏候选排名(只读,基本面领先):深跌×alignment×含金量×未兑现×企稳 综合分降序。
 
-    入场=领先基本面(深跌+最新已报期业绩拐头,早于预告/上涨);预告/正报=兑现出场窗口。
-    分来自 positioning_from_diag(吃 diagnose_stock_full)。≥60 绿/≥40 黄高亮。不含涨跌预测。"""
+    门槛线(≥score_min)以上的全展示;线下展示 top show_below 个(灰色),让用户看到全貌。
+    ≥60 绿/≥40 黄高亮。不含涨跌预测。"""
     from .stock_diagnose import positioning_from_diag
-    rows = []
+    above, below = [], []
     for sym, d in diagnoses.items():
         p = positioning_from_diag(d)
         sc = p.get("score")
-        if _nan(sc) or sc < score_min:
+        if _nan(sc):
             continue
         nm = names.get(sym, sym)
         dd, et, rr = p.get("drawdown"), p.get("earnings_turn"), p.get("recent_return")
@@ -197,26 +197,36 @@ def _ambush_region(diagnoses: dict, names: dict, as_of: str,
                         for f in (p.get("flags") or []))
         hot = "background:#dcfce7" if sc >= 60 else ("background:#fef9c3" if sc >= 40 else "")
         td = "padding:6px;border-bottom:1px solid var(--border)"
-        rows.append((sc,
-                     f"<tr><td style='{td}'><b>{html.escape(nm)}</b>"
-                     f"<br><span class='muted'>{sym}</span></td>"
-                     f"<td style='{td};text-align:center'>{dd_s}</td>"
-                     f"<td style='{td};text-align:center'>{et_s}{flags}</td>"
-                     f"<td style='{td};text-align:center'>{rr_s}</td>"
-                     f"<td style='{td};text-align:center'>{ex_s}</td>"
-                     f"<td style='{td};text-align:center;font-size:16px;font-weight:bold;{hot}'>{sc:.0f}</td></tr>"))
-    if not rows:
+        row = (sc,
+               f"<tr><td style='{td}'><b>{html.escape(nm)}</b>"
+               f"<br><span class='muted'>{sym}</span></td>"
+               f"<td style='{td};text-align:center'>{dd_s}</td>"
+               f"<td style='{td};text-align:center'>{et_s}{flags}</td>"
+               f"<td style='{td};text-align:center'>{rr_s}</td>"
+               f"<td style='{td};text-align:center'>{ex_s}</td>"
+               f"<td style='{td};text-align:center;font-size:16px;font-weight:bold;{hot}'>{sc:.0f}</td></tr>")
+        (above if sc >= score_min else below).append(row)
+    if not above and not below:
         return ""
-    rows.sort(key=lambda x: x[0], reverse=True)
+    above.sort(key=lambda x: x[0], reverse=True)
+    below.sort(key=lambda x: x[0], reverse=True)
     th = "padding:8px;border-bottom:2px solid var(--border)"
     head = (f"<tr><th style='{th};text-align:left'>股票</th><th style='{th}'>深跌</th>"
             f"<th style='{th}'>业绩拐头</th><th style='{th}'>近60日涨</th>"
             f"<th style='{th}'>兑现窗口</th><th style='{th}'>埋伏分</th></tr>")
-    return ('<div class="alerts"><h2>🎯 提前埋伏候选 <span class="count">深跌×业绩拐头×含金量×未兑现</span></h2>'
-            '<p class="muted">入场=领先基本面(深跌+最新已报期业绩拐头,4月年报即显,早于预告/上涨);'
-            '预告/正报=兑现出场窗口。近60日已大涨=已兑现→压低。不含涨跌预测,非荐股。</p>'
-            f'<table style="width:100%;border-collapse:collapse;font-size:13px"><thead>{head}</thead>'
-            f'<tbody>{"".join(r for _, r in rows)}</tbody></table></div>')
+    parts = [f'<table style="width:100%;border-collapse:collapse;font-size:13px"><thead>{head}</thead>'
+             f'<tbody>{"".join(r for _, r in above)}</tbody></table>']
+    if below:
+        shown = below[:show_below]
+        sep = ('<tr><td colspan="6" style="padding:4px 6px;text-align:center;color:var(--muted);'
+               'font-size:11px;border-top:2px dashed var(--border);border-bottom:1px dashed var(--border)">'
+               f'—— 门槛线 {score_min:.0f} 以下(top {len(shown)},灰色参考) ——</td></tr>')
+        parts.append(f'<table style="width:100%;border-collapse:collapse;font-size:12px;opacity:0.6">'
+                     f'<tbody>{sep}{"".join(r for _, r in shown)}</tbody></table>')
+    return ('<div class="alerts"><h2>🎯 提前埋伏候选 <span class="count">深跌×alignment×含金量×未兑现×企稳</span></h2>'
+            '<p class="muted">门槛线 ≥30 全展示;线下展示 top 3(灰色参考)。'
+            '入场=领先基本面;预告/正报=兑现出场。不含涨跌预测,非荐股。</p>'
+            + "\n".join(parts) + '</div>')
 
 
 def _card(sym: str, d: dict, name: str, with_charts: bool = False,
