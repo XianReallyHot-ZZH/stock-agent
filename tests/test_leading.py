@@ -102,3 +102,28 @@ def test_commodity_signal_down():
     assert cs["valid"] is True
     assert cs["down"] is True          # 同比转负
     assert cs["divergent"] is False    # 非背离(近期是涨的)
+
+
+# ---- commodity_alignment(商品价×股价背离度,周期股核心)----
+def test_commodity_alignment_copper_up():
+    # 铜式:商品向上(health 1.0)+ 股价落后(lag high)→ alignment 高
+    com = {"valid": True, "yoy": 0.35, "recent": 0.02}
+    al = leading.commodity_alignment(com, stock_recent_return=-0.11)
+    assert al["valid"] and abs(al["health"] - 1.0) < 1e-9
+    assert al["lag"] > 0.10
+    assert al["score"] > 0.5       # health 1.0 × lag_factor 0.65 ≈ 0.65
+
+
+def test_commodity_alignment_lithium_divergent():
+    # 锂式:商品背离(health 0.3)→ alignment 低
+    com = {"valid": True, "yoy": 1.03, "recent": -0.31}
+    al = leading.commodity_alignment(com, stock_recent_return=-0.44)
+    assert abs(al["health"] - 0.3) < 1e-9
+    assert al["score"] < 0.3       # 0.3 × 0.65 ≈ 0.195
+
+
+def test_commodity_alignment_steel_down():
+    # 钢式:商品向下(yoy≤-10%,health 0.0)→ alignment 0
+    com = {"valid": True, "yoy": -0.15, "recent": -0.08}
+    al = leading.commodity_alignment(com, stock_recent_return=-0.10)
+    assert al["health"] == 0.0 and al["score"] == 0.0

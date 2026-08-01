@@ -85,3 +85,35 @@ def leading_signal(symbol: str, store, config=None, asof: str | None = None) -> 
         "components": components,
         "label": " ".join(labels),
     }
+
+
+def commodity_alignment(com: dict, stock_recent_return, lag_scale: float = 0.20) -> dict:
+    """商品价×股价 内在联系(周期股核心):商品健康 × 股价落后商品的程度 = 错杀度。
+
+    周期股最核心的埋伏逻辑:商品价撑住业绩、但股价还没反映 → 错杀 = 埋伏点。
+    反之商品价也在跌 → 双杀(不是错杀)。
+      商品健康度: 向上→1.0 | 背离→0.3 | 震荡→0.1 | 向下→0.0
+      股价落后度: clamp(max(0, 商品近60日涨幅 − 股价近60日涨幅) / lag_scale, 0, 1)
+      alignment = 商品健康度 × 股价落后度
+    数据不足 → valid=False。"""
+    if not com or not com.get("valid"):
+        return {"valid": False, "score": 0.0}
+    yoy, recent = com.get("yoy"), com.get("recent")
+    if _nan(yoy):
+        return {"valid": False, "score": 0.0}
+    # 商品健康度
+    if yoy > 0.10 and not _nan(recent) and recent > -0.05:
+        health = 1.0           # 向上(铜)
+    elif yoy > 0.10:
+        health = 0.3           # 背离(锂矿)
+    elif yoy > -0.10:
+        health = 0.1           # 震荡
+    else:
+        health = 0.0           # 向下(钢)
+    # 股价落后度: 商品近期涨 − 股价近期涨 >0 = 股价落后商品 = 错杀
+    comm_r = float(recent) if not _nan(recent) else 0.0
+    stock_r = float(stock_recent_return) if not _nan(stock_recent_return) else 0.0
+    lag = max(0.0, comm_r - stock_r)
+    lag_factor = min(max(lag / lag_scale, 0.0), 1.0)
+    return {"valid": True, "score": health * lag_factor,
+            "health": health, "lag": lag, "lag_factor": lag_factor}

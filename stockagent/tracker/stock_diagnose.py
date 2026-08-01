@@ -25,7 +25,7 @@ from ..config import get_config
 from ..engine import indicators as ind
 from . import indicators as ti
 from .classifier import VALID_STYLES  # {"value","growth","cyclic"} — 输出形状对齐
-from .leading import leading_signal   # A 类领先信号(商品价/基金持仓/保险代理)
+from .leading import leading_signal, commodity_alignment
 
 
 def _nan(x) -> bool:
@@ -674,8 +674,14 @@ def positioning_from_diag(d: dict, config=None) -> dict:
 
     eturn = earnings_turn_factor(np_.get("latest"), np_.get("base"))
     leading = d.get("leading") or {}
-    ls = float(leading["score"]) if leading.get("valid") else 0.0
-    outlook = max(eturn, ls)   # earnings_outlook:领先信号能替代/早于报告期业绩拐头(A 类抓底能力)
+    com = (leading.get("components") or {}).get("commodity")
+    al = {}
+    # 周期股核心:商品价×股价背离度(替代 max(拐头,商品价));非周期:报告期拐头
+    if com and com.get("valid"):
+        al = commodity_alignment(com, rev.get("recent_return"))
+        outlook = al["score"] if al.get("valid") else eturn
+    else:
+        outlook = eturn
     sf = stabilize_factor(rev.get("recent_return"))
     out = positioning_score(
         rev.get("drawdown"), outlook, not bool(eq.get("low_quality")), rev.get("recent_return"), sf,
@@ -700,12 +706,16 @@ def positioning_from_diag(d: dict, config=None) -> dict:
         flags.append("飞刀")
     elif sf >= 1.0:
         flags.append("企稳")
-    if leading.get("valid") and ls > eturn + 1e-9:
-        flags.append("领先·" + (leading.get("label") or ""))   # 领先信号主导(早于报告期)
+    if al.get("valid"):
+        if al.get("health", 0) >= 1.0 and al.get("lag_factor", 0) >= 0.3:
+            flags.append("商品撑/股价滞后")   # 错杀(核心埋伏信号)
+        elif al.get("health", 1) <= 0.3:
+            flags.append("商品背离/双杀")    # 非错杀
     out.update({"earnings_turn": eturn, "earnings_outlook": outlook, "stabilize_factor": sf,
                 "drawdown": dd, "recent_return": rr, "exit_date": exit_date,
                 "low_quality": bool(eq.get("low_quality")),
                 "leading_label": leading.get("label"), "leading": leading,
+                "alignment": al,
                 "flags": flags, "symbol": d.get("symbol")})
     return out
 

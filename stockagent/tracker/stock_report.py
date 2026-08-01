@@ -385,6 +385,13 @@ h2 { font-size:16px; margin:0 0 10px; }
 .tab.active { color:var(--text); border-bottom-color:#2563eb; }
 .tab-panel { display:none; padding-top:10px; }
 .tab-panel.active { display:block; }
+/* 周期 tab 内子 tab(商品周期/其他周期) */
+.subtabs { display:flex; gap:4px; flex-wrap:wrap; margin:10px 0 0 4px; border-bottom:2px solid var(--border); }
+.subtab { background:transparent; border:none; border-bottom:3px solid transparent; padding:6px 12px; cursor:pointer; font-size:13px; font-weight:600; color:var(--muted); }
+.subtab:hover { color:var(--text); }
+.subtab.active { color:var(--text); border-bottom-color:#ea580c; }
+.subtab-panel { display:none; padding-top:8px; }
+.subtab-panel.active { display:block; }
 .comm-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(440px,1fr)); gap:10px; margin-top:8px; }
 .comm-chart { min-height:300px; }
 """
@@ -419,6 +426,10 @@ function toggleTheme(){
 function switchTab(name){
   document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
   document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active', p.id==='tab-'+name));
+}
+function switchSubTab(name){
+  document.querySelectorAll('.subtab').forEach(b=>b.classList.toggle('active', b.dataset.subtab===name));
+  document.querySelectorAll('.subtab-panel').forEach(p=>p.classList.toggle('active', p.id==='subtab-'+name));
 }
 """
 
@@ -616,7 +627,11 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
     n = len(stock_diagnoses)
     chart_section = _chart_assets(stock_diagnoses, names, store, prd)
     ai_section = _ai_eval_assets(names)
-    ambush_section = _ambush_region(tabs["cyclic"], names, as_of)      # 仅周期股埋伏
+    cyclic_commodity = {sym: d for sym, d in tabs["cyclic"].items() if sym in commodity_map}
+    cyclic_other = {sym: d for sym, d in tabs["cyclic"].items() if sym not in commodity_map}
+    cards_commodity = _cards(cyclic_commodity)
+    cards_other = _cards(cyclic_other)
+    ambush_section = _ambush_region(cyclic_commodity, names, as_of)   # 仅商品周期股(有 commodity_map)
     commodity_section = _commodity_region(store) if store else ""
     commodity_charts = _commodity_charts(store)
     # 信号提醒按 tab 拆:个股级(scope=个股名)→ 各 tab 顶部;市场级(大盘/指数)→ tab 栏上方全局条
@@ -627,6 +642,13 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
             name2tab[_sym] = _t
     market_alerts = [a for a in alerts_list if a.get("scope") not in name2tab]
     tab_alerts = {t: [a for a in alerts_list if name2tab.get(a.get("scope")) == t] for t in tabs}
+    # 周期 tab 子 tab 各自的提醒(商品周期 vs 其他周期)
+    comm_names = set()
+    for sym in cyclic_commodity:
+        comm_names.add(names.get(sym, sym))
+        comm_names.add(sym)
+    comm_alerts = [a for a in tab_alerts["cyclic"] if a.get("scope") in comm_names]
+    other_alerts = [a for a in tab_alerts["cyclic"] if a.get("scope") not in comm_names]
     alerts_top = (_alerts_region(market_alerts, title="🌐 市场级提醒", empty_msg=False)
                   if alerts_list else _alerts_region([], empty_msg=True))
     tab_meta = (("cyclic", "🔄 周期"), ("value", "💰 价值"), ("growth", "🚀 成长"))
@@ -639,7 +661,24 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
         head = f'<div class="cards-head"><h2>{label}股({len(tabs[t])})</h2></div>'
         grid = f'<div class="grid">\n{cards[t]}\n</div>'
         lead = _alerts_region(tab_alerts[t], empty_msg=False)   # 该 tab 个股级提醒
-        inner = f"{lead}\n{commodity_section}\n{commodity_charts}\n{ambush_section}\n{head}\n{grid}" if t == "cyclic" else f"{lead}\n{head}\n{grid}"
+        if t == "cyclic":
+            comm_al = _alerts_region(comm_alerts, empty_msg=False)
+            other_al = _alerts_region(other_alerts, empty_msg=False)
+            sub_bar = ('<div class="subtabs">'
+                       f'<button class="subtab active" data-subtab="comm" onclick="switchSubTab(\'comm\')">🧲 商品周期股({len(cyclic_commodity)})</button>'
+                       f'<button class="subtab" data-subtab="other" onclick="switchSubTab(\'other\')">🔄 其他周期股({len(cyclic_other)})</button>'
+                       '</div>')
+            sec_comm = (f'<div id="subtab-comm" class="subtab-panel active">\n'
+                        f'{comm_al}\n{commodity_section}\n{commodity_charts}\n{ambush_section}\n'
+                        f'<div class="cards-head"><h2>商品周期股({len(cyclic_commodity)})</h2></div>\n'
+                        f'<div class="grid">\n{cards_commodity}\n</div>\n</div>')
+            sec_other = (f'<div id="subtab-other" class="subtab-panel">\n'
+                         f'{other_al}\n'
+                         f'<div class="cards-head"><h2>其他周期股({len(cyclic_other)})</h2></div>\n'
+                         f'<div class="grid">\n{cards_other}\n</div>\n</div>') if cyclic_other else ""
+            inner = f"{sub_bar}\n{sec_comm}\n{sec_other}"
+        else:
+            inner = f"{lead}\n{head}\n{grid}"
         panels.append(f'<div id="tab-{t}" class="tab-panel{" active" if t == "cyclic" else ""}">\n{inner}\n</div>')
     panels_html = "\n".join(panels)
     return f"""<!DOCTYPE html>

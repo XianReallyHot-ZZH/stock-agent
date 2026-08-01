@@ -573,6 +573,38 @@ def test_positioning_from_diag_no_reversal():
     assert sd.positioning_from_diag(d)["score"] == 0.0
 
 
+# ---- 周期股 alignment 路径(商品价×股价背离度,替代 max(拐头,商品价))----
+def test_positioning_cyclic_alignment_copper():
+    # 铜式:商品向上 + 股价落后 → alignment 高 → 埋伏分显著高于锂式
+    d = {
+        "reversal": {"drawdown": -0.6, "recent_return": -0.11},
+        "pitfalls": {"net_profit": {"latest": 16.0, "base": -21.0}},
+        "earnings_quality": {"low_quality": False},
+        "forecast": {},
+        "leading": {"valid": True, "components": {"commodity": {"valid": True, "yoy": 0.35, "recent": 0.02}}},
+    }
+    p = sd.positioning_from_diag(d)
+    assert p["alignment"]["valid"]
+    assert abs(p["alignment"]["health"] - 1.0) < 1e-9
+    assert "商品撑/股价滞后" in p["flags"]
+    assert p["score"] > 30          # 铜式有合理埋伏分
+
+
+def test_positioning_cyclic_alignment_lithium():
+    # 锂式:商品背离(health 0.3)+ 飞刀(stabilize 0.25)→ 埋伏分远低于铜式
+    d = {
+        "reversal": {"drawdown": -0.8, "recent_return": -0.44},
+        "pitfalls": {"net_profit": {"latest": 5.0, "base": -79.0}},
+        "earnings_quality": {"low_quality": False},
+        "forecast": {},
+        "leading": {"valid": True, "components": {"commodity": {"valid": True, "yoy": 1.03, "recent": -0.31}}},
+    }
+    p = sd.positioning_from_diag(d)
+    assert p["alignment"]["health"] <= 0.3
+    assert "商品背离/双杀" in p["flags"]
+    assert p["score"] < 10          # 远低于铜式
+
+
 # ---- price_reversal(纯函数)----
 def test_price_reversal_drawdown_and_recent():
     # 10→12(顶)→6(底):drawdown=6/12−1=−0.5;近2日 d3/d2−1=−0.5
