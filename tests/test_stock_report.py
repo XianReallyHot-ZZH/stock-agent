@@ -36,7 +36,9 @@ def test_render_contains_key_sections():
     h = srep.render({"600519": _diag()}, alerts, as_of="2026-07-22",
                     names={"600519": "贵州茅台"})
     assert "<!DOCTYPE html>" in h
-    assert "个股诊断卡片" in h
+    assert "tab-cyclic" in h and "tab-value" in h and "tab-growth" in h  # 三 tab 面板
+    assert "switchTab" in h and 'data-tab="cyclic"' in h                  # tab 切换 + 默认周期
+    assert "tab-panel active" in h                                        # 默认激活
     assert "贵州茅台" in h
     assert "营收CAGR(3y)" in h and "净利CAGR(3y)" in h   # CAGR 标窗口年数
     assert "利润波动(5y)" in h                            # 波动窗口
@@ -87,6 +89,9 @@ class _StubStore:
     def get_stock_dividend_series(self, sym):
         return pd.DataFrame()
 
+    def get_commodity_series(self, variety):
+        return pd.Series(dtype=float)   # 空 → 商品图走占位
+
 
 def test_render_with_store_emits_modal():
     h = srep.render({"600519": _diag()}, [], as_of="2026-07-22",
@@ -113,3 +118,44 @@ def test_render_without_store_no_charts():
     assert "chart-modal" not in h
     assert "var CHARTS" not in h
     assert "openChart" not in h
+
+
+def test_tab_of_routing():
+    cm = {"002466": "碳酸锂"}
+    assert srep._tab_of("002466", {"classification": {"primary": "value"}}, cm) == "cyclic"  # commodity_map 优先
+    assert srep._tab_of("600519", {"classification": {"primary": "value"}}, {}) == "value"
+    assert srep._tab_of("300750", {"classification": {"primary": "growth"}}, {}) == "growth"
+    assert srep._tab_of("000001", {"classification": {"primary": None}}, {}) == "growth"      # 未分类→成长
+    assert srep._tab_of("600019", {"classification": {"primary": "cyclic"}}, {}) == "cyclic"
+
+
+def test_render_tab_structure_and_counts():
+    h = srep.render({"600519": _diag()}, [], as_of="2026-07-22", names={"600519": "贵州茅台"})
+    assert '<div class="tabs">' in h
+    assert "💰 价值(1)" in h            # 价值 tab 带 1 只
+    assert "🔄 周期(0)" in h            # 周期 tab 0 只(该股非周期)
+    # 周期 panel 即使空也存在(为后续周期分析留位);价值 panel 含该股卡片
+    assert "贵州茅台" in h
+
+
+def test_commodity_price_figure():
+    import pandas as pd
+    from stockagent.tracker import stock_figures as sf
+    idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    s = pd.Series([100.0 + i * 0.5 for i in range(300)], index=idx, dtype=float)  # 上升→向上
+    fig = sf.commodity_price_figure("铜", s)
+    title = fig.layout.title.text
+    assert "铜" in title and "向上" in title
+    # 空/不足 → 占位(不抛)
+    assert sf.commodity_price_figure("铜", pd.Series(dtype=float)) is not None
+
+
+def test_render_commodity_panel_and_modal_7th():
+    # 002466 在 commodity_map → 周期 tab:含商品价时序面板 + 模态第 7 张商品图
+    h = srep.render({"002466": _diag()}, [], as_of="2026-07-22", names={"002466": "天齐"}, store=_StubStore())
+    assert "comm-chart-0" in h and "商品价时序" in h          # 周期 tab 有商品价面板
+    assert h.count('class="modal-chart"') >= 7               # 模态至少 7 槽(周期股追加商品图)
+    assert '"002466":' in h and "openChart('002466')" in h
+    # 非商品股(600519)只有 6 槽
+    h2 = srep.render({"600519": _diag()}, [], as_of="2026-07-22", names={"600519": "茅台"}, store=_StubStore())
+    assert h2.count('class="modal-chart"') == 6

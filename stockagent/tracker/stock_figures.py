@@ -248,3 +248,41 @@ def attribution_figure(sym: str, name: str, rows: list[dict]) -> go.Figure:
     fig.update_yaxes(title_text="回报(占年初价)", hoverformat=".0%", gridcolor=_PAL["grid"])
     fig.add_hline(y=0, line=dict(color=_PAL["baseline"], width=1))
     return fig
+
+
+# ---- ⑦ 商品价(A 类领先信号;周期股上游,领先财报 1-4 月)----
+def commodity_price_figure(variety: str, series: pd.Series) -> go.Figure:
+    """商品价时序图(周期股业绩的因果领先指标)。单线 + "1 年前"参考虚线(让同比可视化),
+    标题带判定(向上🟢/背离🟡/震荡⚪/向下🔴)。空/不足 → 占位。"""
+    if series is None or len(series) < 2:
+        return _placeholder(variety, "商品价", "无商品价数据")
+    s = series.astype(float)
+    idx = pd.to_datetime(s.index)
+    n252 = min(252, len(s) - 1)
+    n60 = min(60, len(s) - 1)
+    yoy = float(s.iloc[-1]) / float(s.iloc[-1 - n252]) - 1.0 if n252 >= 1 else float("nan")
+    rec = float(s.iloc[-1]) / float(s.iloc[-1 - n60]) - 1.0 if n60 >= 1 else float("nan")
+    if not pd.isna(yoy) and yoy > 0.10 and not pd.isna(rec) and rec > -0.05:
+        judge = "向上🟢"
+    elif not pd.isna(yoy) and yoy > 0.10:
+        judge = "背离🟡"
+    elif not pd.isna(yoy) and yoy > -0.10:
+        judge = "震荡⚪"
+    else:
+        judge = "向下🔴"
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=idx, y=s, name=variety, line=dict(color=_PAL["close"], width=2),
+                             hovertemplate="%{x|%Y-%m-%d}<br>" + variety + " %{y:.0f}<extra></extra>"))
+    ma60 = ti.ma_series(s, 60)   # 与个股 E3/企稳同口径(MA60),读图直觉一致
+    fig.add_trace(go.Scatter(x=idx, y=ma60, name="MA60",
+                             line=dict(color=_PAL["muted"], width=1.4, dash="dash"),
+                             hovertemplate="%{x|%Y-%m-%d}<br>MA60 %{y:.0f}<extra></extra>"))
+    if n252 >= 1 and not pd.isna(s.iloc[-1 - n252]):
+        base = float(s.iloc[-1 - n252])
+        fig.add_hline(y=base, line=dict(color=_PAL["muted"], width=1, dash="dot"),
+                      annotation_text=f"1年前 {base:.0f}", annotation_position="top left")
+    _yy = f"{yoy:+.0%}" if not pd.isna(yoy) else "—"
+    _rr = f"{rec:+.0%}" if not pd.isna(rec) else "—"
+    fig.update_layout(**_layout(f"{variety}价 · {judge}(同比{_yy}/近60日{_rr})", height=300, showlegend=True))
+    _style_axes(fig)
+    return fig

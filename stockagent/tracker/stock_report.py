@@ -148,6 +148,31 @@ def _commodity_region(store) -> str:
             f'<thead>{head}</thead><tbody>{body}</tbody></table></div>')
 
 
+def _commodity_charts(store) -> str:
+    """📈 商品价时序图面板(5 商品折线,inline 渲染于周期 tab)。复用 stock_figures.commodity_price_figure;
+    DOMContentLoaded 时 newPlot(Plotly 已由个股图表模态加载)。"""
+    if store is None or not hasattr(store, "get_commodity_series"):
+        return ""
+    from . import stock_figures as sf
+    import re
+    varieties = ["碳酸锂", "铜", "螺纹钢", "黄金", "原油"]
+    figs = [(v, sf.commodity_price_figure(v, store.get_commodity_series(v))) for v in varieties]
+    if not figs:
+        return ""
+    divs = "".join(f'<div id="comm-chart-{i}" class="comm-chart"></div>' for i in range(len(figs)))
+    arr = ",".join(re.sub(r"</script", r"<\\/script", f.to_json(), flags=re.I) for _, f in figs)
+    js = ("var COMM=[" + arr + "];\n"
+          "document.addEventListener('DOMContentLoaded',function(){\n"
+          "  if(!window.Plotly)return;\n"
+          "  COMM.forEach(function(fig,i){var gd=document.getElementById('comm-chart-'+i);"
+          "    if(gd)Plotly.newPlot(gd,fig,{responsive:true,displaylogo:false});});\n"
+          "  setTimeout(function(){if(window._applyPlotly)_applyPlotly(_isDark());},60);\n"
+          "});")
+    return ('<div class="alerts"><h2>📈 商品价时序(A 类领先信号)</h2>'
+            '<p class="muted">商品价领先周期股财报 1-4 月;折线=价,虚线=1 年前水平(同比可视化)。结合下方个股 📊 判断。</p>'
+            f'<div class="comm-grid">{divs}</div></div>\n<script>{js}</script>')
+
+
 def _ambush_region(diagnoses: dict, names: dict, as_of: str,
                    score_min: float = 30.0) -> str:
     """🎯 提前埋伏候选排名(只读,基本面领先):深跌×业绩拐头×含金量×未兑现 综合分降序。无候选 → 空串。
@@ -352,6 +377,15 @@ h2 { font-size:16px; margin:0 0 10px; }
 .modal-chart { margin-bottom:6px; }
 .ai-box { max-width:820px; }                       /* AI 评估弹窗比图表窄,文本更易读 */
 .ai-body { white-space:pre-wrap; word-wrap:break-word; line-height:1.75; font-size:13.5px; padding:4px 2px; }
+/* tab 切换(按类型分页:周期/价值/成长) */
+.tabs { display:flex; gap:4px; flex-wrap:wrap; margin:14px 0 0; border-bottom:2px solid var(--border); }
+.tab { background:transparent; border:none; border-bottom:3px solid transparent; padding:8px 14px; cursor:pointer; font-size:14px; font-weight:600; color:var(--muted); }
+.tab:hover { color:var(--text); }
+.tab.active { color:var(--text); border-bottom-color:#2563eb; }
+.tab-panel { display:none; padding-top:10px; }
+.tab-panel.active { display:block; }
+.comm-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(440px,1fr)); gap:10px; margin-top:8px; }
+.comm-chart { min-height:300px; }
 """
 
 
@@ -381,6 +415,10 @@ function toggleTheme(){
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);
   else init();
 })();
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active', p.id==='tab-'+name));
+}
 """
 
 
@@ -408,11 +446,12 @@ function openChart(sym){
   var ov = document.getElementById('chart-modal');
   ov.hidden = false;                 // 先显示(容器拿到真实宽度)再 newPlot,图才能横向占满
   document.body.style.overflow = 'hidden';
+  var allSlots = document.querySelectorAll('.modal-chart');
+  allSlots.forEach(function(gd){ try{ Plotly.purge(gd); }catch(e){} gd.style.display=''; });
   Promise.all(list.map(function(fig, i){
-    var gd = document.getElementById('m-chart-' + i);
-    try{ Plotly.purge(gd); }catch(e){}
-    return Plotly.newPlot(gd, fig, {responsive:true, displaylogo:false});
+    return Plotly.newPlot(document.getElementById('m-chart-' + i), fig, {responsive:true, displaylogo:false});
   })).then(function(){ _applyPlotly(_isDark()); });
+  for(var i=list.length; i<allSlots.length; i++){ allSlots[i].style.display='none'; }
 }
 function closeChart(){
   var ov = document.getElementById('chart-modal');
@@ -495,8 +534,10 @@ def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str
     import re
     from plotly.offline import get_plotlyjs
 
+    from ..config import get_config
+    commodity_map = (get_config().params.get("stock", {}) or {}).get("commodity_map", {}) or {}
     charts: dict[str, list[str]] = {}
-    n = 0
+    max_n = 0
     for sym, d in stock_diagnoses.items():
         name = names.get(sym, sym)
         built = [
@@ -510,10 +551,15 @@ def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str
             sf.attribution_figure(sym, name, sd.attribution_by_year(sym, store, 6)),
             sf.dividend_figure(sym, name, store.get_stock_dividend_series(sym)),
         ]
-        n = len(built)
+        # 周期股:映射商品价时序放首位(A 类领先信号,打开 📊 先看上游商品价)
+        variety = commodity_map.get(sym)
+        comm = sf.commodity_price_figure(variety, store.get_commodity_series(variety)) if variety else None
+        if comm is not None:
+            built = [comm] + built
+        max_n = max(max_n, len(built))
         charts[sym] = [f.to_json() for f in built]
 
-    slots = "\n".join(f'      <div id="m-chart-{i}" class="modal-chart"></div>' for i in range(n))
+    slots = "\n".join(f'      <div id="m-chart-{i}" class="modal-chart"></div>' for i in range(max_n))
     modal_html = _CHART_MODAL_HTML.replace("__SLOTS__", slots)
     # 每个 to_json() 是合法 JSON → 直接作 JS 对象字面量;纯拼接(不用 %/format,plotly.js 含大量 % {})
     entries = ",\n".join(f'"{sym}":[{",".join(charts[sym])}]' for sym in charts)
@@ -538,6 +584,14 @@ def _ai_eval_assets(names: dict) -> str:
     return _AI_EVAL_MODAL_HTML + "\n<script>\n" + body + "</script>"
 
 
+def _tab_of(sym: str, d: dict, commodity_map: dict) -> str:
+    """个股 → tab 归属:商品跟踪股(commodity_map)或自动分类 cyclic → 周期;其余按分类(未分类→成长)。"""
+    if sym in commodity_map or (d.get("classification") or {}).get("primary") == "cyclic":
+        return "cyclic"
+    prim = (d.get("classification") or {}).get("primary")
+    return prim if prim in ("value", "growth") else "growth"
+
+
 def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
            names: dict | None = None, title: str = "个股诊断看板",
            store=None, period: int | None = None) -> str:
@@ -548,13 +602,34 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
     names = names or {}
     prd = period or ti.MA_PERIOD
     with_charts = store is not None
-    cards = "\n".join(
-        _card(sym, d, names.get(sym, sym), with_charts=with_charts, with_ai=True)
-        for sym, d in stock_diagnoses.items())
+    from ..config import get_config
+    commodity_map = (get_config().params.get("stock", {}) or {}).get("commodity_map", {}) or {}
+    tabs = {"cyclic": {}, "value": {}, "growth": {}}
+    for sym, d in stock_diagnoses.items():
+        tabs[_tab_of(sym, d, commodity_map)][sym] = d
+
+    def _cards(group):
+        return "\n".join(_card(sym, d, names.get(sym, sym), with_charts=with_charts, with_ai=True)
+                         for sym, d in group.items())
+    cards = {t: _cards(g) for t, g in tabs.items()}
     n = len(stock_diagnoses)
     chart_section = _chart_assets(stock_diagnoses, names, store, prd)
     ai_section = _ai_eval_assets(names)
-    ambush_section = _ambush_region(stock_diagnoses, names, as_of)
+    ambush_section = _ambush_region(tabs["cyclic"], names, as_of)      # 仅周期股埋伏
+    commodity_section = _commodity_region(store) if store else ""
+    commodity_charts = _commodity_charts(store)
+    tab_meta = (("cyclic", "🔄 周期"), ("value", "💰 价值"), ("growth", "🚀 成长"))
+    tab_bar = "".join(
+        f'<button class="tab{" active" if t == "cyclic" else ""}" data-tab="{t}" '
+        f"onclick=\"switchTab('{t}')\">{label}({len(tabs[t])})</button>"
+        for t, label in tab_meta)
+    panels = []
+    for t, label in tab_meta:
+        head = f'<div class="cards-head"><h2>{label}股({len(tabs[t])})</h2></div>'
+        grid = f'<div class="grid">\n{cards[t]}\n</div>'
+        inner = f"{commodity_section}\n{commodity_charts}\n{ambush_section}\n{head}\n{grid}" if t == "cyclic" else f"{head}\n{grid}"
+        panels.append(f'<div id="tab-{t}" class="tab-panel{" active" if t == "cyclic" else ""}">\n{inner}\n</div>')
+    panels_html = "\n".join(panels)
     return f"""<!DOCTYPE html>
 <html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{html.escape(title)}</title><style>{_CSS}</style></head>
@@ -562,16 +637,14 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
 <div class="header">
   <button id="theme-btn" class="toggle" onclick="toggleTheme()">🌙 深浅色</button>
   <h1>{html.escape(title)}</h1>
-  <p class="muted">as_of {html.escape(as_of)} · {n} 只个股 · 数据底座 C0/C0.5/C0.6(price/估值/财报/分红/预告)</p>
+  <p class="muted">as_of {html.escape(as_of)} · {n} 只个股 · 周期/价值/成长 三 tab</p>
 </div>
 {_alerts_region(alerts_list)}
-{_commodity_region(store) if store else ''}
-{ambush_section}
-<div class="cards-head"><h2>个股诊断卡片</h2>
-{_LEGEND_HTML}</div>
-<div class="grid">
-{cards}
+{_LEGEND_HTML}
+<div class="tabs">
+{tab_bar}
 </div>
+{panels_html}
 {chart_section}
 {ai_section}
 <script>{_THEME_JS}</script>
