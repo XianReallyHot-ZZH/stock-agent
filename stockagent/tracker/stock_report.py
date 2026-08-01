@@ -79,9 +79,10 @@ _LEGEND_HTML = """
 </div></details>"""
 
 
-def _alerts_region(alerts_list: list) -> str:
+def _alerts_region(alerts_list: list, title: str = "📡 信号提醒", empty_msg: bool = True) -> str:
     if not alerts_list:
-        return '<div class="alerts"><h2>📡 信号提醒</h2><p class="muted">当前无触发(观察池稳定,偏离/营收/预告均在正常区)。</p></div>'
+        return ('<div class="alerts"><h2>📡 信号提醒</h2><p class="muted">当前无触发(观察池稳定,偏离/营收/预告均在正常区)。</p></div>'
+                if empty_msg else "")
     warns = [a for a in alerts_list if a["level"] == "warn"]
     infos = [a for a in alerts_list if a["level"] == "info"]
     rows = []
@@ -94,7 +95,7 @@ def _alerts_region(alerts_list: list) -> str:
             f'<span class="alert-scope">{html.escape(str(a["scope"]))}</span>'
             f'<span class="alert-msg">{html.escape(a["msg"])}</span></div>'
         )
-    return (f'<div class="alerts"><h2>📡 信号提醒 '
+    return (f'<div class="alerts"><h2>{title} '
             f'<span class="count">⚠{len(warns)} 💡{len(infos)}</span></h2>'
             + "".join(rows) + "</div>")
 
@@ -618,6 +619,16 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
     ambush_section = _ambush_region(tabs["cyclic"], names, as_of)      # 仅周期股埋伏
     commodity_section = _commodity_region(store) if store else ""
     commodity_charts = _commodity_charts(store)
+    # 信号提醒按 tab 拆:个股级(scope=个股名)→ 各 tab 顶部;市场级(大盘/指数)→ tab 栏上方全局条
+    name2tab = {}
+    for _t, _group in tabs.items():
+        for _sym in _group:
+            name2tab[names.get(_sym, _sym)] = _t
+            name2tab[_sym] = _t
+    market_alerts = [a for a in alerts_list if a.get("scope") not in name2tab]
+    tab_alerts = {t: [a for a in alerts_list if name2tab.get(a.get("scope")) == t] for t in tabs}
+    alerts_top = (_alerts_region(market_alerts, title="🌐 市场级提醒", empty_msg=False)
+                  if alerts_list else _alerts_region([], empty_msg=True))
     tab_meta = (("cyclic", "🔄 周期"), ("value", "💰 价值"), ("growth", "🚀 成长"))
     tab_bar = "".join(
         f'<button class="tab{" active" if t == "cyclic" else ""}" data-tab="{t}" '
@@ -627,7 +638,8 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
     for t, label in tab_meta:
         head = f'<div class="cards-head"><h2>{label}股({len(tabs[t])})</h2></div>'
         grid = f'<div class="grid">\n{cards[t]}\n</div>'
-        inner = f"{commodity_section}\n{commodity_charts}\n{ambush_section}\n{head}\n{grid}" if t == "cyclic" else f"{head}\n{grid}"
+        lead = _alerts_region(tab_alerts[t], empty_msg=False)   # 该 tab 个股级提醒
+        inner = f"{lead}\n{commodity_section}\n{commodity_charts}\n{ambush_section}\n{head}\n{grid}" if t == "cyclic" else f"{lead}\n{head}\n{grid}"
         panels.append(f'<div id="tab-{t}" class="tab-panel{" active" if t == "cyclic" else ""}">\n{inner}\n</div>')
     panels_html = "\n".join(panels)
     return f"""<!DOCTYPE html>
@@ -639,7 +651,7 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
   <h1>{html.escape(title)}</h1>
   <p class="muted">as_of {html.escape(as_of)} · {n} 只个股 · 周期/价值/成长 三 tab</p>
 </div>
-{_alerts_region(alerts_list)}
+{alerts_top}
 {_LEGEND_HTML}
 <div class="tabs">
 {tab_bar}

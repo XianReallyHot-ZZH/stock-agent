@@ -90,3 +90,15 @@ def test_commodity_signal_not_divergent_when_up():
     cs = leading.commodity_signal(st, "铜", config=_cfg())
     assert cs["valid"] is True
     assert cs["divergent"] is False
+
+
+def test_commodity_signal_down():
+    st = _store()
+    # 同比转负(100→96,−4%)但近期回升(80→96)→ down=True、divergent=False
+    rows = [("螺纹钢", f"2024-01-{i:02d}", float(v))
+            for i, v in enumerate([100] * 6 + [80] * 5 + [96], 1)]
+    st.upsert_commodity_price(rows, source="test")
+    cs = leading.commodity_signal(st, "螺纹钢", config=_cfg())
+    assert cs["valid"] is True
+    assert cs["down"] is True          # 同比转负
+    assert cs["divergent"] is False    # 非背离(近期是涨的)

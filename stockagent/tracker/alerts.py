@@ -26,8 +26,10 @@ _DIV_THRESHOLD = 0.05  # B1: 股息率 > 5% 视为偏高(买入窗口)
 # ---- C2 个股提醒阈值(Phase 2)----
 _A3_DECEL_MARGIN = 0.05      # A3: 营收增速下滑 >5pp 触发(滤噪音)
 _G1_RECENT_DAYS = 90         # G1: 预告公告在 90 天内 = 披露窗口刚开
+_G1_PRICED_IN = 0.20         # G1: 近60日涨≥20% = 股价已透支(预告转"利好出尽")
 _G2_DEADLINE_NEAR_DAYS = 45  # G2: 法定披露截止日在 45 天内 = 临近
 _E3_LOW, _E3_HIGH = 0.05, 0.95  # E3: 偏离极值套利阈值(≤5% 超卖买点 / ≥95% 超买卖点)
+_E3_KNIFE_RECENT = -0.15        # E3: 近60日跌超此 = 飞刀(超卖不作买点,改 ⚠)
 _E5_LOW, _E5_HIGH = 0.20, 0.80  # E5: ⑦相对周期包络位置阈值(≤20% 下沿 / ≥80% 上沿)
 # Q1 个股业绩含金量(一次性利润/纸面富贵)—— 判定在 diagnose_earnings_quality,params.yaml stock.earnings_quality
 _Q1_NON_RECURRING = 0.30   # 一次性占比 ≥30% → low_quality(展示用,实际阈值以 diagnose 为准)
@@ -215,8 +217,20 @@ def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
             if ann:
                 d = _days(asof, ann)  # asof − ann;0..N = 近 N 天内公告
                 if d is not None and 0 <= d <= _G1_RECENT_DAYS:
-                    alerts.append({"level": "info", "scope": nm, "rule": "G1",
-                                   "msg": f"业绩披露窗口已开(预告「{L.get('type', '?')}」公告{ann})→ 催化剂/风险事件"})
+                    # 预告=业绩兑现;含义随上游/股价而变(铜式正向催化 vs 锂式利好出尽)
+                    com = ((s.get("leading") or {}).get("components") or {}).get("commodity") or {}
+                    rev_ret = (s.get("reversal") or {}).get("recent_return")
+                    commodity_weak = bool(com.get("divergent") or com.get("down"))
+                    priced_in = (not _nan(rev_ret)) and rev_ret >= _G1_PRICED_IN
+                    if commodity_weak or priced_in:
+                        reason = "上游转弱" if commodity_weak else "股价已透支"
+                        alerts.append({"level": "warn", "scope": nm, "rule": "G1",
+                                       "msg": f"业绩预告已出(「{L.get('type', '?')}」公告{ann})→ 业绩兑现,"
+                                              f"但{reason} → 利好出尽,减仓/离场"})
+                    else:
+                        alerts.append({"level": "info", "scope": nm, "rule": "G1",
+                                       "msg": f"业绩预告已出(「{L.get('type', '?')}」公告{ann})→ 业绩兑现,"
+                                              f"上游支撑+股价未透支,驱动力仍在(正向催化)"})
 
         # A3: 营收增速下滑(营收是利润之母)
         rev = (s.get("pitfalls") or {}).get("revenue") or {}
@@ -248,13 +262,18 @@ def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
                 alerts.append({"level": "info", "scope": nm, "rule": "G2",
                                "msg": f"{lp[:4]}期财报披露截止{dl}(剩{d}天)→ 公告日=影响第一天"})
 
-        # E3: 股价/均线偏离接近历史极值 → 套利
+        # E3: 股价/均线偏离接近历史极值 → 套利(超卖但仍在暴跌=飞刀,不作买点)
         dev = (s.get("price_timing") or {}).get("deviation") or {}
         pct = dev.get("pct")
         if dev.get("valid") and not _nan(pct):
             if pct <= _E3_LOW:
-                alerts.append({"level": "info", "scope": nm, "rule": "E3",
-                               "msg": f"股价偏离60日线接近历史底部(pct={pct:.0%})→ 超卖·套利买点"})
+                rev_ret = (s.get("reversal") or {}).get("recent_return")
+                if not _nan(rev_ret) and rev_ret < _E3_KNIFE_RECENT:
+                    alerts.append({"level": "warn", "scope": nm, "rule": "E3",
+                                   "msg": f"股价偏离60日线接近历史底部(pct={pct:.0%})但近60日仍跌{rev_ret * 100:.0f}% → 飞刀,勿当买点抄底"})
+                else:
+                    alerts.append({"level": "info", "scope": nm, "rule": "E3",
+                                   "msg": f"股价偏离60日线接近历史底部(pct={pct:.0%})→ 超卖·套利买点"})
             elif pct >= _E3_HIGH:
                 alerts.append({"level": "warn", "scope": nm, "rule": "E3",
                                "msg": f"股价偏离60日线接近历史顶部(pct={pct:.0%})→ 超买·减仓/套利卖点"})
@@ -276,12 +295,17 @@ def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
             alerts.append({"level": "info", "scope": nm, "rule": "P1",
                            "msg": f"提前埋伏候选:深跌 {dd_s} × 业绩拐头 × 近60日涨 {rr_s} × 企稳"
                                   f" → 埋伏分 {ps['score']:.0f}(领先基本面埋伏,财报兑现即离场)"})
-        # M1: 上游商品背离(同比涨但近期回落 → 未来业绩承压,领先信号转弱)
+        # M1: 上游商品背离(同比涨但近期回落 → 未来业绩承压,领先信号转弱,减仓/卖出)
         com = (leading.get("components") or {}).get("commodity") or {}
         if com.get("divergent"):
             alerts.append({"level": "warn", "scope": nm, "rule": "M1",
                            "msg": f"上游{com.get('variety', '?')}价同比{com.get('yoy', 0) * 100:+.0f}%但近期回落"
-                                  f"{com.get('recent', 0) * 100:.0f}% → 未来业绩承压(领先信号转弱,周期股宜减/避)"})
+                                  f"{com.get('recent', 0) * 100:.0f}% → 未来业绩承压(领先信号转弱,周期股减仓/卖出)"})
+        # M2: 上游商品同比转负 → 周期确认向下,卖出/避开
+        if com.get("down"):
+            alerts.append({"level": "warn", "scope": nm, "rule": "M2",
+                           "msg": f"上游{com.get('variety', '?')}价同比{com.get('yoy', 0) * 100:+.0f}%转负"
+                                  f" → 周期确认向下,卖出/避开"})
 
     # E4: 蓝筹 vs 成长趋势背离 → 仓位倾向(市场级,复用指数层 style)
     if index_diag:

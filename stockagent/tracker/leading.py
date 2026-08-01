@@ -56,6 +56,7 @@ def commodity_signal(store, variety: str, asof: str | None = None,
     out["variety"] = variety
     # 背离:同比涨(>10%)但近期回落(<−5%)→ 前瞻恶化(M1 预警用)
     out["divergent"] = bool(out["yoy"] > 0.10 and (not _nan(recent)) and recent < -0.05)
+    out["down"] = bool(out["yoy"] < 0)   # 同比转负 → 周期确认向下(M2 卖出用)
     out["label"] = f"{variety}同比{out['yoy']:+.0%}"
     return out
 

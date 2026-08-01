@@ -55,11 +55,38 @@ def test_A1_forecast_deceleration():
     assert not any(x["rule"] == "G1" for x in a)
 
 
-def test_G1_recent_forecast_window_open():
+def test_G1_forecast_bullish_when_supported():
+    # 上游撑+股价未透支 → 正向催化(info)——铜式
     s = _stock(forecast={"valid": True, "a1_deceleration": False, "a2_turn_bearish": False,
-                         "latest": {"type": "略增", "yoy": 15.0, "announce_date": "2026-06-15"}})
-    a = alerts.evaluate_stocks(s, asof="2026-07-22")  # 距 2026-06-15 = 37 天 ≤90
-    assert any(x["rule"] == "G1" and x["level"] == "info" for x in a)
+                         "latest": {"type": "略增", "yoy": 15.0, "announce_date": "2026-06-15"}},
+               leading={"valid": True, "score": 0.0,
+                        "components": {"commodity": {"divergent": False, "down": False}}},
+               reversal={"recent_return": -0.05})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    g1 = [x for x in a if x["rule"] == "G1"]
+    assert g1 and g1[0]["level"] == "info" and "正向催化" in g1[0]["msg"]
+
+
+def test_G1_forecast_warn_when_commodity_weak():
+    # 上游背离 → 利好出尽(warn)——锂式
+    s = _stock(forecast={"valid": True, "a1_deceleration": False, "a2_turn_bearish": False,
+                         "latest": {"type": "预增", "yoy": 800.0, "announce_date": "2026-06-15"}},
+               leading={"valid": True, "score": 0.0,
+                        "components": {"commodity": {"divergent": True, "down": False}}},
+               reversal={"recent_return": -0.40})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    g1 = [x for x in a if x["rule"] == "G1"]
+    assert g1 and g1[0]["level"] == "warn" and "利好出尽" in g1[0]["msg"]
+
+
+def test_G1_forecast_warn_when_priced_in():
+    # 股价已大涨(透支)→ 利好出尽(warn)
+    s = _stock(forecast={"valid": True, "a1_deceleration": False, "a2_turn_bearish": False,
+                         "latest": {"type": "预增", "yoy": 50.0, "announce_date": "2026-06-15"}},
+               reversal={"recent_return": 0.30})
+    a = alerts.evaluate_stocks(s, asof="2026-07-22")
+    g1 = [x for x in a if x["rule"] == "G1"]
+    assert g1 and g1[0]["level"] == "warn" and "透支" in g1[0]["msg"]
 
 
 def test_A3_revenue_deceleration():
@@ -192,6 +219,43 @@ def test_M1_no_commodity_no_fire():
     s = _stock(leading={"valid": False, "score": 0.0, "components": {}})
     a = alerts.evaluate_stocks(s, asof="2026-07-30")
     assert not any(x["rule"] == "M1" for x in a)
+
+
+# ---- M2 上游商品同比转负(evaluate_stocks)----
+def test_M2_commodity_down_fires():
+    s = _stock(leading={"valid": True, "score": 0.0,
+                        "components": {"commodity": {"down": True, "divergent": False,
+                                                     "variety": "螺纹钢", "yoy": -0.04}}})
+    a = alerts.evaluate_stocks(s, asof="2026-08-01")
+    assert any(x["rule"] == "M2" and x["level"] == "warn" for x in a)
+
+
+def test_M2_no_fire_when_commodity_up():
+    # 铜向上(divergent/down 都 False)→ M1/M2 都不触发
+    s = _stock(leading={"valid": True, "score": 0.0,
+                        "components": {"commodity": {"down": False, "divergent": False,
+                                                     "variety": "铜", "yoy": 0.35}}})
+    a = alerts.evaluate_stocks(s, asof="2026-08-01")
+    assert not any(x["rule"] in ("M1", "M2") for x in a)
+
+
+# ---- E3 超卖:飞刀 vs 套利买点 ----
+def test_E3_oversold_knife_warns():
+    # 深超卖但近60日暴跌 → 飞刀(warn,非买点)
+    s = _stock(price_timing={"deviation": {"valid": True, "pct": 0.02}},
+               reversal={"recent_return": -0.40})
+    a = alerts.evaluate_stocks(s, asof="2026-08-01")
+    e3 = [x for x in a if x["rule"] == "E3"]
+    assert e3 and e3[0]["level"] == "warn" and "飞刀" in e3[0]["msg"]
+
+
+def test_E3_oversold_stable_is_buy():
+    # 深超卖且近期未暴跌 → 套利买点(info)
+    s = _stock(price_timing={"deviation": {"valid": True, "pct": 0.03}},
+               reversal={"recent_return": -0.02})
+    a = alerts.evaluate_stocks(s, asof="2026-08-01")
+    e3 = [x for x in a if x["rule"] == "E3"]
+    assert e3 and e3[0]["level"] == "info" and "套利买点" in e3[0]["msg"]
 
 
 def test_A3_no_fire_when_accelerating():

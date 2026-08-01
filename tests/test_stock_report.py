@@ -58,6 +58,21 @@ def test_render_no_alerts_message():
     assert "⚠0" not in h
 
 
+def test_render_alerts_split_by_tab():
+    alerts = [
+        {"level": "warn", "scope": "贵州茅台", "rule": "A3", "msg": "营收增速下滑"},   # 个股 → value tab
+        {"level": "info", "scope": "大盘", "rule": "F1", "msg": "沪深300风险开关"},     # 市场 → 全局条
+    ]
+    h = srep.render({"600519": _diag()}, alerts, as_of="2026-07-22", names={"600519": "贵州茅台"})
+    # 市场级在 tab 栏上方的全局条
+    assert "🌐 市场级提醒" in h and "沪深300风险开关" in h
+    # 个股级落在 value tab 内,不在 cyclic tab 内
+    i_cyc, i_val = h.find('id="tab-cyclic"'), h.find('id="tab-value"')
+    cyc_seg = h[i_cyc:i_val]
+    assert "营收增速下滑" not in cyc_seg          # 周期 tab 无该个股提醒
+    assert "营收增速下滑" in h[i_val:]            # value tab 有
+
+
 def test_render_handles_nan_fields():
     d = _diag()
     d["features"] = {"revenue_cagr": float("nan"), "profit_cagr": float("nan"),
