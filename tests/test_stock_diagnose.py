@@ -457,89 +457,133 @@ def test_earnings_quality_invalid_and_base_edge():
     assert np.isnan(q["np_yoy"])
 
 
-# ---- positioning_score (提前埋伏分,纯函数)----
+# ---- earnings_turn_factor (业绩拐头,纯函数)----
+def test_earnings_turn_turning_profit():
+    assert sd.earnings_turn_factor(latest=16.0, base=-21.0) == 1.0   # 扭亏(锂矿式)
+
+
+def test_earnings_turn_growth():
+    assert sd.earnings_turn_factor(latest=120.0, base=100.0) == 1.0  # 回升
+
+
+def test_earnings_turn_plateau():
+    assert sd.earnings_turn_factor(latest=100.0, base=110.0) == 0.5  # 盈利但下滑(≤base)
+
+
+def test_earnings_turn_still_loss():
+    assert sd.earnings_turn_factor(latest=-5.0, base=-21.0) == 0.0   # 仍亏
+
+
+def test_earnings_turn_insufficient():
+    assert sd.earnings_turn_factor(np.nan, 100.0) == 0.5             # latest 缺
+
+
+# ---- stabilize_factor (企稳,防飞刀但不要滞后确认)----
+def test_stabilize_settled_and_turning():
+    assert sd.stabilize_factor(0.05) == 1.0      # 走平/回升 → 企稳(左侧埋伏点)
+    assert sd.stabilize_factor(0.0) == 1.0
+    assert sd.stabilize_factor(-0.04) == 1.0     # ≥ mild_down(-0.05)
+
+
+def test_stabilize_mild_decline_and_crash():
+    assert sd.stabilize_factor(-0.10) == 0.6     # 缓跌(mild..crash)
+    assert sd.stabilize_factor(-0.20) == 0.25    # 急跌/飞刀(<crash)→重罚非零,不归零
+    assert sd.stabilize_factor(np.nan) == 0.5    # 数据不足
+
+
+# ---- positioning_score (提前埋伏分,基本面四因子)----
 def test_positioning_strong():
-    # 预告转多 + 干净 + 低 PE + 黄金窗 → 高分
-    s = sd.positioning_score(leading=1.0, quality_ok=True, pe_pct=0.1, days_to_deadline=60)
+    # 深跌50% + 拐头 + 干净 + 未涨 → 满分
+    s = sd.positioning_score(drawdown=-0.5, earnings_turn=1.0, quality_ok=True, recent_return=0.0)
     assert s["valid"] is True
-    assert abs(s["score"] - 90.0) < 1e-9          # 1×1×0.9×1.0×100
-    assert s["timing_factor"] == 1.0
+    assert abs(s["score"] - 100.0) < 1e-9          # 1×1×1×1×100
+    assert s["priced_factor"] == 1.0
+
+
+def test_positioning_already_priced():
+    # 近60日涨30%(已兑现)→ priced_factor 0 → 0 分
+    s = sd.positioning_score(-0.5, 1.0, True, 0.30)
+    assert abs(s["priced_factor"]) < 1e-9
+    assert s["score"] == 0.0
 
 
 def test_positioning_quality_penalty():
-    # Q1 触发(一次性)→ 含金量重罚 0.2
-    s = sd.positioning_score(1.0, False, 0.1, 60)
+    # 含金量低(Q1)→ quality 0.2
+    s = sd.positioning_score(-0.5, 1.0, False, 0.0)
     assert abs(s["quality_factor"] - 0.2) < 1e-9
-    assert abs(s["score"] - 18.0) < 1e-9          # 1×0.2×0.9×1×100
+    assert abs(s["score"] - 20.0) < 1e-9           # 1×1×0.2×1×100
 
 
-def test_positioning_leading_zero_kills():
-    # 预告恶化/无信号 → leading 0 → 0 分(乘法合成)
-    assert sd.positioning_score(0.0, True, 0.1, 60)["score"] == 0.0
+def test_positioning_no_turn_kills():
+    # 仍亏(earnings_turn 0)→ 0 分
+    assert sd.positioning_score(-0.5, 0.0, True, 0.0)["score"] == 0.0
 
 
-def test_positioning_disclosed_window_passed():
-    # 已披露(days<0)→ timing 0.3,埋伏窗已过
-    s = sd.positioning_score(1.0, True, 0.1, -5)
-    assert abs(s["timing_factor"] - 0.3) < 1e-9
-    assert abs(s["score"] - 27.0) < 1e-9          # 1×1×0.9×0.3×100
+def test_positioning_drawdown_capped_and_nan():
+    assert sd.positioning_score(-0.9, 1.0, True, 0.0)["drawdown_factor"] == 1.0   # 90% 回撤 cap 1.0
+    assert sd.positioning_score(np.nan, 1.0, True, 0.0)["drawdown_factor"] == 0.0  # nan→0
 
 
-def test_positioning_no_deadline_and_far_decay():
-    assert sd.positioning_score(1.0, True, 0.1, np.nan)["timing_factor"] == 0.5   # 无 deadline→0.5
-    assert sd.positioning_score(1.0, True, 0.1, 400)["timing_factor"] == 0.3      # 远期地板 0.3
+def test_positioning_recent_nan_neutral():
+    assert abs(sd.positioning_score(-0.5, 1.0, True, np.nan)["priced_factor"] - 0.5) < 1e-9
 
 
-def test_positioning_pe_nan_neutral():
-    assert abs(sd.positioning_score(1.0, True, np.nan, 60)["valuation_factor"] - 0.5) < 1e-9
+# ---- positioning_from_diag(装配)----
+def test_positioning_from_diag_reversal_turn():
+    d = {"symbol": "002460",
+         "reversal": {"drawdown": -0.6, "recent_return": 0.05},
+         "pitfalls": {"net_profit": {"latest": 16.0, "base": -21.0}, "disclosure": {"deadline": "2026-04-30"}},
+         "earnings_quality": {"low_quality": False},
+         "forecast": {"latest": {"period": "20260630"}}}
+    p = sd.positioning_from_diag(d)
+    assert p["earnings_turn"] == 1.0                      # 扭亏
+    assert p["stabilize_factor"] == 1.0                       # 近60日 +5% → 企稳(无需站上60日线)
+    assert "扭亏" in p["flags"] and "深跌" in p["flags"] and "企稳" in p["flags"]
+    assert p["exit_date"] == "2026-08-31"                 # 预告期法定截止
+    # df=1.0 × turn1 × q1 × priced(0.833) × stab1 ×100 ≈ 83.3
+    assert 80 < p["score"] < 85
 
 
-# ---- positioning_from_diag(装配,吃 diagnose_stock_full dict)----
-def test_positioning_from_diag_forecast_bullish():
-    d = {
-        "symbol": "002460",
-        "forecast": {"valid": True, "latest_sentiment": "bullish", "a1_deceleration": False,
-                     "latest": {"yoy": 800.0, "type": "扭亏"}, "prior": {"sentiment": "bearish"}},
-        "earnings_quality": {"low_quality": False},
-        "davis": {"profit_yoy_latest": -0.5},
-        "valuation_zone": {"pe_pct": 0.2},
-        "pitfalls": {"disclosure": {"deadline": "2026-08-31"}, "net_profit": {"abnormal": False}},
-    }
-    p = sd.positioning_from_diag(d, asof="2026-07-30")
-    assert p["signal_label"] == "预告转多"
-    assert "新转多" in p["flags"]                       # prior bearish → 新转多
-    assert p["leading_factor"] == 1.0
-    # deadline 2026-08-31 − 2026-07-30 = 32 天(golden→timing 1.0);pe 0.2→vf 0.8
-    assert abs(p["score"] - 80.0) < 1e-9               # 1×1×0.8×1×100
+def test_positioning_from_diag_already_priced_low():
+    # 近60日涨25%(已兑现)→ 分被压低
+    d = {"reversal": {"drawdown": -0.6, "recent_return": 0.25},
+         "pitfalls": {"net_profit": {"latest": 16.0, "base": -21.0}},
+         "earnings_quality": {"low_quality": False}, "forecast": {}}
+    p = sd.positioning_from_diag(d)
+    assert "已兑现" in p["flags"]
+    assert p["priced_factor"] < 0.2                       # 1−0.25/0.3≈0.167
+    assert p["score"] < 20
 
 
-def test_positioning_from_diag_davis_fallback():
-    # 无预告但年报业绩正增 → leading 0.5 退路
-    d = {"forecast": {"valid": False}, "earnings_quality": {"low_quality": False},
-         "davis": {"profit_yoy_latest": 0.3}, "valuation_zone": {"pe_pct": 0.4},
-         "pitfalls": {"disclosure": {"deadline": "2026-08-31"}}}
-    p = sd.positioning_from_diag(d, asof="2026-07-30")
-    assert p["signal_label"] == "业绩正增"
-    assert p["leading_factor"] == 0.5
+def test_positioning_from_diag_falling_knife_penalized():
+    # 深跌+扭亏+未兑现全满分,但近60日急跌(<-15%,飞刀)→ 企稳因子重罚(非零,不要求站上60日线)
+    d = {"reversal": {"drawdown": -0.6, "recent_return": -0.20},
+         "pitfalls": {"net_profit": {"latest": 16.0, "base": -21.0}},
+         "earnings_quality": {"low_quality": False}, "forecast": {}}
+    p = sd.positioning_from_diag(d)
+    assert p["stabilize_factor"] == 0.25
+    assert "飞刀" in p["flags"]
+    assert p["score"] < 30
 
 
-def test_positioning_from_diag_no_signal():
-    d = {"forecast": {"valid": False}, "earnings_quality": {"low_quality": False},
-         "davis": {"profit_yoy_latest": float("nan")}, "valuation_zone": {}}
-    p = sd.positioning_from_diag(d, asof="2026-07-30")
-    assert p["leading_factor"] == 0.0 and p["score"] == 0.0
+def test_positioning_from_diag_no_reversal():
+    # 缺 reversal → drawdown nan→df 0 → 0 分
+    d = {"pitfalls": {"net_profit": {"latest": 16.0, "base": -21.0}},
+         "earnings_quality": {"low_quality": False}, "forecast": {}}
+    assert sd.positioning_from_diag(d)["score"] == 0.0
 
 
-def test_positioning_from_diag_catalyst_period_wins():
-    # 时效优先用预告期(20260630→2026-08-31)而非已报期截止(2026-04-30 已过)
-    d = {"forecast": {"valid": True, "latest_sentiment": "bullish", "a1_deceleration": False,
-                      "latest": {"period": "20260630", "type": "预增"}},
-         "earnings_quality": {"low_quality": False}, "davis": {"profit_yoy_latest": 0.0},
-         "valuation_zone": {"pe_pct": 0.2}, "pitfalls": {"disclosure": {"deadline": "2026-04-30"}}}
-    p = sd.positioning_from_diag(d, asof="2026-07-30")
-    assert p["deadline"] == "2026-08-31"            # 预告期截止覆盖已报期
-    assert p["timing_factor"] == 1.0                # 32 天 = 黄金窗
-    assert abs(p["score"] - 80.0) < 1e-9
+# ---- price_reversal(纯函数)----
+def test_price_reversal_drawdown_and_recent():
+    # 10→12(顶)→6(底):drawdown=6/12−1=−0.5;近2日 d3/d2−1=−0.5
+    close = pd.Series([10.0, 12.0, 6.0], index=["d1", "d2", "d3"])
+    r = sd.price_reversal(close, lookback=250, recent=2)
+    assert abs(r["drawdown"] - (6 / 12 - 1)) < 1e-9
+    assert abs(r["recent_return"] - (6 / 12 - 1)) < 1e-9
+
+
+def test_price_reversal_insufficient():
+    assert np.isnan(sd.price_reversal(pd.Series([5.0]))["drawdown"])
 
 
 # ---- diagnose_earnings_quality store 集成 ----

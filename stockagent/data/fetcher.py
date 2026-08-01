@@ -672,6 +672,49 @@ def fetch_index_pb(name: str, timeout: float = 40.0, retries: int = 3) -> pd.Dat
     raise FetchError(f"{name}: index_pb failed ({last_err})")
 
 
+# 商品(周期股上游领先指标)→ 期货代码映射。用于 A 类强形式领先信号(周期股业绩的日频领先)。
+COMMODITY_CODES = {"碳酸锂": "LC", "铜": "CU", "螺纹钢": "RB", "黄金": "AU", "原油": "SC"}
+
+
+def fetch_commodity_price(varieties: list[str], start: str = "2020-01-01",
+                          end: Optional[str] = None, timeout: float = 40.0,
+                          retries: int = 2) -> pd.DataFrame:
+    """商品期货连续合约日线(日频,周期股上游领先指标,A 类强形式信号)。varieties=品种中文名(见 COMMODITY_CODES)。
+    用 futures_zh_daily_sina(symbol=code+'0',sina 连续合约)——秒级、全历史、当前(远快于 spot 面板)。
+    逐品种循环,失败品种跳过(不拖垮整批);全失败才 raise。返回长表 [variety, date, close]。"""
+    frames = []
+    last_err = None
+    for v in varieties:
+        code = COMMODITY_CODES.get(v)
+        if not code:
+            continue
+        for attempt in range(retries):
+            if attempt > 0:
+                time.sleep(1.0)
+            try:
+                df = _run_with_timeout(ak.futures_zh_daily_sina, timeout, symbol=code + "0")
+                if df is None or len(df) == 0:
+                    raise FetchError("empty")
+                d = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                sub = pd.DataFrame({"variety": v, "date": d,
+                                    "close": pd.to_numeric(df["close"], errors="coerce")})
+                sub = sub.dropna(subset=["date", "close"]).drop_duplicates(["variety", "date"])
+                if start:
+                    sub = sub[sub["date"] >= start]
+                if end:
+                    sub = sub[sub["date"] <= end]
+                frames.append(sub)
+                last_err = None
+                break
+            except FetchError as e:
+                last_err = e
+            except Exception as e:  # noqa: BLE001
+                last_err = FetchError(str(e)[:200])
+    if not frames:
+        raise FetchError(f"commodity_price {varieties} failed ({last_err})")
+    return pd.concat(frames, ignore_index=True).sort_values(["variety", "date"])
+
+
 def fetch_market_pb(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
     """Whole-A-market PB history + percentiles (legulegu stock_a_all_pb). Single market-wide
     series, back to 2005. Returns DataFrame indexed by date(str): pb, pb_median, pct_all

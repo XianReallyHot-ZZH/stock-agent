@@ -193,7 +193,8 @@ def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
     返回形状同 evaluate:[{level, scope, rule, msg}],可直接喂 format_for_push。"""
     alerts: list[dict] = []
     asof = asof or datetime.now().strftime("%Y-%m-%d")
-    from .stock_diagnose import positioning_score as _positioning_score, disclosure_deadline as _ddl  # lazy: 防循环
+    from .stock_diagnose import (positioning_score as _positioning_score,
+                                 earnings_turn_factor as _eturn, stabilize_factor as _stab)  # lazy: 防循环
 
     for sym, s in stocks.items():
         nm = s.get("name", sym)
@@ -258,23 +259,29 @@ def evaluate_stocks(stocks: dict, index_diag: dict | None = None,
                 alerts.append({"level": "warn", "scope": nm, "rule": "E3",
                                "msg": f"股价偏离60日线接近历史顶部(pct={pct:.0%})→ 超买·减仓/套利卖点"})
 
-        # P1: 提前埋伏候选(预告转多 × 含金量 × 估值空间 × 时效;下个披露窗前埋伏,兑现即离场)
-        fc = s.get("forecast") or {}
-        if fc.get("valid") and fc.get("latest_sentiment") == "bullish" and not fc.get("a1_deceleration"):
-            eq = s.get("earnings_quality") or {}
-            vz = s.get("valuation_zone") or {}
-            L = fc.get("latest") or {}
-            dl = _ddl(L.get("period")) if L.get("period") else None   # 催化剂=预告期法定截止
-            days = _days(dl, asof) if dl else None
-            days_f = float(days) if days is not None else float("nan")
-            ps = _positioning_score(1.0, not bool(eq.get("low_quality")), vz.get("pe_pct"), days_f)
-            if ps["score"] >= _P1_SCORE_MIN:
-                pe = vz.get("pe_pct")
-                pe_s = f"{pe:.0%}" if not _nan(pe) else "—"
-                days_s = f"{days}天" if days is not None else "—"
-                alerts.append({"level": "info", "scope": nm, "rule": "P1",
-                               "msg": f"提前埋伏候选:预告转多 × PE分位 {pe_s} × 距披露 {days_s}"
-                                      f" → 埋伏分 {ps['score']:.0f}(下个披露窗前埋伏,兑现即离场)"})
+        # P1: 提前埋伏候选(基本面领先:深跌×业绩拐头×含金量×未兑现×企稳;财报=兑现出场)
+        rev = s.get("reversal") or {}
+        np_ = (s.get("pitfalls") or {}).get("net_profit") or {}
+        eq = s.get("earnings_quality") or {}
+        et = _eturn(np_.get("latest"), np_.get("base"))
+        leading = s.get("leading") or {}
+        ls = float(leading["score"]) if leading.get("valid") else 0.0
+        outlook = max(et, ls)   # 领先信号能替代/早于报告期业绩拐头
+        sf = _stab(rev.get("recent_return"))
+        ps = _positioning_score(rev.get("drawdown"), outlook, not bool(eq.get("low_quality")),
+                                rev.get("recent_return"), sf)
+        if ps["score"] >= _P1_SCORE_MIN:
+            dd_s = f"{abs(rev['drawdown']):.0%}" if not _nan(rev.get("drawdown")) else "—"
+            rr_s = f"{rev['recent_return']:+.0%}" if not _nan(rev.get("recent_return")) else "—"
+            alerts.append({"level": "info", "scope": nm, "rule": "P1",
+                           "msg": f"提前埋伏候选:深跌 {dd_s} × 业绩拐头 × 近60日涨 {rr_s} × 企稳"
+                                  f" → 埋伏分 {ps['score']:.0f}(领先基本面埋伏,财报兑现即离场)"})
+        # M1: 上游商品背离(同比涨但近期回落 → 未来业绩承压,领先信号转弱)
+        com = (leading.get("components") or {}).get("commodity") or {}
+        if com.get("divergent"):
+            alerts.append({"level": "warn", "scope": nm, "rule": "M1",
+                           "msg": f"上游{com.get('variety', '?')}价同比{com.get('yoy', 0) * 100:+.0f}%但近期回落"
+                                  f"{com.get('recent', 0) * 100:.0f}% → 未来业绩承压(领先信号转弱,周期股宜减/避)"})
 
     # E4: 蓝筹 vs 成长趋势背离 → 仓位倾向(市场级,复用指数层 style)
     if index_diag:

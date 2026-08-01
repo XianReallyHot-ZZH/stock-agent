@@ -469,6 +469,29 @@ class DataManager:
             self.store.set_meta("last_index_pb_update", fetcher.today_str())
         return results
 
+    COMMODITY_VARIETIES = ["碳酸锂", "铜", "螺纹钢", "黄金", "原油"]  # COMMODITY_CODES 全集(周期上游领先)
+
+    def update_commodity_price(self, varieties: Optional[list[str]] = None,
+                               start: str = "2020-01-01", end: Optional[str] = None) -> dict:
+        """Fetch + store 商品现货价(日频,周期股上游领先指标,A 类强形式信号)。一次调多品种面板。"""
+        varieties = varieties or self.COMMODITY_VARIETIES
+        end = end or fetcher.today_str()
+        try:
+            df = fetcher.fetch_commodity_price(varieties, start, end)
+        except Exception as e:  # noqa: BLE001
+            log.warning("commodity_price failed: %s", str(e)[:120])
+            return {v: 0 for v in varieties}
+        results: dict[str, int] = {}
+        for v in varieties:
+            sub = df[df["variety"] == v]
+            rows = [(v, r["date"], r["close"]) for _, r in sub.iterrows()]
+            n = self.store.upsert_commodity_price(rows, source="akshare_futures")
+            results[v] = n
+            log.info("commodity %s: +%d rows (to %s)", v, n, sub["date"].iloc[-1] if len(sub) else "?")
+        if any(results.values()):
+            self.store.set_meta("last_commodity_update", fetcher.today_str())
+        return results
+
     def update_market_pb(self) -> int:
         """Fetch + store whole-A-market PB history + percentiles (legulegu). Single series."""
         try:
@@ -541,12 +564,25 @@ class DataManager:
         "002460",  # 赣锋  深证主板  锂矿·周期
         "002466",  # 天齐  深证主板  锂矿·周期
         "601628",  # 国寿  上证主板  保险·价值(央企)
+        # 商品周期代表(A 类商品价领先信号跟踪;commodity_map 映射上游商品)
+        "600362",  # 江西铜   铜矿·周期
+        "000630",  # 铜陵有色 铜矿·周期
+        "601899",  # 紫金矿业 铜+金+锂·周期(多元化,铜近似)
+        "603993",  # 洛阳钼业 铜+钴+铌·周期(多元化,铜近似)
+        "600547",  # 山东黄金 黄金·周期
+        "600916",  # 中金黄金 黄金·周期
+        "600019",  # 宝钢股份 钢铁·周期
+        "601857",  # 中国石油 能源·周期
+        "600938",  # 中海油   能源·周期
     ]
     STOCK_NAMES = {  # 显示名(server/scripts 共享,避免两处维护;C1 迁 stock_pool.yaml 时带 name 字段)
         "600519": "贵州茅台", "600036": "招商银行", "300750": "宁德时代",
         "000651": "格力电器", "688981": "中芯国际",
         "300760": "迈瑞医疗", "002475": "立讯精密", "300124": "汇川技术", "600276": "恒瑞医药",
         "002460": "赣锋锂业", "002466": "天齐锂业", "601628": "中国人寿",
+        "600362": "江西铜业", "000630": "铜陵有色", "601899": "紫金矿业", "603993": "洛阳钼业",
+        "600547": "山东黄金", "600916": "中金黄金", "600019": "宝钢股份",
+        "601857": "中国石油", "600938": "中海油",
     }
 
     def update_stock_daily(self, symbols: Optional[list[str]] = None,

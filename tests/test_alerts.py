@@ -125,42 +125,73 @@ def test_R1_non_cyclic_no_fire():
     assert not any(x["rule"] == "R1" for x in a)
 
 
-# ---- P1 提前埋伏候选(evaluate_stocks)----
+# ---- P1 提前埋伏候选(evaluate_stocks,基本面领先)----
 def test_P1_ambush_fires():
-    # 预告转多 + 干净 + 低 PE + 预告期(20260630→截止2026-08-31)在黄金窗 → P1
-    s = _stock(forecast={"valid": True, "latest_sentiment": "bullish", "a1_deceleration": False,
-                         "latest": {"type": "预增", "period": "20260630"}},
-               earnings_quality={"low_quality": False}, valuation_zone={"pe_pct": 0.15},
-               pitfalls={"disclosure": {"deadline": "2026-04-30"}})
+    # 深跌 + 扭亏 + 干净 + 未涨 + 企稳(近60日 +5%) → 埋伏分≈83 ≥40 → P1
+    s = _stock(reversal={"drawdown": -0.6, "recent_return": 0.05},
+               pitfalls={"net_profit": {"latest": 16.0, "base": -21.0}},
+               earnings_quality={"low_quality": False})
     a = alerts.evaluate_stocks(s, asof="2026-07-30")
     assert any(x["rule"] == "P1" and x["level"] == "info" for x in a)
 
 
-def test_P1_forecast_deceleration_no_fire():
-    s = _stock(forecast={"valid": True, "latest_sentiment": "bullish", "a1_deceleration": True,
-                         "latest": {"type": "预增"}},
-               earnings_quality={"low_quality": False}, valuation_zone={"pe_pct": 0.15},
-               pitfalls={"disclosure": {"deadline": "2026-08-30"}})
+def test_P1_falling_knife_no_fire():
+    # 近60日急跌(<-15%,飞刀)→ 企稳因子重罚 → 不发(即便深跌+扭亏+未兑现)
+    s = _stock(reversal={"drawdown": -0.6, "recent_return": -0.20},
+               pitfalls={"net_profit": {"latest": 16.0, "base": -21.0}},
+               earnings_quality={"low_quality": False})
     a = alerts.evaluate_stocks(s, asof="2026-07-30")
     assert not any(x["rule"] == "P1" for x in a)
 
 
-def test_P1_high_pe_no_fire():
-    # PE 分位过高(透支)→ 分低不发
-    s = _stock(forecast={"valid": True, "latest_sentiment": "bullish", "a1_deceleration": False,
-                         "latest": {"type": "预增"}},
-               earnings_quality={"low_quality": False}, valuation_zone={"pe_pct": 0.95},
-               pitfalls={"disclosure": {"deadline": "2026-08-30"}})
+def test_P1_already_priced_no_fire():
+    # 近60日涨30%(已兑现)→ 未兑现因子 0 → 不发
+    s = _stock(reversal={"drawdown": -0.6, "recent_return": 0.30},
+               pitfalls={"net_profit": {"latest": 16.0, "base": -21.0}},
+               earnings_quality={"low_quality": False})
     a = alerts.evaluate_stocks(s, asof="2026-07-30")
     assert not any(x["rule"] == "P1" for x in a)
 
 
-def test_P1_no_forecast_no_fire():
-    # 无预告(快照无 davis 退路)→ P1 不发(排名表仍会用 davis 退路)
-    s = _stock(forecast={"valid": False}, earnings_quality={"low_quality": False},
-               valuation_zone={"pe_pct": 0.15}, pitfalls={"disclosure": {"deadline": "2026-08-30"}})
+def test_P1_no_turn_no_fire():
+    # 仍亏(earnings_turn 0)→ 不发
+    s = _stock(reversal={"drawdown": -0.6, "recent_return": 0.05},
+               pitfalls={"net_profit": {"latest": -5.0, "base": -21.0}},
+               earnings_quality={"low_quality": False})
     a = alerts.evaluate_stocks(s, asof="2026-07-30")
     assert not any(x["rule"] == "P1" for x in a)
+
+
+def test_P1_low_quality_no_fire():
+    # 含金量低(Q1)→ quality 0.2 → 分≈17 <40 → 不发
+    s = _stock(reversal={"drawdown": -0.6, "recent_return": 0.05},
+               pitfalls={"net_profit": {"latest": 16.0, "base": -21.0}},
+               earnings_quality={"low_quality": True})
+    a = alerts.evaluate_stocks(s, asof="2026-07-30")
+    assert not any(x["rule"] == "P1" for x in a)
+
+
+# ---- M1 上游商品背离(evaluate_stocks)----
+def test_M1_commodity_divergence_fires():
+    s = _stock(leading={"valid": True, "score": 0.0,
+                        "components": {"commodity": {"divergent": True, "variety": "碳酸锂",
+                                                     "yoy": 1.0, "recent": -0.3}}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-30")
+    assert any(x["rule"] == "M1" and x["level"] == "warn" for x in a)
+
+
+def test_M1_commodity_up_no_fire():
+    s = _stock(leading={"valid": True, "score": 0.0,
+                        "components": {"commodity": {"divergent": False, "variety": "铜",
+                                                     "yoy": 0.35, "recent": 0.02}}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-30")
+    assert not any(x["rule"] == "M1" for x in a)
+
+
+def test_M1_no_commodity_no_fire():
+    s = _stock(leading={"valid": False, "score": 0.0, "components": {}})
+    a = alerts.evaluate_stocks(s, asof="2026-07-30")
+    assert not any(x["rule"] == "M1" for x in a)
 
 
 def test_A3_no_fire_when_accelerating():

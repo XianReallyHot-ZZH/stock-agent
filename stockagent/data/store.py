@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS industry_pe (
     source    TEXT,
     PRIMARY KEY (industry, date)
 );
+CREATE TABLE IF NOT EXISTS commodity_price (
+    variety  TEXT NOT NULL,   -- 碳酸锂/铜/螺纹钢/黄金/原油(周期股上游领先指标)
+    date     TEXT NOT NULL,
+    close    REAL,
+    source   TEXT,
+    PRIMARY KEY (variety, date)
+);
 CREATE TABLE IF NOT EXISTS etf_earnings (
     symbol        TEXT NOT NULL,
     report_period TEXT NOT NULL,
@@ -463,6 +470,36 @@ class Store:
                 payload,
             )
         return len(payload)
+
+    def upsert_commodity_price(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (variety, date, close). Idempotent upsert."""
+        if not rows:
+            return 0
+        payload = [(v, d, float(c) if c is not None and not pd.isna(c) else None, source)
+                   for (v, d, c) in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO commodity_price(variety,date,close,source) VALUES(?,?,?,?) "
+                "ON CONFLICT(variety,date) DO UPDATE SET close=excluded.close,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_commodity_series(self, variety: str, start: Optional[str] = None,
+                             end: Optional[str] = None) -> pd.Series:
+        """variety 日 close 序列(date 升序,index=date)。A 类强形式领先信号用。"""
+        q = "SELECT date,close FROM commodity_price WHERE variety=?"
+        params: list = [variety]
+        if start:
+            q += " AND date>=?"; params.append(start)
+        if end:
+            q += " AND date<=?"; params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return pd.Series(dtype=float)
+        return df.set_index("date")["close"].astype(float)
 
     def get_industry_pe_series(self, industry: str, start: Optional[str] = None,
                                end: Optional[str] = None) -> pd.DataFrame:

@@ -90,6 +90,7 @@ def main():
     ap.add_argument("--fin", action="store_true", help="仅个股财报(→stock_financials, 17 指标)")
     ap.add_argument("--div", action="store_true", help="仅个股分红(→stock_dividend)")
     ap.add_argument("--forecast", action="store_true", help="仅业绩预告(→stock_forecast, 最近8期)")
+    ap.add_argument("--comm", action="store_true", help="回填商品现货价(周期上游领先·碳酸锂/铜/螺纹钢/黄金/原油)")
     ap.add_argument("--codes", type=str, default="",
                     help="逗号分隔的 6 位个股代码(默认 STOCK_WATCHLIST)")
     args = ap.parse_args()
@@ -99,7 +100,7 @@ def main():
 
     codes = [c.strip() for c in args.codes.split(",") if c.strip()] or DataManager.STOCK_WATCHLIST
 
-    selective = args.daily or args.val or args.fin or args.div or args.forecast
+    selective = args.daily or args.val or args.fin or args.div or args.forecast or args.comm
     if args.daily or not selective:
         dm.update_stock_daily(codes)
     if args.val or not selective:
@@ -110,6 +111,8 @@ def main():
         dm.update_stock_dividend(codes)
     if args.forecast or not selective:
         dm.update_stock_forecasts(codes)
+    if args.comm:
+        dm.update_commodity_price()
 
     _summary(dm, codes)
 

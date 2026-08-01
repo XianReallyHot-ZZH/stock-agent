@@ -25,6 +25,7 @@ from ..config import get_config
 from ..engine import indicators as ind
 from . import indicators as ti
 from .classifier import VALID_STYLES  # {"value","growth","cyclic"} — 输出形状对齐
+from .leading import leading_signal   # A 类领先信号(商品价/基金持仓/保险代理)
 
 
 def _nan(x) -> bool:
@@ -194,6 +195,23 @@ def diagnose_valuation_zone(pe_pct: float, pb_pct: float,
     return out
 
 
+# ---------- 价格反转因子(纯,提前埋伏用) ----------
+def price_reversal(close: pd.Series, lookback: int = 250, recent: int = 60) -> dict:
+    """价格反转因子(纯,吃 close Series):前期最大回撤(深跌空间)+ 近 N 日涨幅(已兑现程度)。
+
+      drawdown      = (close.tail(lookback)/cummax − 1).min()   负值,越深越"深跌"(照 backtest/metrics.py:26)
+      recent_return = close.iloc[-1]/close.iloc[-recent] − 1    近 N 日涨幅(正大=已涨/已兑现)
+    数据不足(<2)→ NaN。"""
+    if close is None or len(close) < 2:
+        return {"drawdown": float("nan"), "recent_return": float("nan")}
+    c = close.astype(float)
+    win = c.tail(lookback)
+    drawdown = float((win / win.cummax() - 1.0).min()) if len(win) >= 2 else float("nan")
+    n = min(recent, len(c))
+    recent_return = (float(c.iloc[-1]) / float(c.iloc[-n]) - 1.0) if n >= 2 else float("nan")
+    return {"drawdown": drawdown, "recent_return": recent_return}
+
+
 # ---------- 价格择时 E3(纯,复用 ti) ----------
 def diagnose_price_timing(close: pd.Series, period: int = ti.MA_PERIOD,
                           lookback: int | None = None) -> dict:
@@ -267,6 +285,10 @@ def diagnose_stock(symbol: str, store, config=None) -> dict:
             hi=float(vp.get("zone_high_percentile", 0.80))),
         "price_timing": (diagnose_price_timing(close)
                          if len(close) >= ti.MA_PERIOD else {"valid": False}),
+        "reversal": price_reversal(
+            close,
+            lookback=int((sp.get("positioning") or {}).get("drawdown_lookback_days", 250)),
+            recent=int((sp.get("positioning") or {}).get("recent_window", 60))),   # 提前埋伏用(深跌+未兑现)
         "valid": primary is not None,
     }
 
@@ -584,94 +606,107 @@ def earnings_quality(np_latest: float, np_base: float, ded_latest: float, ded_ba
     }
 
 
-def positioning_score(leading: float, quality_ok: bool, pe_pct: float,
-                      days_to_deadline: float,
-                      quality_penalty: float = 0.2,
-                      timing_golden_days: float = 120.0) -> dict:
-    """提前埋伏分(只读,0-100):领先信号 × 含金量 × 估值空间 × 时效,**乘法合成**。
+def earnings_turn_factor(latest: float, base: float) -> float:
+    """业绩拐头因子(纯,0/0.5/1.0):用最新已报期净利 vs 上年同期判断是否回升(领先于预告)。
+      latest>0 且(base≤0 或 latest>base)→1.0(扭亏/回升);latest>0 但 ≤base→0.5(盈利持平);
+      latest≤0→0(仍亏);数据不足(latest 缺)→0.5。"""
+    if _nan(latest):
+        return 0.5
+    if float(latest) <= 0:
+        return 0.0
+    if _nan(base):
+        return 0.5
+    return 1.0 if (float(base) <= 0 or float(latest) > float(base)) else 0.5
 
-    策略内核:用当期领先信号(预告转多/业绩正增)预判下期财报,披露前埋伏、兑现即离场。
-    任一致命因子(预告恶化/已兑现/估值透支)→ 低分,呼应"条件 AND"。
-      leading          1.0=预告转多且非减速 / 0.5=无预告但业绩正增 / 0=预告恶化或无信号
-      quality_ok       True=扣非干净(非一次性);False→ quality_penalty(0.2)重罚不归零(反弹仍可博)
-      pe_pct           PE 历史分位(0=最便宜);估值空间 = 1 − pe_pct;nan→0.5
-      days_to_deadline 报告期法定披露截止 − asof(天):
-                        <0 已披露 → 0.3(兑现期,埋伏窗已过);
-                        0..golden → 1.0(**黄金埋伏窗**,催化剂在近期未来);
-                        >golden → max(0.3, 1−(d−golden)/(2×golden)) 远期衰减;
-                        nan → 0.5
-    返回 {valid, score, leading_factor, quality_factor, valuation_factor, timing_factor}。"""
-    lf = float(leading)
+
+def stabilize_factor(recent_return, mild_down: float = -0.05, crash: float = -0.15,
+                     crash_floor: float = 0.25) -> float:
+    """企稳因子(纯,防飞刀但**不要求滞后确认**):提前埋伏不需价格站上 60 日线(那是已兑现),
+    只需"止跌企稳"。用近 N 日涨幅判定:
+      recent_return ≥ mild_down(走平/回升)→1.0;mild..crash(缓跌)→0.6;<crash(急跌/飞刀)→crash_floor(重罚非零)。
+    数据不足→0.5。"""
+    if _nan(recent_return):
+        return 0.5
+    r = float(recent_return)
+    if r >= mild_down:
+        return 1.0
+    if r >= crash:
+        return 0.6
+    return crash_floor
+
+
+def positioning_score(drawdown: float, earnings_turn: float, quality_ok: bool,
+                      recent_return: float, stabilize: float = 1.0,
+                      drawdown_scale: float = 0.5,
+                      max_run: float = 0.30, quality_penalty: float = 0.2) -> dict:
+    """提前埋伏分(只读,0-100,基本面领先驱动):深跌 × 业绩拐头 × 含金量 × 未兑现 × 企稳,**乘法合成**。
+
+    入场依据=领先基本面(深跌+最新已报期业绩拐头,4 月年报即显,早于上涨/预告);预告/正报=兑现出场;
+    价格已大涨→排除(未兑现);仍在急跌→飞刀重罚(企稳因子);**不要求站上60日线**(那是滞后确认)。
+      drawdown_factor   = clamp(|drawdown|/drawdown_scale, 0, 1)  深跌空间(50% 回撤=满分);nan→0
+      earnings_turn     = earnings_turn_factor                     业绩拐头(0/0.5/1.0)
+      quality_factor    = 1.0 if quality_ok else quality_penalty   含金量(Q1 一次性→重罚)
+      priced_factor     = 1 − clamp(recent_return/max_run, 0, 1)   未兑现(近N日涨 max_run→0);nan→0.5
+      stabilize_factor  = stabilize_factor(走平/缓跌/飞刀)          默认1.0(调用方应显式传)
+    返回 {valid, score, drawdown_factor, earnings_turn_factor, quality_factor, priced_factor, stabilize_factor}。"""
+    df = 0.0 if _nan(drawdown) else min(max(abs(float(drawdown)) / drawdown_scale, 0.0), 1.0)
+    ef = float(earnings_turn)
     qf = 1.0 if quality_ok else float(quality_penalty)
-    vf = 0.5 if _nan(pe_pct) else min(max(1.0 - float(pe_pct), 0.0), 1.0)
-    if _nan(days_to_deadline):
-        tf = 0.5
-    elif days_to_deadline < 0:
-        tf = 0.3
-    elif days_to_deadline <= timing_golden_days:
-        tf = 1.0
-    else:
-        tf = max(0.3, 1.0 - (days_to_deadline - timing_golden_days) / (2.0 * timing_golden_days))
-    return {"valid": True, "score": lf * qf * vf * tf * 100.0,
-            "leading_factor": lf, "quality_factor": qf,
-            "valuation_factor": vf, "timing_factor": tf}
+    pf = 0.5 if _nan(recent_return) else (1.0 - min(max(float(recent_return) / max_run, 0.0), 1.0))
+    sf = float(stabilize)
+    return {"valid": True, "score": df * ef * qf * pf * sf * 100.0,
+            "drawdown_factor": df, "earnings_turn_factor": ef,
+            "quality_factor": qf, "priced_factor": pf, "stabilize_factor": sf}
 
 
-def _days_diff(a, b) -> float:
-    """a − b 的天数(YYYY-MM-DD)。解析失败 → NaN。"""
-    try:
-        da = datetime.strptime(str(a)[:10], "%Y-%m-%d")
-        db = datetime.strptime(str(b)[:10], "%Y-%m-%d")
-        return float((da - db).days)
-    except Exception:  # noqa: BLE001
-        return float("nan")
+def positioning_from_diag(d: dict, config=None) -> dict:
+    """从 diagnose_stock_full dict 算提前埋伏分(装配 positioning_score,无 store)。
 
-
-def positioning_from_diag(d: dict, asof: str | None = None, config=None) -> dict:
-    """从 diagnose_stock_full 输出 dict 算提前埋伏分(装配 positioning_score,无 store 访问)。
-
-      leading: forecast 转多(bullish)且非减速(a1)→1.0「预告转多」;
-               elif davis.profit_yoy_latest>0 →0.5「业绩正增」;else 0(预告恶化/无信号)。
-      quality_ok: 业绩含金量非 low_quality。pe_pct: valuation_zone。days_to_deadline: 披露截止−asof。
-    附 signal_label + flags(新转多/含金量低/低基数),供看板展示。"""
+    深跌/未兑现 ← d['reversal'](price_reversal);业绩拐头 ← pitfalls.net_profit.{latest,base};
+    含金量 ← earnings_quality.low_quality。exit_date=下个财报(预告期优先)法定截止=兑现出场窗口。"""
     cfg = config or get_config()
     pp = (cfg.params.get("stock", {}) or {}).get("positioning", {}) or {}
-    fc = d.get("forecast") or {}
+    rev = d.get("reversal") or {}
+    np_ = (d.get("pitfalls") or {}).get("net_profit") or {}
     eq = d.get("earnings_quality") or {}
-    dv = d.get("davis") or {}
-    vz = d.get("valuation_zone") or {}
+    fc = d.get("forecast") or {}
     disc = (d.get("pitfalls") or {}).get("disclosure") or {}
 
-    new_bull = False
-    if fc.get("valid") and fc.get("latest_sentiment") == "bullish" and not fc.get("a1_deceleration"):
-        leading, label = 1.0, "预告转多"
-        prior = fc.get("prior")
-        if prior and prior.get("sentiment") and prior.get("sentiment") != "bullish":
-            new_bull = True
-    elif (not _nan(dv.get("profit_yoy_latest"))) and dv.get("profit_yoy_latest", 0) > 0:
-        leading, label = 0.5, "业绩正增"
-    else:
-        leading = 0.0
-        label = "预告恶化" if (fc.get("a1_deceleration") or fc.get("a2_turn_bearish")) else "无信号"
-
-    # 催化剂时效:优先用预告期(下个待披露期)的法定截止日,退回最新已报期截止
-    cat_period = (fc.get("latest") or {}).get("period")
-    cat_dl = disclosure_deadline(cat_period) if cat_period else disc.get("deadline")
-    days = _days_diff(cat_dl, asof) if (asof and cat_dl) else float("nan")
+    eturn = earnings_turn_factor(np_.get("latest"), np_.get("base"))
+    leading = d.get("leading") or {}
+    ls = float(leading["score"]) if leading.get("valid") else 0.0
+    outlook = max(eturn, ls)   # earnings_outlook:领先信号能替代/早于报告期业绩拐头(A 类抓底能力)
+    sf = stabilize_factor(rev.get("recent_return"))
     out = positioning_score(
-        leading, not bool(eq.get("low_quality")), vz.get("pe_pct"), days,
-        quality_penalty=float(pp.get("quality_penalty", 0.2)),
-        timing_golden_days=float(pp.get("timing_golden_days", 120.0)))
+        rev.get("drawdown"), outlook, not bool(eq.get("low_quality")), rev.get("recent_return"), sf,
+        drawdown_scale=float(pp.get("drawdown_scale", 0.5)),
+        max_run=float(pp.get("max_run", 0.30)),
+        quality_penalty=float(pp.get("quality_penalty", 0.2)))
+    # 兑现出场窗口:预告期(下个待披露期)法定截止优先,退回最新已报期截止
+    cat_period = (fc.get("latest") or {}).get("period")
+    exit_date = disclosure_deadline(cat_period) if cat_period else disc.get("deadline")
+    latest, base = np_.get("latest"), np_.get("base")
+    dd, rr = rev.get("drawdown"), rev.get("recent_return")
     flags = []
-    if new_bull:
-        flags.append("新转多")
+    if (not _nan(latest)) and float(latest) > 0 and (not _nan(base)) and float(base) <= 0:
+        flags.append("扭亏")
+    if (not _nan(dd)) and abs(float(dd)) >= 0.40:
+        flags.append("深跌")
+    if (not _nan(rr)) and float(rr) >= 0.20:
+        flags.append("已兑现")
     if eq.get("low_quality"):
         flags.append("含金量低")
-    if ((d.get("pitfalls") or {}).get("net_profit") or {}).get("abnormal"):
-        flags.append("低基数")
-    out.update({"signal_label": label, "flags": flags, "days_to_deadline": days,
-                "pe_pct": vz.get("pe_pct"), "deadline": cat_dl,
-                "symbol": d.get("symbol")})
+    if sf <= 0.3:
+        flags.append("飞刀")
+    elif sf >= 1.0:
+        flags.append("企稳")
+    if leading.get("valid") and ls > eturn + 1e-9:
+        flags.append("领先·" + (leading.get("label") or ""))   # 领先信号主导(早于报告期)
+    out.update({"earnings_turn": eturn, "earnings_outlook": outlook, "stabilize_factor": sf,
+                "drawdown": dd, "recent_return": rr, "exit_date": exit_date,
+                "low_quality": bool(eq.get("low_quality")),
+                "leading_label": leading.get("label"), "leading": leading,
+                "flags": flags, "symbol": d.get("symbol")})
     return out
 
 
@@ -687,6 +722,9 @@ def _metric_pitfall(np_annual: pd.Series, pp: dict) -> dict:
                        abnormal_threshold=float(pp.get("abnormal_growth_threshold", 1.5)),
                        low_base_frac=float(pp.get("low_base_frac", 0.5)))
     g["latest_period"] = str(s.index[-1])
+    # 始终带原始 latest/base/prev_base:growth_quality 遇 base≤0(扭亏)会 invalid 并丢这些值,
+    # 但 earnings_turn_factor 仍需原始值判断扭亏(锂矿场景),故这里补回。
+    g["latest"], g["base"], g["prev_base"] = latest, base, prev_base
     return g
 
 
@@ -811,6 +849,8 @@ def collect_stock_alerts(symbols, store, config=None, index_diag=None,
             "forecast": diagnose_forecast_chain(sym, store, cfg),
             "earnings_quality": diagnose_earnings_quality(sym, store, cfg, asof=asof),
             "valuation_zone": ds.get("valuation_zone") or {},   # P1 提前埋伏用(PE 分位)
+            "reversal": ds.get("reversal") or {},               # P1 提前埋伏用(深跌+未兑现)
+            "leading": leading_signal(sym, store, cfg, asof=asof),  # P1 用(A 类领先信号)
         }
     return evaluate_stocks(stocks, index_diag=index_diag, asof=asof)
 
@@ -825,4 +865,5 @@ def diagnose_stock_full(symbol: str, store, config=None,
     base["forecast"] = diagnose_forecast_chain(symbol, store, cfg)
     base["davis"] = diagnose_davis(symbol, store, cfg)
     base["earnings_quality"] = base["davis"].get("earnings_quality") or {}  # 复用 davis 内嵌,零额外读
+    base["leading"] = leading_signal(symbol, store, cfg, asof=asof)   # A 类领先信号(商品价/...)
     return base

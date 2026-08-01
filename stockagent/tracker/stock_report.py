@@ -99,22 +99,74 @@ def _alerts_region(alerts_list: list) -> str:
             + "".join(rows) + "</div>")
 
 
+def _commodity_region(store) -> str:
+    """🧲 商品 A 类面板:5 商品 现价/同比/近60日/判定(向上·背离·向下)+ 板块指引。
+
+    商品价领先周期股财报 1-4 月;判定看同比(趋势)+ 近60日(边际):向上=埋伏方向,背离/向下=避。"""
+    if store is None or not hasattr(store, "get_commodity_series"):
+        return ""
+    varieties = ["碳酸锂", "铜", "螺纹钢", "黄金", "原油"]
+    td = "padding:6px;border-bottom:1px solid var(--border)"
+    th = "padding:8px;border-bottom:2px solid var(--border)"
+    rows, summary = [], {"向上": [], "背离": [], "向下": [], "震荡": []}
+    for v in varieties:
+        s = store.get_commodity_series(v)
+        if s is None or len(s) < 2:
+            continue
+        s = s.astype(float)
+        n252 = min(252, len(s) - 1)
+        n60 = min(60, len(s) - 1)
+        yoy = float(s.iloc[-1]) / float(s.iloc[-1 - n252]) - 1.0
+        rec = float(s.iloc[-1]) / float(s.iloc[-1 - n60]) - 1.0
+        if yoy > 0.10 and rec > -0.05:
+            judge, color = "向上", "#16a34a"
+        elif yoy > 0.10:
+            judge, color = "背离", "#d97706"
+        elif yoy > -0.10:
+            judge, color = "震荡", "#64748b"
+        else:
+            judge, color = "向下", "#dc2626"
+        summary[judge].append(v)
+        rows.append((v, float(s.iloc[-1]), yoy, rec, judge, color))
+    if not rows:
+        return ""
+    body = "".join(
+        f"<tr><td style='{td}'>{v}</td><td style='{td};text-align:center'>{val:.0f}</td>"
+        f"<td style='{td};text-align:center'>{_pct(yoy, True)}</td>"
+        f"<td style='{td};text-align:center'>{_pct(rec, True)}</td>"
+        f"<td style='{td};text-align:center;color:{color};font-weight:600'>{judge}</td></tr>"
+        for (v, val, yoy, rec, judge, color) in rows)
+    head = (f"<tr><th style='{th};text-align:left'>商品(板块)</th><th style='{th}'>现价</th>"
+            f"<th style='{th}'>同比</th><th style='{th}'>近60日</th><th style='{th}'>判定</th></tr>")
+    guide = (f"向上(埋伏方向):{','.join(summary['向上']) or '—'} | "
+             f"背离(避):{','.join(summary['背离']) or '—'} | "
+             f"向下(避):{','.join(summary['向下']) or '—'}")
+    return ('<div class="alerts"><h2>🧲 商品 A 类面板 '
+            '<span class="count">上游价 → 周期股业绩领先信号</span></h2>'
+            f'<p class="muted">商品价领先财报 1-4 月;判定看同比(趋势)+近60日(边际)。{guide}</p>'
+            f'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+            f'<thead>{head}</thead><tbody>{body}</tbody></table></div>')
+
+
 def _ambush_region(diagnoses: dict, names: dict, as_of: str,
                    score_min: float = 30.0) -> str:
-    """🎯 提前埋伏候选排名(只读):领先信号×含金量×估值空间×时效 综合分降序。无候选 → 空串。
+    """🎯 提前埋伏候选排名(只读,基本面领先):深跌×业绩拐头×含金量×未兑现 综合分降序。无候选 → 空串。
 
+    入场=领先基本面(深跌+最新已报期业绩拐头,早于预告/上涨);预告/正报=兑现出场窗口。
     分来自 positioning_from_diag(吃 diagnose_stock_full)。≥60 绿/≥40 黄高亮。不含涨跌预测。"""
     from .stock_diagnose import positioning_from_diag
     rows = []
     for sym, d in diagnoses.items():
-        p = positioning_from_diag(d, asof=as_of)
+        p = positioning_from_diag(d)
         sc = p.get("score")
         if _nan(sc) or sc < score_min:
             continue
         nm = names.get(sym, sym)
-        days, pe = p.get("days_to_deadline"), p.get("pe_pct")
-        days_s = f"{int(days)}天" if not _nan(days) else "—"
-        pe_s = f"{pe:.0%}" if not _nan(pe) else "—"
+        dd, et, rr = p.get("drawdown"), p.get("earnings_turn"), p.get("recent_return")
+        dd_s = f"{abs(dd):.0%}" if not _nan(dd) else "—"
+        et_s = {1.0: "扭亏/回升", 0.5: "持平", 0.0: "仍亏"}.get(et, "—")
+        rr_s = f"{rr:+.0%}" if not _nan(rr) else "—"
+        ex_s = p.get("exit_date") or "—"
         flags = "".join(f" <span style='font-size:10px;color:#b45309'>{f}</span>"
                         for f in (p.get("flags") or []))
         hot = "background:#dcfce7" if sc >= 60 else ("background:#fef9c3" if sc >= 40 else "")
@@ -122,19 +174,21 @@ def _ambush_region(diagnoses: dict, names: dict, as_of: str,
         rows.append((sc,
                      f"<tr><td style='{td}'><b>{html.escape(nm)}</b>"
                      f"<br><span class='muted'>{sym}</span></td>"
-                     f"<td style='{td};text-align:center'>{html.escape(p.get('signal_label', ''))}{flags}</td>"
-                     f"<td style='{td};text-align:center'>{pe_s}</td>"
-                     f"<td style='{td};text-align:center'>{days_s}</td>"
+                     f"<td style='{td};text-align:center'>{dd_s}</td>"
+                     f"<td style='{td};text-align:center'>{et_s}{flags}</td>"
+                     f"<td style='{td};text-align:center'>{rr_s}</td>"
+                     f"<td style='{td};text-align:center'>{ex_s}</td>"
                      f"<td style='{td};text-align:center;font-size:16px;font-weight:bold;{hot}'>{sc:.0f}</td></tr>"))
     if not rows:
         return ""
     rows.sort(key=lambda x: x[0], reverse=True)
     th = "padding:8px;border-bottom:2px solid var(--border)"
-    head = (f"<tr><th style='{th};text-align:left'>股票</th><th style='{th}'>领先信号</th>"
-            f"<th style='{th}'>PE分位</th><th style='{th}'>距披露</th><th style='{th}'>埋伏分</th></tr>")
-    return ('<div class="alerts"><h2>🎯 提前埋伏候选 <span class="count">领先×含金量×估值×时效</span></h2>'
-            '<p class="muted">分=领先信号(预告转多为主)×含金量(非一次性)×估值空间(PE未透支)×时效(距披露窗);'
-            '黄金窗=催化剂在近期未来,兑现即离场。不含涨跌预测,非荐股。</p>'
+    head = (f"<tr><th style='{th};text-align:left'>股票</th><th style='{th}'>深跌</th>"
+            f"<th style='{th}'>业绩拐头</th><th style='{th}'>近60日涨</th>"
+            f"<th style='{th}'>兑现窗口</th><th style='{th}'>埋伏分</th></tr>")
+    return ('<div class="alerts"><h2>🎯 提前埋伏候选 <span class="count">深跌×业绩拐头×含金量×未兑现</span></h2>'
+            '<p class="muted">入场=领先基本面(深跌+最新已报期业绩拐头,4月年报即显,早于预告/上涨);'
+            '预告/正报=兑现出场窗口。近60日已大涨=已兑现→压低。不含涨跌预测,非荐股。</p>'
             f'<table style="width:100%;border-collapse:collapse;font-size:13px"><thead>{head}</thead>'
             f'<tbody>{"".join(r for _, r in rows)}</tbody></table></div>')
 
@@ -511,6 +565,7 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
   <p class="muted">as_of {html.escape(as_of)} · {n} 只个股 · 数据底座 C0/C0.5/C0.6(price/估值/财报/分红/预告)</p>
 </div>
 {_alerts_region(alerts_list)}
+{_commodity_region(store) if store else ''}
 {ambush_section}
 <div class="cards-head"><h2>个股诊断卡片</h2>
 {_LEGEND_HTML}</div>
