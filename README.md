@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Tests](https://img.shields.io/badge/tests-333%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-454%20passing-brightgreen.svg)
 ![Data](https://img.shields.io/badge/data-AkShare-orange.svg)
 ![Status](https://img.shields.io/badge/status-shadow%20only-lightgrey.svg)
 
@@ -38,11 +38,11 @@
 ## ✨ 功能特性
 
 - **ETF 板块轮动决策引擎**：满仓最强 N 个板块 + 大盘不好就避险（货币 ETF）+ 单仓双层止损；6 种可插拔信号；每日早晨生成「说人话」报告并推送微信/飞书/PushPlus。
-- **ETF 行业研究看板**：按价值/成长/周期三类分流算性价比，9 条信号提醒（筹码×估值交叉、趋势突破、股息、业绩预告、大盘开关），交互式 HTML。
+- **ETF 行业研究看板**：按价值/成长/周期三类分流算性价比，十类信号提醒（筹码×估值交叉、趋势突破、股息、业绩预告、大盘开关、周期反转），交互式 HTML。
 - **指数择时层看板**：沪深 300 估值开关（同口径 PE+PB 四档）、大小盘温差、蓝筹 vs 成长、60 日线趋势 / 真穿越突破跌破 / 偏离极值。
-- **个股诊断看板**：三类自动判定 + S07 利润来源归因（业绩/估值/分红）+ S10 戴维斯双击/双杀 + S08 避坑（公告时间差、低基数幻觉、预告链）+ 6 张时序图（点卡片弹模态懒渲染）。
+- **个股诊断看板**：三类自动判定 + S07 利润归因 + S10 戴维斯 + S08 避坑 + **A 类商品价领先信号**（碳酸锂/铜/螺纹钢/黄金/原油 → alignment 商品健康×股价落后度 → 埋伏分）+ **按类型分 tab**（周期含商品面板/时序图/埋伏表子 tab）+ 十一条信号提醒 + 🤖AI 评估（点击实时生成，周期打法含商品驱动逻辑）。
 - **自律度对账**：记录目标持仓 vs 实际执行，量化自己的纪律。
-- **纯函数 + 配置驱动 + 全测试覆盖**（333 个 pytest），回测与实盘共用同一引擎函数。
+- **纯函数 + 配置驱动 + 全测试覆盖**（454 个 pytest），回测与实盘共用同一引擎函数。
 
 ---
 
@@ -107,8 +107,9 @@ python scripts/fix_splits.py                          # 修拆分（运行一次
 
 # 三套看板所需（首次较久，之后增量）
 python scripts/setup_research_dashboard.py            # ETF 研究看板一键（价格+份额+净值+PE+渲染）
-python scripts/backfill_index.py                      # 5 宽基日线 + 沪深300 PE/PB + 全市场 PB
+python scripts/backfill_index.py                      # 6 宽基日线(含上证综指) + 沪深300 PE/PB + 全市场 PB
 python scripts/backfill_stock_data.py                 # 观察池个股 日线/估值/财报/分红/预告
+python scripts/backfill_stock_data.py --comm          # 商品价(碳酸锂/铜/螺纹钢/黄金/原油)
 ```
 
 > 新机器冷启动（全套数据回填）约 1 小时，详见 [`.claude/skills/research-dashboard-setup/SKILL.md`](.claude/skills/research-dashboard-setup/SKILL.md)。
@@ -116,7 +117,7 @@ python scripts/backfill_stock_data.py                 # 观察池个股 日线/�
 ### 验证安装
 
 ```bash
-python -m pytest tests/ -q          # 333 个测试全过即环境 OK
+python -m pytest tests/ -q          # 454 个测试全过即环境 OK
 ```
 
 ---
@@ -145,11 +146,11 @@ rotation:
 
 ### 2. ETF 行业研究看板
 
-按 `etf_pool.yaml` 的 `style` 标签分流算性价比（价值=股息率+PE 分位 / 成长=业绩+PE / 周期=筹码+趋势），9 条信号双通道（看板告警区 + 微信 `--push-alerts`）。
+按 `etf_pool.yaml` 的 `style` 标签分流算性价比（价值=股息率+PE 分位 / 成长=业绩+PE / 周期=筹码+趋势），十类信号双通道（看板告警区 + 微信 `--push-alerts`）。
 
 ```bash
 python scripts/research_report.py             # 生成 data/research_report.html
-python scripts/research_report.py --push-alerts   # 生成 + 推送信号提醒（九条触发时）
+python scripts/research_report.py --push-alerts   # 生成 + 推送信号提醒（十类触发时）
 python scripts/dashboard_data_check.py --fix  # 查/补数据新鲜度
 ```
 
@@ -158,16 +159,16 @@ python scripts/dashboard_data_check.py --fix  # 查/补数据新鲜度
 沪深 300 估值开关（同口径 PE+PB 四档 zone）、大小盘温差、蓝筹 vs 成长仓位倾向、60 日线趋势 / **真穿越突破跌破**（近 5 日真正穿越 60 日线 + 偏离≥2% 才算「有效」，非「在线上」）/ 偏离极值。
 
 ```bash
-python scripts/index_timing_report.py         # 生成 data/index_timing.html（六 section，深浅色可切）
+python scripts/index_timing_report.py         # 生成 data/index_timing.html（八 section，深浅色可切）
 ```
 
 ### 4. 个股诊断看板
 
-个股级三类自动判定 + S07 利润归因（业绩/估值/分红三段）+ S10 戴维斯 + S08 避坑 + 预告链 + 7 条个股提醒；**点卡片 📊 弹模态看 6 张时序图**（价格+偏离 / PE / PB / 业绩同比 / S07 归因 / 分红，Plotly 懒渲染、可扩展多股票）。
+个股级三类自动判定 + S07 利润归因（业绩/估值/分红三段）+ S10 戴维斯 + S08 避坑 + 预告链 + **A 类商品价领先信号**（`commodity_alignment`：商品健康度×股价落后度 → 埋伏分）+ 业绩含金量（扣非背离→一次性利润识别）+ 十一条个股提醒（含 M1 商品背离/M2 商品向下/P1 提前埋伏）；**按类型分 tab**（周期/价值/成长，周期内再分商品周期/其他周期子 tab）；**点卡片 📊 弹模态看时序图**（周期股首图=映射商品价 + 价格+偏离/PE/PB/业绩/S07 归因/分红，Plotly 懒渲染）；**🤖 AI 评估**（点击实时调 LLM 生成五段评估，周期打法含商品驱动逻辑）。
 
 ```bash
 python scripts/stock_report.py                # 生成 data/stock_diagnose.html
-python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1/A2/A3/G1/G2/E3/E4 触发时）
+python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1/A2/A3/G1/G2/E3/E4/Q1/P1/M1/M2 触发时）
 ```
 
 ---
@@ -199,11 +200,7 @@ python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1
 
 ## 📡 数据源
 
-- **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值。
-- ETF 份额：SSE `fund_etf_scale_sse` + SZSE `fund_etf_scale_szse`（双源）。
-- 单位净值：`fund_etf_fund_info_em`（真 NAV，天然正确无需复权）。
-- 行业 PE：`stock_industry_pe_ratio_cninfo`（证监会行业，按日快照）。
-- 沪深 300 PE/PB：legulegu（仅沪深300/上证50/中证500，不支持创业板指/科创50）。
+python -m pytest tests/ -q          # 454 个
 
 数据为**不复权**原始价，需 `fix_splits.py` 修拆分后用于价格序列（真 NAV 不受影响）。
 
@@ -214,6 +211,13 @@ python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1
 ```bash
 python -m pytest tests/ -q          # 333 个
 ```
+
+- **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值。
+- ETF 份额：SSE `fund_etf_scale_sse` + SZSE `fund_etf_scale_szse`（双源）。
+- 单位净值：`fund_etf_fund_info_em`（真 NAV，天然正确无需复权）。
+- 行业 PE：`stock_industry_pe_ratio_cninfo`（证监会行业，按日快照）。
+- 沪深 300 PE/PB：legulegu（仅沪深300/上证50/中证500，不支持创业板指/科创50）。
+- 商品价：`futures_zh_daily_sina`（碳酸锂/铜/螺纹钢/黄金/原油 连续合约日线，A 类领先信号）。
 
 纯函数优先（信号层无副作用，所有计算在最后一根 K 线评估）；每个新功能必须有 pytest 测试；回测和实盘共用同一引擎函数（`score_universe` / `check_exits` / `decide_target`）。
 
@@ -236,7 +240,7 @@ stock-agent/
 ├── scripts/           update_data · run_eod · run_morning_report · run_backtest ·
 │                      sweep_params · walk_forward · backfill_scale · fix_splits ·
 │                      research_report · index_timing_report · stock_report · ...
-├── tests/             单测(333)
+├── tests/             单测(454)
 ├── docs/              PRD · 执行计划 · 课程笔记 · Phase 交接
 ├── DESIGN.md          产品设计(16 决策 + 架构 + 路线图 + 回测结论)
 ├── CLAUDE.md          开发规范(命令 + 架构 + 代码风格 + 数据质量)
