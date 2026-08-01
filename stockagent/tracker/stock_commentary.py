@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from ..report import llm_client
 from . import stock_diagnose as sd
+from .leading import commodity_alignment
 
 # Hard guard: 只禁「纯价格涨跌预测」词。允许定性判断(看好/预计业绩…)和带条件的动作建议。
 # 注意:比 research.commentary._BANNED 窄 —— 那里连"看好/预计/有望"都禁(推送场景)。
@@ -42,10 +43,15 @@ _FRAMEWORK = {
         "两条铁律:① 业绩下滑第一时间清仓,不抱侥幸;② 绝不持有业绩下滑的成长股。只信冰冷数据,不信价值观/企业文化/大V说法。"
     ),
     "cyclic": (
-        "【周期股打法·进攻型】估值反着看:周期顶部利润峰值→PE很低(陷阱);周期底部利润低谷→PE很高(机会)。"
-        "用 PB 历史分位判顶底(周期股 PE 会失真,别用 PE 分位)。"
-        "预判抢跑无法精准抄底逃顶:左侧=PB历史低位提前介入(代价:长时间浮亏);右侧=周期明朗再买(代价:牺牲底部空间)。"
-        "找稳健公司避破产:看经营现金流是否持续<净利润、看偿债计划。看研报只看数据和逻辑,不看结论(卖方立场)。"
+        "【商品周期股打法·进攻型】核心:商品价是业绩的因果领先指标(利润≈(商品价−成本)×量,商品价日频领先财报1-4月)。\n"
+        "  ① 板块判定:看商品价「同比(趋势)+ 近60日(边际)」——同比涨+近期稳=向上(业绩改善,埋伏方向);"
+        "同比涨+近期跌=背离(前瞻恶化,减仓);同比转负=向下(周期确认,卖出)。\n"
+        "  ② alignment(商品价×股价内在联系):商品健康(向上=1.0/背离=0.3/向下=0.0)× 股价落后度(商品强于股价的幅度)。"
+        "alignment 高=商品撑住业绩但股价没反映=错杀=埋伏点;低=商品也跌=双杀(回避)。\n"
+        "  ③ 预告=兑现出场,非入场:市场常「利好出尽」卖出(预告出后股价不涨反跌为常态)。\n"
+        "  ④ 周期铁律:业绩最漂亮(商品见顶)时卖、最难看(商品见底)时买;等财报确认就晚了。\n"
+        "  ⑤ 估值反着看:周期顶部利润峰值→PE很低(陷阱);周期底部利润低谷→PE很高(机会)。用 PB 历史分位判顶底。\n"
+        "  ⑥ 避破产:看经营现金流是否持续<净利润、看偿债计划。"
     ),
 }
 _COMMON = (
@@ -229,6 +235,31 @@ def _facts_for(d: dict, attribution: list, alerts: list, name: str) -> dict:
         },
         "S07利润归因_近6年": attr_rows,
         "已触发信号": alert_rows,
+        "商品A类信号": _commodity_facts(d),
+    }
+
+
+def _commodity_facts(d: dict) -> dict | None:
+    """从 diagnose_stock_full 提取商品 A 类信号事实(供 LLM 解读)。无商品映射 → None。"""
+    leading = d.get("leading") or {}
+    com = (leading.get("components") or {}).get("commodity")
+    if not com or not com.get("valid"):
+        return None
+    al = commodity_alignment(com, (d.get("reversal") or {}).get("recent_return"))
+    judge = ("向上(业绩改善)" if (al.get("health") or 0) >= 1.0
+             else "背离(前瞻恶化)" if (al.get("health") or 0) <= 0.3
+             else "震荡" if (al.get("health") or 0) > 0
+             else "向下(周期确认)")
+    return {
+        "品种": com.get("variety"),
+        "同比": _pct(com.get("yoy"), True),
+        "近60日": _pct(com.get("recent"), True),
+        "判定": judge,
+        "商品健康度": al.get("health"),
+        "股价落后度": _pct(al.get("lag"), True) if not _nan(al.get("lag")) else "NA",
+        "alignment": f'{al.get("score", 0):.2f}',
+        "背离预警": "M1(同比涨但近期回落→减仓/卖出)" if com.get("divergent")
+                  else "M2(同比转负→周期向下,卖出)" if com.get("down") else "无",
     }
 
 
@@ -293,6 +324,14 @@ def _rule_template(d: dict, alerts: list, name: str) -> str:
         pit_items.append(f"净利增速 {_pct(np_.get('yoy'),True)} 疑低基数幻觉,可信值 {_pct(np_.get('trustworthy'),True)}")
     if eq.get("valid") and eq.get("low_quality"):
         pit_items.append(f"业绩含金量低(归母{_pct(eq.get('np_yoy'),True)}/扣非{_pct(eq.get('ded_yoy'),True)},一次性占比{_pct(eq.get('non_recurring_frac'))})→ 一次性利润/纸面富贵")
+    # 商品 A 类信号(周期股)
+    leading = d.get("leading") or {}
+    com = (leading.get("components") or {}).get("commodity")
+    if com and com.get("valid"):
+        al = d.get("alignment") or {}
+        pit_items.append(f"上游{com.get('variety','?')}价 同比{_pct(com.get('yoy'),True)}/近60日{_pct(com.get('recent'),True)}"
+                         f" → alignment={al.get('score',0):.2f}(健康{al.get('health',0):.1f}×落后{_pct(al.get('lag'),True) if not _nan(al.get('lag')) else 'NA'})"
+                         f"{';背离→减仓' if com.get('divergent') else ';转负→卖出' if com.get('down') else ';向上支撑'}")
     pit_items.append(f"披露 {((pit.get('disclosure') or {}).get('latest_period') or '?')[:4]}期 截止 {(pit.get('disclosure') or {}).get('deadline','?')}")
     if alerts:
         pit_items.append("信号 " + "、".join(f"[{a.get('rule')}]{a.get('msg','')[:24]}" for a in alerts[:3]))
