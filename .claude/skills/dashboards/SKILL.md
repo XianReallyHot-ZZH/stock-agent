@@ -49,6 +49,8 @@ PYTHONIOENCODING=utf-8 python scripts/setup_research_dashboard.py
 PYTHONIOENCODING=utf-8 python scripts/backfill_index.py
 # 个股诊断（全量幂等：日线 / baidu PE·PB / sina 财报 / 分红 / eastmoney 预告）
 PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py
+# 商品价（A 类领先信号：碳酸锂/铜/螺纹钢/黄金/原油，futures_zh_daily_sina 日频）
+PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py --comm
 ```
 
 ### 1b. 日常增量（数据已存在 · 几分钟）
@@ -59,6 +61,8 @@ PYTHONIOENCODING=utf-8 python scripts/dashboard_data_check.py --fix
 PYTHONIOENCODING=utf-8 python scripts/backfill_index.py
 # 个股诊断（全量幂等，同冷启动）
 PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py
+# 商品价（同冷启动；周期 tab 商品面板/时序图/alignment/M1-M2 依赖此数据）
+PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py --comm
 ```
 任一步失败不影响其余（各自独立）；所有 backfill 幂等，中断重跑即可。
 
@@ -81,7 +85,7 @@ Win/mac/linux 通用。失败就手动双击 `data/*.html`，或 Win 用 `start 
 - 三个 HTML 路径 + 各自一行关键结论：
   - 研究：参与排名 N/27、性价比 top 3 + 相位
   - 指数：估值 zone + 大小盘温差 + ⑦相对周期位置 + ⑧地量状态 + 是否有有效突破/跌破信号
-  - 个股：观察池触发提醒数 + 任何异常（避坑/戴维斯/预告拐点）
+  - 个股：观察池触发提醒数 + 周期 tab 商品面板（哪些商品向上/背离/向下）+ 埋伏候选（门槛线≥30 上下）+ 任何异常（避坑/戴维斯/预告拐点/M1-M2 商品背离）
 - 本轮数据问题（某 ETF 缺失、某股 PE 稀疏、legulegu 限流需重跑等）
 
 ## 何时用统一 skill vs 单看板 skill
