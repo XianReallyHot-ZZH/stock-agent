@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -146,12 +147,13 @@ def _trend_table_html(diag: dict) -> str:
 
 # ---- ③ 估值开关 stat tile ----
 def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go.Figure:
-    """沪深300 PE-TTM(上行) / PB(下行) 全历史 + 20%/80% 分位线 + 便宜/贵区阴影 + 当前点。
-    分位线/阴影基于全历史;tile 的分位用近 10 年口径(更近期),两者互补。"""
+    """沪深300 PE-TTM(上行) / PB(下行) 全历史 + 20%/50%/80% 分位线 + 便宜/贵区阴影 + 当前点。
+    分位线/阴影统一近 10 年口径(与 zone 标签一致;短历史自动取全部),消除旧版「图用全历史、
+    tile 用10年」的分歧。当前点分位直接用 val 里 diagnose_valuation 算好的 10 年口径值。"""
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.55, 0.45],
                         vertical_spacing=0.12, subplot_titles=("沪深300 PE-TTM", "沪深300 PB"))
-    for row, df, col, color, label in [(1, pe_df, "pe_ttm", _PAL["series_1"], "PE"),
-                                       (2, pb_df, "pb", _PAL["series_2"], "PB")]:
+    for row, df, col, color, label, pkey in [(1, pe_df, "pe_ttm", _PAL["series_1"], "PE", "pe_pct"),
+                                             (2, pb_df, "pb", _PAL["series_2"], "PB", "pb_pct")]:
         if df is None or len(df) == 0 or col not in df.columns:
             continue
         s = pd.to_numeric(df[col], errors="coerce").dropna()
@@ -160,10 +162,14 @@ def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go
         idx = pd.to_datetime(s.index)
         fig.add_trace(go.Scatter(x=idx, y=s.to_numpy(), name=label,
                                  line=dict(color=color, width=1.6)), row=row, col=1)
-        lo = float(s.quantile(0.20))
-        hi = float(s.quantile(0.80))
+        s10 = s.iloc[-252 * 10:]                      # 近 10 年口径(对齐 zone;越界自动取全部)
+        lo = float(s10.quantile(0.20))
+        hi = float(s10.quantile(0.80))
+        mid = float(s10.quantile(0.50))
         cur = float(s.iloc[-1])
-        pct = float((s < cur).sum()) / len(s)
+        pct = val.get(pkey)                           # diagnose_valuation 的 10 年分位,缺失才回退现算
+        if pd.isna(pct):
+            pct = float((s10 < cur).sum()) / len(s10)
         fig.add_hrect(y0=float(s.min()), y1=lo, row=row, col=1,
                       fillcolor=_PAL["good"], opacity=0.08, line_width=0)
         fig.add_hrect(y0=hi, y1=float(s.max()), row=row, col=1,
@@ -172,6 +178,8 @@ def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go
                       annotation_text=f"20% {lo:.1f}", annotation_position="bottom left")
         fig.add_hline(y=hi, row=row, col=1, line=dict(color=_PAL["critical"], width=1, dash="dot"),
                       annotation_text=f"80% {hi:.1f}", annotation_position="top left")
+        fig.add_hline(y=mid, row=row, col=1, line=dict(color=_PAL["muted"], width=1, dash="dot"),
+                      annotation_text=f"50% 中位 {mid:.1f}", annotation_position="top right")
         fig.add_trace(go.Scatter(x=[idx[-1]], y=[cur], mode="markers+text",
                                  marker=dict(size=10, color=_PAL["ink"]),
                                  text=[f"现在 {cur:.1f} ({pct * 100:.0f}%)"],
@@ -186,6 +194,141 @@ def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go
     return fig
 
 
+def _pivot_line(close: pd.Series, pivot_mask, fit_start: str,
+                shift_sigma: float = 0.0) -> pd.Series:
+    """过指定 pivot 点(swing high/low)在【bar 位置空间】做 OLS 直线,返回该直线在 >=fit_start 段的值。
+
+    pivot_mask: 与 close 等长的 bool(Series/ndarray),标记参与拟合的点(如 swing lows)。
+    在 bar 位置(arange)而非 pivot 自身序号上拟合 → 直线可外推到全段连续画出。<2 点 → 空 Series。
+    shift_sigma>0: 整体下移 shift_sigma×残差σ —— OLS 默认「平分」低点簇(线居中),下移后落到
+    低点下方做支撑(支撑线应贴低点之下,而非穿过中间)。"""
+    mask = np.asarray(pivot_mask, dtype=bool)
+    pos = np.arange(len(close), dtype=float)
+    ppos, pys = pos[mask], close.to_numpy(dtype=float)[mask]
+    if len(ppos) < 2:
+        return pd.Series([], dtype=float)
+    slope, intercept = np.polyfit(ppos, pys, 1)
+    shift = (shift_sigma * float(np.std(pys - (slope * ppos + intercept)))
+             if shift_sigma else 0.0)
+    seg = np.asarray(close.index >= fit_start)
+    return pd.Series(slope * pos[seg] + intercept - shift, index=close.index[seg], dtype=float)
+
+
+def _valuation_price_figure(daily_df: pd.DataFrame, years: int = 5,
+                            fit_start: str = "2009-01-01",
+                            support_shift_sigma: float = 1.0) -> go.Figure:
+    """沪深300 收盘价 + 顶/底/中位 直线趋势(支撑/阻力参考,粗略)。
+
+    顶/底 = {years}年滚动 max/min 的 OLS 直线;中位=(顶+底)/2。**自 fit_start(默认 2009)起拟合**:
+    价格是 24 年长牛(800→4600),整段 OLS 会让左端外推到低于历史最低的无意义位(曾现 667<818),
+    且 2009 前(818↔5877 巨震)会严重扭曲拟合;自 2009(金融危机后)起已含完整牛熊周期,直线
+    粗略表达当前通道即可。
+
+    下沿用「连接主要低点」: 取 ±1 年窗口的 swing low(局部最低), 过这些低点拟合直线,再整体下移
+    support_shift_sigma(默认 1σ)个残差标准差 → 落到低点下方做支撑(OLS 默认平分低点簇会偏高)。
+    上沿用滚动最高 OLS 直线。"""
+    close = pd.to_numeric(daily_df["close"], errors="coerce").dropna()
+    fig = go.Figure()
+    if len(close) < 2:
+        return fig
+    idx = pd.to_datetime(close.index)
+    win = 252 * years
+    seg_max = close.rolling(win).max().loc[fit_start:]   # 上沿: 自 fit_start 起的滚动最高
+    upper = ti.linear_fit_line(seg_max)                  # 上沿·阻力(OLS 直线)
+    # 下沿: 连接主要低点(±1年 swing low)的直线,下移 1σ 落到低点下方做支撑
+    hw = 250
+    cmin = close.rolling(2 * hw + 1, center=True).min()
+    low_mask = (close == cmin) & (close.index >= fit_start)
+    lower = _pivot_line(close, low_mask, fit_start, shift_sigma=support_shift_sigma)
+    fig.add_trace(go.Scatter(x=idx, y=close.to_numpy(), name="沪深300 收盘",
+                             line=dict(color=_PAL["series_1"], width=2)))
+    if len(upper):
+        fig.add_trace(go.Scatter(x=pd.to_datetime(upper.index), y=upper.to_numpy(),
+                                 name=f"上沿·阻力·直线({years}年滚动最高·自{fit_start[:4]}年起拟合)",
+                                 line=dict(color=_PAL["pos_extreme"], width=1.5)))
+    if len(lower):
+        fig.add_trace(go.Scatter(x=pd.to_datetime(lower.index), y=lower.to_numpy(),
+                                 name=f"下沿·支撑·直线(连接主要低点·自{fit_start[:4]}年起)",
+                                 line=dict(color=_PAL["neg_extreme"], width=1.5)))
+    if len(upper) and len(lower):
+        mid = ((upper + lower) / 2.0).dropna()
+        if len(mid):
+            fig.add_trace(go.Scatter(x=pd.to_datetime(mid.index), y=mid.to_numpy(),
+                                     name="中位·(顶+底)/2",
+                                     line=dict(color=_PAL["muted"], width=1.5, dash="dash")))
+    # 通道内 20%/80% 分位线 = 下沿 + p×(上沿−下沿): 把通道细分成带(20%=近支撑 / 80%=近阻力)
+    if len(upper) and len(lower):
+        _w = (upper - lower).dropna()
+        if len(_w):
+            p20 = (lower + 0.20 * _w).dropna()
+            p80 = (lower + 0.80 * _w).dropna()
+            fig.add_trace(go.Scatter(x=pd.to_datetime(p20.index), y=p20.to_numpy(),
+                                     name="通道20%分位(近支撑)",
+                                     line=dict(color=_PAL["good"], width=1, dash="dot")))
+            fig.add_trace(go.Scatter(x=pd.to_datetime(p80.index), y=p80.to_numpy(),
+                                     name="通道80%分位(近阻力)",
+                                     line=dict(color=_PAL["critical"], width=1, dash="dot")))
+    cur = float(close.iloc[-1])
+    fig.add_trace(go.Scatter(x=[idx[-1]], y=[cur], mode="markers+text",
+                             marker=dict(size=10, color=_PAL["ink"]),
+                             text=[f"现在 {cur:.1f}"], textposition="top center",
+                             showlegend=False))
+    fig.update_layout(
+        height=420, margin=dict(l=50, r=20, t=30, b=30),
+        paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+        font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=True)
+    fig.update_yaxes(gridcolor=_PAL["grid"])
+    fig.update_xaxes(gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"], type="date",
+                     hoverformat="%Y-%m-%d", rangeslider_visible=True,
+                     rangeselector=dict(buttons=[
+                         dict(count=1, label="1年", step="year", stepmode="backward"),
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(count=5, label="5年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
+    return fig
+
+
+def _discipline_label(zone: str) -> tuple[str, str]:
+    """zone → (纪律标签, 配色)。展示层确定性映射,不发明新判断(框架第二层:下方只买/上方只卖)。"""
+    if "低位" in zone:
+        return "只买不卖", _PAL["good"]
+    if "高位" in zone:
+        return "只卖不买", _PAL["critical"]
+    if "分化" in zone:
+        return "中性·观望", _PAL["warning"]
+    if "中性" in zone:
+        return "中性", _PAL["ink_sec"]
+    return "—", _PAL["muted"]
+
+
+def _position_bar(pct: float, label: str = "") -> str:
+    """0-100% 估值位置条:20%/80% 刻度 + 三段着色(绿/中性/红) + 当前三角标记 + 纪律标签。
+    pct=PE·PB 复合分位。复用 .meter 视觉语言但自绘刻度/标记(看清「当前位置 vs 上下区间」)。"""
+    p = 0.0 if pd.isna(pct) else max(0.0, min(1.0, float(pct)))
+    zc = _PAL["good"] if p < 0.2 else _PAL["critical"] if p > 0.8 else _PAL["ink_sec"]
+    val_txt = f"{p:.0%}" if not pd.isna(pct) else "—"
+    return (
+        f"<div class='tile' style='min-width:240px'>"
+        f"<div class='tile-label'>估值位置(PE·PB 复合)</div>"
+        f"<div class='tile-value' style='color:{zc}'>{val_txt}</div>"
+        f"<div style='position:relative;height:10px;margin-top:10px'>"
+        f"<div style='position:absolute;left:0;width:20%;height:100%;background:{_PAL['good']}22;border-radius:3px 0 0 3px'></div>"
+        f"<div style='position:absolute;left:20%;width:60%;height:100%;background:{_PAL['grid']}'></div>"
+        f"<div style='position:absolute;left:80%;width:20%;height:100%;background:{_PAL['critical']}22;border-radius:0 3px 3px 0'></div>"
+        f"<div style='position:absolute;left:20%;top:-3px;width:1px;height:16px;background:{_PAL['ink_sec']}'></div>"
+        f"<div style='position:absolute;left:80%;top:-3px;width:1px;height:16px;background:{_PAL['ink_sec']}'></div>"
+        f"<div style='position:absolute;left:{p*100:.0f}%;top:-5px;transform:translateX(-50%);"
+        f"width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;"
+        f"border-top:7px solid {zc}'></div>"
+        f"</div>"
+        f"<div class='tile-sub' style='display:flex;justify-content:space-between;margin-top:8px'>"
+        f"<span style='color:{_PAL['good']}'>◀只买</span>"
+        f"<span style='color:{zc};font-weight:600'>{label or '中性'}</span>"
+        f"<span style='color:{_PAL['critical']}'>只卖▶</span></div>"
+        f"</div>")
+
+
 def _meter(label: str, pct: float, sub: str = "") -> str:
     p = 0.0 if pd.isna(pct) else max(0.0, min(1.0, float(pct)))
     zc = _PAL["good"] if p < 0.2 else _PAL["critical"] if p > 0.8 else _PAL["ink_sec"]
@@ -196,7 +339,7 @@ def _meter(label: str, pct: float, sub: str = "") -> str:
             f"<div class='tile-sub'>{sub}</div></div>")
 
 
-def _valuation_tile_html(val: dict, fig_html: str = "") -> str:
+def _valuation_tile_html(val: dict, fig_html: str = "", price_fig_html: str = "") -> str:
     zone = val.get("zone", "—")
     if "低位" in zone:
         zc = _PAL["good"]
@@ -208,9 +351,14 @@ def _valuation_tile_html(val: dict, fig_html: str = "") -> str:
         zc = _PAL["ink_sec"]
     pe_sub = f"沪深300 PE-TTM {val['pe_ttm']:.1f}" if not pd.isna(val.get("pe_ttm")) else "—"
     pb_sub = f"沪深300 PB {val['pb']:.2f}" if not pd.isna(val.get("pb")) else "—"
+    # 复合估值位置 = PE/PB 分位均值(两者皆缺 → NaN);纪律标签由 zone 确定
+    _pp = [v for v in (val.get("pe_pct"), val.get("pb_pct")) if not pd.isna(v)]
+    pos_pct = sum(_pp) / len(_pp) if _pp else float("nan")
+    disc_label, disc_color = _discipline_label(zone)
     tiles = (
         f"{_meter('沪深300 PE 分位(同口径)', val['pe_pct'], pe_sub)}"
-        f"{_meter('沪深300 PB 分位(同口径)', val['pb_pct'], pb_sub)}")
+        f"{_meter('沪深300 PB 分位(同口径)', val['pb_pct'], pb_sub)}"
+        f"{_position_bar(pos_pct, disc_label)}")
     pe_txt = f"{val['pe_pct']:.0%}" if not pd.isna(val.get("pe_pct")) else "—"
     pb_txt = f"{val['pb_pct']:.0%}" if not pd.isna(val.get("pb_pct")) else "—"
     if "分化" in zone:
@@ -223,13 +371,18 @@ def _valuation_tile_html(val: dict, fig_html: str = "") -> str:
         hint = f"沪深300 PE+PB 都在历史中间区(PE {pe_txt} / PB {pb_txt})"
     out = (f"<div class='tiles-row'>{tiles}</div>"
            f"<div style='margin-top:10px'>{_chip('估值开关: ' + zone, zc)} "
+           f"{_chip('纪律: ' + disc_label, disc_color)} "
            f"<span class='hint'>{hint}</span></div>"
            f"<div class='hint' style='margin-top:6px'>指标:PE(TTM)=市值÷净利润 · PB=市值÷净资产 · "
            f"ROE=净利润÷净资产 · 故 PE=PB÷ROE</div>")
     if fig_html:
-        out += (f"<div class='hint' style='margin:10px 0 4px'>实线=全历史;虚线=全历史 20%/80% 分位"
-                f"(便宜区淡绿 / 贵区淡红);点=当前(含全历史分位)。可拖底部窗口看时段。</div>"
+        out += (f"<div class='hint' style='margin:10px 0 4px'>实线=全历史序列;虚线=近10年 20%/50%/80% 分位"
+                f"(便宜区淡绿 / 贵区淡红 / 中位灰);点=当前(含近10年分位)。可拖底部窗口看时段。</div>"
                 f"<div>{fig_html}</div>")
+    if price_fig_html:
+        out += (f"<div class='hint' style='margin:10px 0 4px'>沪深300 收盘价 + 顶/底/中位趋势线(阻力/支撑/中位,自2009起拟合)"
+                f" + 通道内20%/80%分位(下沿+0.2/0.8×通道宽,细分支撑/阻力带)。</div>"
+                f"<div>{price_fig_html}</div>")
     return out
 
 
@@ -571,6 +724,15 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                     full_html=False, include_plotlyjs=True)
         except Exception:  # noqa: BLE001
             val_fig_html = ""
+    # ③ 沪深300 价格趋势线图(顶/底/中位;plotly.js 由 ③ PE/PB 图承载,缺则由本图承载)
+    price_fig_html = ""
+    try:
+        _d300 = store.get_index_daily_series("000300")
+        if len(_d300) >= 252:
+            price_fig_html = _valuation_price_figure(_d300).to_html(
+                full_html=False, include_plotlyjs=(val_fig_html == ""))
+    except Exception:  # noqa: BLE001
+        price_fig_html = ""
     # ⑦ 相对周期律: 点差图(plotly.js 已由 ③ 承载 → ⑦ include=False;③ 缺则 ⑦ 承载)
     rc = diag.get("relative_cycle") or {}
     rc_fig_html = ""
@@ -581,7 +743,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                 store.get_index_daily_series(rc["growth"])["close"])
             if len(_sp):
                 rc_fig_html = _relative_cycle_figure(rc, _sp).to_html(
-                    full_html=False, include_plotlyjs=(val_fig_html == ""))
+                    full_html=False, include_plotlyjs=(val_fig_html == "" and price_fig_html == ""))
         except Exception:  # noqa: BLE001
             rc_fig_html = ""
     # ⑧ 成交量地量监测 figure (plotly.js 已由 ⑦ 或 ① 首图加载 → include_plotlyjs=False)
@@ -597,7 +759,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                     full_html=False, include_plotlyjs=False)
         except Exception:  # noqa: BLE001
             tv_fig_html = ""
-    figs_html, first = [], (val_fig_html == "" and rc_fig_html == "")   # ③/⑦ 已加载 plotly.js → ① 首图不再重复
+    figs_html, first = [], (val_fig_html == "" and price_fig_html == "" and rc_fig_html == "")   # ③/⑦ 已加载 plotly.js → ① 首图不再重复
     for sym, nm in dz.BROAD_INDICES:
         df = store.get_index_daily_series(sym)
         if len(df) < period:
@@ -614,7 +776,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<button id='theme-btn' onclick='toggleTheme()'>🌙</button></div>"
         f"<div class='meta'>数据截至 {last_date} · {period}日线 · 生成于 {datetime.now():%Y-%m-%d %H:%M}</div>"
         f"{_cycle_stage_chip(diag)}"
-        f"<h2>③ 估值开关</h2><section>{_valuation_tile_html(diag['valuation'], val_fig_html)}</section>"
+        f"<h2>③ 估值开关</h2><section>{_valuation_tile_html(diag['valuation'], val_fig_html, price_fig_html)}</section>"
         f"<h2>⑥ 市场温度·大小盘温差</h2><section>{_market_temp_html(diag['market_temp'])}</section>"
         f"<h2>⑦ 相对周期律·沪深成长温差</h2><section>{_relative_cycle_html(rc, rc_fig_html)}</section>"
         f"<h2>⑧ 成交量地量监测</h2><section>{_turnover_html(tv, tv_fig_html)}</section>"
