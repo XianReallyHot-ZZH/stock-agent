@@ -97,8 +97,8 @@ def main():
         if a_syms:
             flags.append("提醒:" + ",".join(a["rule"] for a in a_syms))
         flag_s = f"  [{' | '.join(flags)}]" if flags else ""
-        print(f"   {names[sym]:6} {sym}  {c.get('primary','?'):<7}{sec:<10} "
-              f"PE分位{_fmt(vz.get('pe_pct'))}  zone={vz.get('zone','—')}{flag_s}")
+        print(f"   {names[sym]:6} {sym}  {(c.get('primary') or '?'):<7}{sec:<10} "
+              f"PE分位{_fmt(vz.get('pe_pct'))}  zone={vz.get('zone') or '—'}{flag_s}")
     print(f"\n   open: file:///{out.resolve()}")
 
 

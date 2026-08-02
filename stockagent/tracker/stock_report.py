@@ -273,7 +273,9 @@ def _card(sym: str, d: dict, name: str, with_charts: bool = False,
     else:
         pit_txt = f'净利 {_pct(np_.get("yoy"),True)}'
 
-    disc_txt = (f'{disc.get("latest_period","?")[:4]}报 截止{disc.get("deadline","?")}'
+    _lp = disc.get("latest_period") or "?"
+    _dl = disc.get("deadline") or "?"
+    disc_txt = (f'{_lp[:4]}报 截止{_dl}'
                 f' <span class="muted">({"已披露" if disc.get("disclosed_by_asof") else "未披露"})</span>')
 
     # 业绩含金量(一次性利润/纸面富贵):归母 vs 扣非 背离
