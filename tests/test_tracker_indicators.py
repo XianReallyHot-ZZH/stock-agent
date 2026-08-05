@@ -206,6 +206,42 @@ def test_linear_fit_line_short_empty():
     assert len(ti.linear_fit_line(_line([1.0] * 10))) == 0   # <20 点 → 空
 
 
+def test_pivot_line_fits_peaks_and_short_empty():
+    # 等高峰顶(100,每 10 bar 一个,中间 60),间隔 > swing 窗口 → 过峰 pivot 线 ≈ 水平 100
+    vals = []
+    for _ in range(8):
+        vals += [100.0] + [60.0] * 9
+    s = _line(vals)
+    hi = (s == s.rolling(11, center=True).max())
+    line = ti.pivot_line(s, hi, fit_start="2020-01-01", shift_sigma=0.0)
+    assert len(line) >= 2
+    assert abs(float(line.mean()) - 100.0) < 1e-6
+    # <2 pivot 点 → 空
+    assert len(ti.pivot_line(s, [False] * len(s), "2020-01-01")) == 0
+
+
+def test_cycle_trend_channel_structure():
+    # 缓降 base + 每 25 bar 一个 +150 尖峰(真 swing high);末值放通道中部 → 通道有效、上>下、末值在内
+    n = 600                                  # >= 252*2(cycle_trend_channel 的有效门槛)
+    base = [2000.0 - i * 2 for i in range(n)]
+    vals = list(base)
+    for k in range(2, n // 25):              # 内部尖峰,间隔 > swing 窗口
+        vals[k * 25] = base[k * 25] + 150.0
+    sp = _line(vals)
+    sp.iloc[-1] = base[-1] + 75.0            # 末值居中(下沿≈base,上沿≈base+150)
+    ch = ti.cycle_trend_channel(sp, fit_start="2020-01-01", swing_hw=10, envelope=60)
+    assert ch["valid"]
+    assert ch["upper_now"] > ch["lower_now"]
+    assert abs(ch["mid_now"] - (ch["upper_now"] + ch["lower_now"]) / 2.0) < 1e-9   # 中线=(上+下)/2
+    assert len(ch["upper"]) > 0 and len(ch["lower"]) > 0
+    assert np.isfinite(ch["chan_pos"])
+    assert ch["lower_now"] - 80 <= sp.iloc[-1] <= ch["upper_now"] + 80
+
+
+def test_cycle_trend_channel_short_invalid():
+    assert ti.cycle_trend_channel(_line([1.0] * 100))["valid"] is False   # <252*2
+
+
 def test_relative_momentum_window():
     sp = _line([float(i) for i in range(30)])           # slope 1/bar
     m = ti.relative_momentum(sp, short_window=5)

@@ -154,6 +154,8 @@ def diagnose_relative_cycle(store, growth: str = "399006", benchmark: str = "000
            "min_spread": np.nan, "max_spread": np.nan, "envelope_mid": np.nan,
            "spread_now": np.nan, "env_pos": np.nan, "zone": "—",
            "rank_pct": np.nan, "drift_pts_per_yr": np.nan,
+           "chan_lo": np.nan, "chan_hi": np.nan, "chan_mid": np.nan,
+           "chan_pos": np.nan, "chan_zone": "—",
            "mom_now": np.nan, "run_dir": None, "run": 0,
            "envelope_years": envelope_years, "valid": False}
     if len(bm) < 252 * 2 or len(gr) < 252 * 2:
@@ -165,11 +167,14 @@ def diagnose_relative_cycle(store, growth: str = "399006", benchmark: str = "000
                            drift_lookback=252 * drift_years)
     mom = ti.relative_momentum(spread, short_momentum_window)
     run = ti.consecutive_run(spread)
+    ch = ti.cycle_trend_channel(spread, envelope=252 * envelope_years)   # 图上趋势通道(与看板同源)
     out.update({
         "min_spread": ce["min_spread"], "max_spread": ce["max_spread"],
         "envelope_mid": ce["envelope_mid"], "spread_now": ce["spread_now"],
         "env_pos": ce["env_pos"], "zone": ti.classify_cycle(ce["env_pos"]),
         "rank_pct": ce["rank_pct"], "drift_pts_per_yr": ce["drift_pts_per_yr"],
+        "chan_lo": ch["lower_now"], "chan_hi": ch["upper_now"], "chan_mid": ch["mid_now"],
+        "chan_pos": ch["chan_pos"], "chan_zone": ti.classify_cycle(ch["chan_pos"]),
         "mom_now": mom["mom_now"], "run_dir": run["direction"], "run": run["run"],
         "valid": ce["valid"],
     })

@@ -257,6 +257,25 @@ def relative_spread_series(benchmark_close: pd.Series,
     return (df["benchmark"] - df["growth"]).rename("spread")
 
 
+def pivot_line(close: pd.Series, pivot_mask, fit_start: str,
+               shift_sigma: float = 0.0) -> pd.Series:
+    """过指定 pivot 点(swing high/low)在【bar 位置空间】做 OLS 直线,返回该直线在 >=fit_start 段的值。
+
+    pivot_mask: 与 close 等长的 bool(Series/ndarray),标记参与拟合的点(如 swing highs/lows)。
+    在 bar 位置(arange)而非 pivot 自身序号上拟合 → 直线可外推到全段连续画出。<2 点 → 空 Series。
+    shift_sigma>0: 整体下移 shift_sigma×残差σ(OLS 默认「平分」点簇居中,下移后落到低点下方做支撑)。"""
+    mask = np.asarray(pivot_mask, dtype=bool)
+    pos = np.arange(len(close), dtype=float)
+    ppos, pys = pos[mask], close.to_numpy(dtype=float)[mask]
+    if len(ppos) < 2:
+        return pd.Series([], dtype=float)
+    slope, intercept = np.polyfit(ppos, pys, 1)
+    shift = (shift_sigma * float(np.std(pys - (slope * ppos + intercept)))
+             if shift_sigma else 0.0)
+    seg = np.asarray(close.index >= fit_start)
+    return pd.Series(slope * pos[seg] + intercept - shift, index=close.index[seg], dtype=float)
+
+
 def linear_fit_line(s: pd.Series, lookback: int | None = None) -> pd.Series:
     """OLS 线性拟合线(deg=1)——把折线(如滚动包络上下沿)简化为一条直线看趋势。
     lookback>0 时只在末尾 lookback bar 上拟合。返回拟合线 Series(对齐拟合样本);<20 点 → 空 Series。"""
@@ -311,6 +330,37 @@ def classify_cycle(pos: float, low: float = CYCLE_PCT_LOW,
     if pos >= high:
         return "上沿极点"
     return "中枢·无edge"
+
+
+def cycle_trend_channel(spread: pd.Series, fit_start: str = "2015-01-01",
+                        swing_hw: int = 250, envelope: int = 252 * 5) -> dict:
+    """⑦ 趋势通道 = 看板图上画的上/下沿趋势线(headline 显示与画图共用本函数 → tile 数字与图一致)。
+
+    上沿 = 连主要高点(±swing_hw swing high)的 pivot 直线(贴峰顶,自 fit_start 长窗口);
+    下沿 = rolling-envelope min 的长窗口 OLS(地板趋势)。
+    返回 upper/lower(完整 Series)、upper_now/lower_now(末值)、
+    chan_pos=(spread_now−lower_now)/(upper_now−lower_now)(当前在通道内的位置,峰值时可能略 >1)。
+
+    与 cycle_extremes 的 env_pos 区别:env_pos=作者口径「5 年精确包络」位置(供 E5 提醒,raw min/max);
+    chan_pos=图上「趋势通道」位置(供 headline 显示,贴可见上下沿)。两者口径不同,并存。"""
+    s = pd.Series(spread, dtype=float).dropna()
+    empty = {"upper": pd.Series([], dtype=float), "lower": pd.Series([], dtype=float),
+             "upper_now": np.nan, "lower_now": np.nan, "mid_now": np.nan,
+             "chan_pos": np.nan, "valid": False}
+    if len(s) < 252 * 2:
+        return empty
+    cmax = s.rolling(2 * swing_hw + 1, center=True).max()
+    hi_mask = (s == cmax) & (s.index >= fit_start)
+    upper = pivot_line(s, hi_mask, fit_start, shift_sigma=0.0)
+    lower = linear_fit_line(s.rolling(envelope).min())
+    if not len(upper) or not len(lower):
+        return {**empty, "upper": upper, "lower": lower}
+    upper_now, lower_now, cur = float(upper.iloc[-1]), float(lower.iloc[-1]), float(s.iloc[-1])
+    span = upper_now - lower_now
+    chan_pos = (cur - lower_now) / span if span > 0 else np.nan
+    return {"upper": upper, "lower": lower, "upper_now": upper_now, "lower_now": lower_now,
+            "mid_now": (upper_now + lower_now) / 2.0,
+            "chan_pos": float(chan_pos) if chan_pos == chan_pos else np.nan, "valid": True}
 
 
 # ---- ⑦·B 风格轮动持续性(折进同一节)----

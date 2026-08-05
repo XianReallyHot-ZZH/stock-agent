@@ -196,22 +196,9 @@ def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go
 
 def _pivot_line(close: pd.Series, pivot_mask, fit_start: str,
                 shift_sigma: float = 0.0) -> pd.Series:
-    """过指定 pivot 点(swing high/low)在【bar 位置空间】做 OLS 直线,返回该直线在 >=fit_start 段的值。
-
-    pivot_mask: 与 close 等长的 bool(Series/ndarray),标记参与拟合的点(如 swing lows)。
-    在 bar 位置(arange)而非 pivot 自身序号上拟合 → 直线可外推到全段连续画出。<2 点 → 空 Series。
-    shift_sigma>0: 整体下移 shift_sigma×残差σ —— OLS 默认「平分」低点簇(线居中),下移后落到
-    低点下方做支撑(支撑线应贴低点之下,而非穿过中间)。"""
-    mask = np.asarray(pivot_mask, dtype=bool)
-    pos = np.arange(len(close), dtype=float)
-    ppos, pys = pos[mask], close.to_numpy(dtype=float)[mask]
-    if len(ppos) < 2:
-        return pd.Series([], dtype=float)
-    slope, intercept = np.polyfit(ppos, pys, 1)
-    shift = (shift_sigma * float(np.std(pys - (slope * ppos + intercept)))
-             if shift_sigma else 0.0)
-    seg = np.asarray(close.index >= fit_start)
-    return pd.Series(slope * pos[seg] + intercept - shift, index=close.index[seg], dtype=float)
+    """Thin alias for the shared ti.pivot_line (kept so ③ _valuation_price_figure's call sites
+    read naturally). Logic lives in stockagent.tracker.indicators.pivot_line."""
+    return ti.pivot_line(close, pivot_mask, fit_start, shift_sigma=shift_sigma)
 
 
 def _valuation_price_figure(daily_df: pd.DataFrame, years: int = 5,
@@ -448,25 +435,27 @@ def _signals_html(diag: dict) -> str:
 
 # ---- ⑦ 相对周期律(创业板 vs 上证 点差:包络位置 → 极点/中枢)----
 def _relative_cycle_figure(rc: dict, spread: pd.Series) -> go.Figure:
-    """点差(上证−创业板,点)长历史 + 振幅通道线性趋势线(上/下/中) + 当前点。
+    """点差(上证−创业板,点)长历史 + 振幅通道趋势线(上/下/中) + 当前点。
 
-    上/下沿 = 5年滚动 max/min 的 OLS 线性拟合(直线,看漂移方向,精度让位于趋势);
-    中线 = (上沿+下沿)/2。两直线收敛/发散 = 振幅带收窄/展宽。当前精确包络见 tile。"""
+    上沿 = **连接主要高点**(±1年 swing high)的直线,自 2015 起的长窗口。OLS-on-rolling-max 会被
+    早期高位平台(2015-2019)锚定、近年浮在天花板之上(偏高); 改过峰顶 pivot 拟合 → 贴着顶走。
+    下沿 = rolling-min 的长窗口 OLS(地板趋势): 点差的 swing-low 过少且非单调(2016/2018/2021 =
+    629/1176/-86),过 pivot 拟合会被 2018 假低点拽歪、过度外推到历史最低之下 → 用稳定的地板趋势线。
+    中线 = (上沿+下沿)/2。当前精确 5 年包络见 tile。"""
     idx = pd.to_datetime(spread.index)
-    win = 252 * rc.get("envelope_years", 5)
-    yrs = rc.get("envelope_years", 5)
-    upper = ti.linear_fit_line(spread.rolling(win).max())    # 上沿趋势(直线)
-    lower = ti.linear_fit_line(spread.rolling(win).min())    # 下沿趋势(直线)
+    ch = ti.cycle_trend_channel(spread, fit_start="2015-01-01", swing_hw=250,
+                                envelope=252 * rc.get("envelope_years", 5))
+    upper, lower = ch["upper"], ch["lower"]   # 与 headline tile 同源(ti.cycle_trend_channel) → 图端点 == tile 数字
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=idx, y=spread, name="点差(上证−创业板)",
                              line=dict(color=_PAL["series_1"], width=2)))
     if len(upper):
         fig.add_trace(go.Scatter(x=pd.to_datetime(upper.index), y=upper.to_numpy(),
-                                 name=f"上沿·趋势线({yrs}年滚动最高·线性)",
+                                 name=f"上沿·趋势线(连主要高点·自2015)",
                                  line=dict(color=_PAL["pos_extreme"], width=1.5)))
     if len(lower):
         fig.add_trace(go.Scatter(x=pd.to_datetime(lower.index), y=lower.to_numpy(),
-                                 name=f"下沿·趋势线({yrs}年滚动最低·线性)",
+                                 name=f"下沿·趋势线(地板·长窗口OLS·自2015)",
                                  line=dict(color=_PAL["neg_extreme"], width=1.5)))
     if len(upper) and len(lower):
         mid = ((upper + lower) / 2.0).dropna()
@@ -500,16 +489,17 @@ def _relative_cycle_figure(rc: dict, spread: pd.Series) -> go.Figure:
 def _relative_cycle_html(rc: dict, fig_html: str = "") -> str:
     if not rc.get("valid"):
         return "<p class='hint'>相对周期律数据不足(需 上证综指+创业板指 各 ≥2 年)</p>"
-    zone = rc["zone"]
+    zone = rc.get("chan_zone") or rc["zone"]   # 显示用趋势通道zone(与chan_pos一致);rc["zone"]是envelope口径(留给E5提醒)
     zc = (_PAL["neg_extreme"] if zone == "下沿极点"
           else _PAL["pos_extreme"] if zone == "上沿极点" else _PAL["ink_sec"])
     now = rc["spread_now"]
     tiles = (
         f"<div class='tile'><div class='tile-label'>当前点差(上证−创业板)</div>"
-        f"<div class='tile-value' style='color:{_PAL['ink']}'>{now:+.0f}</div>"
-        f"<div class='tile-sub'>5年包络 {rc['min_spread']:+.0f} ~ {rc['max_spread']:+.0f}</div></div>"
-        f"{_meter('周期位置(包络·headline)', rc['env_pos'], '作者口径 · ' + zone)}"
-        f"{_meter('历史稀有度(5yr秩分位)', rc['rank_pct'], 'house口径 · 分布偏态时会与包络位置背离')}"
+        f"<div class='tile-value' style='color:{_PAL['ink']}'>{now:+.0f}"
+        f" <span style='font-size:.72em;color:{_PAL['ink_sec']}'>/ 中线 {rc['chan_mid']:+.0f}</span></div>"
+        f"<div class='tile-sub'>趋势通道 {rc['chan_lo']:+.0f} ~ {rc['chan_hi']:+.0f} (图上下沿)</div></div>"
+        f"{_meter('周期位置(趋势通道)', rc['chan_pos'], '图上下沿通道 · ' + zone)}"
+        f"{_meter('历史稀有度(5yr秩分位)', rc['rank_pct'], 'house口径 · 分布偏态时会与通道位置背离')}"
         f"<div class='tile'><div class='tile-label'>结构漂移</div>"
         f"<div class='tile-value' style='color:{_PAL['ink_sec']}'>{rc['drift_pts_per_yr']:+.0f} 点/年</div>"
         f"<div class='tile-sub'>10yr OLS · &lt;0 = 创业板结构性跑赢</div></div>")
@@ -521,17 +511,19 @@ def _relative_cycle_html(rc: dict, fig_html: str = "") -> str:
         f"<div class='tile'><div class='tile-label'>连续相对强弱</div>"
         f"<div class='tile-value'>{run_txt}</div>"
         f"<div class='tile-sub'>spread 同向连续天数</div></div>")
-    hint = ("相对周期律:点差 = 上证综指 − 创业板指(点)。<b>headline=当前点差在5年包络[下沿,上沿]内的位置</b>"
-            "(作者口径:极点才有回归方向,中枢无edge = 仅相对回归风险解除,非绝对涨跌)。"
-            "历史稀有度=同窗口秩分位(house口径:分布偏态时与包络位置背离,两者并存看)。"
-            "结构漂移 &lt;0 = 创业板长期跑赢(约 −40~−50 点/年)。上沿→回归利创业板,下沿→回归利上证。")
+    hint = ("相对周期律:点差 = 上证综指 − 创业板指(点)。<b>headline=当前点差在图上趋势通道[下沿,上沿]内的位置</b>"
+            "(贴可见上下沿趋势线;极点才有回归方向,中枢无edge = 仅相对回归风险解除,非绝对涨跌)。"
+            "历史稀有度=同窗口 raw spread 秩分位(house口径,分布偏态时会与通道位置背离,两者并存看)。"
+            "结构漂移 &lt;0 = 创业板长期跑赢(约 −40~−50 点/年)。上沿→回归利创业板,下沿→回归利上证。"
+            "(E5 提醒仍按作者口径 5 年精确包络 env_pos 触发,与本显示的趋势通道位置分立。)")
     out = (f"<div class='tiles-row'>{tiles}</div>"
            f"<div style='margin-top:10px'>{_chip('周期: ' + zone, zc)}</div>"
            f"<div class='tiles-row' style='margin-top:12px'>{b_tiles}</div>"
            f"<div class='hint' style='margin-top:8px'>{hint}</div>")
     if fig_html:
-        out += (f"<div class='hint' style='margin-top:10px'>通道线 = 5年滚动上下沿的线性趋势拟合"
-                f"(看漂移方向 & 振幅收窄/展宽,非精确边缘);当前精确包络见上方 tile。</div>"
+        out += (f"<div class='hint' style='margin-top:10px'>通道线(自 2015 长窗口,看整体上下沿趋势,非精确边缘): "
+                f"上沿 = 连接主要高点的直线(贴峰顶); 下沿 = 地板长窗口趋势线;"
+                f"上方 tile 的「趋势通道/周期位置」即用这两条线的当前端点算 → 与图一致。</div>"
                 f"<div style='margin-top:4px'>{fig_html}</div>")
     return out
 
