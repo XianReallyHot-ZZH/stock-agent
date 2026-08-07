@@ -302,3 +302,31 @@ def test_turnover_new_low_years():
     # 单调递减: 每个 bar 都是新低 → 无更低 → lookback = i/252
     dec = ti.turnover_new_low_years(_line([100.0 - i for i in range(5)]))
     assert abs(float(dec.iloc[3]) - 3 / 252) < 1e-6
+
+
+def test_deviation_extreme_events_lows_highs_ranks():
+    # flat 100 (MA≈100) + 两根孤立下插(88/92, 史上最负两根) + 一根上插(112, 史上最正)
+    # → 2 个 low + ≥1 个 high; 全历史按深度排名: 88=第1低、92=第2低(与发生先后无关)
+    s = _line([100.0] * 60 + [100.0] * 15 + [88.0] + [100.0] * 15 + [92.0] + [100.0] * 16 + [112.0])
+    evs = ti.deviation_extreme_events(s, 60)
+    lows = sorted([e for e in evs if e["side"] == "low"], key=lambda e: e["dev"])
+    highs = sorted([e for e in evs if e["side"] == "high"], key=lambda e: -e["dev"])
+    assert len(lows) == 2
+    assert lows[0]["rank"] == 1 and lows[1]["rank"] == 2          # 更深=第1低, 较浅=第2低
+    assert lows[0]["dev"] < lows[1]["dev"] < 0                    # 均为负且有序
+    assert len(highs) >= 1 and highs[0]["rank"] == 1             # 最正=第1高
+    assert highs[0]["dev"] > 0
+    assert {e["rank"] for e in lows} == {1, 2}                   # rank 唯一不重复
+
+
+def test_deviation_extreme_events_merge_gap():
+    # 一个谷被 1 根反弹(100)切成两段下插(86/84), 均落在 ≤5% 区 → merge_gap 决定是否合并
+    s = _line([100.0] * 60 + [100.0] * 15 + [86.0] + [100.0] + [84.0] + [100.0] * 21 + [112.0])
+    merged = ti.deviation_extreme_events(s, 60, merge_gap=5)
+    split = ti.deviation_extreme_events(s, 60, merge_gap=0)
+    assert len([e for e in merged if e["side"] == "low"]) == 1    # gap=1 ≤5 → 合并成 1 个事件
+    assert len([e for e in split if e["side"] == "low"]) == 2     # gap=0 不合并 → 2 个
+
+
+def test_deviation_extreme_events_short_empty():
+    assert ti.deviation_extreme_events(_line([100.0] * 30), 60) == []   # < period → MA 全 NaN → []

@@ -120,6 +120,81 @@ def deviation_pct_expanding(close: pd.Series, period: int = MA_PERIOD,
     return pd.Series(out, index=dev.index)
 
 
+def _merged_runs(mask: np.ndarray, merge_gap: int) -> list[tuple[int, int]]:
+    """Maximal True runs in a bool mask; merge runs separated by ≤ merge_gap False bars.
+
+    Returns (start, end_exclusive) index pairs. Used to treat a wiggly extreme zone
+    (brief pops back across the threshold) as a single event — one trough, one peak."""
+    runs: list[list[int]] = []
+    i, n = 0, len(mask)
+    while i < n:
+        if mask[i]:
+            j = i
+            while j < n and mask[j]:
+                j += 1
+            runs.append([i, j])
+            i = j
+        else:
+            i += 1
+    if merge_gap <= 0 or len(runs) <= 1:
+        return [(int(s), int(e)) for s, e in runs]
+    merged = [runs[0]]
+    for s, e in runs[1:]:
+        if s - merged[-1][1] <= merge_gap:
+            merged[-1][1] = e
+        else:
+            merged.append([s, e])
+    return [(int(s), int(e)) for s, e in merged]
+
+
+def deviation_extreme_events(close: pd.Series, period: int = MA_PERIOD,
+                             lo_pct: float = 0.05, hi_pct: float = 0.95,
+                             merge_gap: int = 5, top_n: int = 8) -> list[dict]:
+    """偏离度历史极值事件(全历史口径,纯观察用)。
+
+    在全历史分位 ≤lo_pct(超卖) / ≥hi_pct(超买) 的连续区间(相邻抖动段按 merge_gap 合并)
+    内取最深处一点(谷 / 峰),标注其全历史「第几」(同侧事件按深度排序,
+    1 = 史上最深谷 / 最高峰,唯一不重复)。
+
+    返回 [{date, dev, side, rank}, ...] 按日期升序; side ∈ {'low','high'}。
+    全历史口径: 每个点用整段历史当尺子(不防前视; 纯观察不交易, 无所谓)。
+    短序列 / 全 NaN → []。
+    """
+    dev = deviation_series(close, period)
+    if dev.dropna().empty:
+        return []
+    vals = dev.to_numpy()
+    idx = dev.index
+    pct_full = dev.rank(pct=True)                       # 0=最负/超卖, 1=最正/超买; NaN→NaN
+    mask_lo = (pct_full <= lo_pct).fillna(False).to_numpy()
+    mask_hi = (pct_full >= hi_pct).fillna(False).to_numpy()
+
+    events: list[dict] = []
+    for side, mask, pick in (("low", mask_lo, np.nanargmin),
+                             ("high", mask_hi, np.nanargmax)):
+        if not mask.any():
+            continue
+        for start, end in _merged_runs(mask, merge_gap):
+            seg = vals[start:end]
+            if seg.size == 0 or np.all(np.isnan(seg)):
+                continue
+            i = start + int(pick(seg))                  # 最深处一点在全序列中的位置
+            d = vals[i]
+            if np.isnan(d):
+                continue
+            events.append({"date": idx[i], "dev": float(d), "side": side})
+
+    # 全历史排名: 同侧事件按深度排序, 1 = 史上最极端(唯一不重复); 各取前 top_n
+    for side, reverse in (("low", False), ("high", True)):
+        side_evs = [e for e in events if e["side"] == side]
+        side_evs.sort(key=lambda e: e["dev"], reverse=reverse)   # low 升序(最负在前) / high 降序
+        for k, e in enumerate(side_evs[:top_n], start=1):
+            e["rank"] = k
+    out = [e for e in events if "rank" in e]
+    out.sort(key=lambda e: e["date"])                   # 按日期升序(便于绘图)
+    return out
+
+
 def breakout_grade(close: pd.Series, period: int = MA_PERIOD,
                    thresholds: tuple[float, float] = (0.02, 0.03)) -> dict:
     """60-day breakout/breakdown strength at the last bar (S13 确定性梯度).
