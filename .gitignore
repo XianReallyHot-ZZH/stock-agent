@@ -14,6 +14,7 @@ dist/
 *.sqlite-wal
 *.sqlite-shm
 data/cache/
+data/transcripts/
 data/*.csv
 data/*.png
 .env

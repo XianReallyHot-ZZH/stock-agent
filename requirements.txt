@@ -14,3 +14,9 @@ pytest>=7.4
 # Install only if you wire a real model:
 # zhipuai>=2.0
 # openai>=1.0
+
+# Video transcription (optional; scripts/transcribe_video.py). Model auto-downloaded
+# from ModelScope (~3GB) on first run, cached under data/cache/whisper_models/.
+yt-dlp>=2024.0
+faster-whisper>=1.0
+imageio-ffmpeg>=0.5   # bundled ffmpeg binary for audio extraction
