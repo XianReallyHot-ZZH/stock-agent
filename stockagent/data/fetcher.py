@@ -1013,3 +1013,232 @@ def fetch_stock_forecast_panel(report_period: str, timeout: float = 60.0,
         except Exception as ex:  # noqa: BLE001
             last_err = FetchError(str(ex)[:200])
     raise FetchError(f"forecast_panel {report_period} failed ({last_err})")
+
+
+# ==================== Western-macro series (V6 tracker · 西方宏观预测台账 只读旁路) ====================
+# ADR-0001 围栏:这些西方宏观数据只供"预测台账"只读诊断,永不喂 A 股轮动引擎。
+# 全部 AkShare:UST(bond_zh_us_rate,一次覆盖 2/5/10/30y + 2s10s)/美股指数(index_us_stock_sina,sina)/
+# 外盘期货(futures_foreign_hist,investing)/外汇(forex_hist_em,eastmoney push2his)。DXY 无干净 AkShare
+# 源 → 6 成分腿按 ICE 公式重算(reconstruct_dxy)。外汇单源(push2his)在部分环境被拦——见 CLAUDE.md。
+
+# bond_zh_us_rate 的美国国债列名 → 标准符号(实测 2026-08 稳定)
+US_TREASURY_TENORS = {
+    "US2Y": "美国国债收益率2年",
+    "US5Y": "美国国债收益率5年",
+    "US10Y": "美国国债收益率10年",
+    "US30Y": "美国国债收益率30年",
+    "US2S10S": "美国国债收益率10年-2年",
+}
+
+
+def fetch_us_treasury(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """美债收益率(bond_zh_us_rate,一次调用覆盖 2/5/10/30y + 10y-2y 利差,2000 起日频)。
+    返回长表 [source='ust', symbol, date, close=收益率%]。中国国债列忽略。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.bond_zh_us_rate, timeout, start_date="20000101")
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            cols = list(df.columns)
+            date_col = next((c for c in cols if "日期" in str(c) or str(c).lower() == "date"), cols[0])
+            dts = pd.to_datetime(df[date_col], errors="coerce").dt.strftime("%Y-%m-%d")
+            frames = []
+            for sym, cn in US_TREASURY_TENORS.items():
+                if cn not in df.columns:
+                    continue
+                sub = pd.DataFrame({"source": "ust", "symbol": sym, "date": dts,
+                                    "close": pd.to_numeric(df[cn], errors="coerce")})
+                frames.append(sub.dropna(subset=["date", "close"]).drop_duplicates(["symbol", "date"]))
+            if not frames:
+                raise FetchError(f"no US tenor cols in {cols}")
+            return pd.concat(frames, ignore_index=True).sort_values(["symbol", "date"])
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"us_treasury failed ({last_err})")
+
+
+def fetch_us_index(symbol: str, timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """美股宽基指数日线(index_us_stock_sina,sina,2004 起 ~22 年)。symbol='.INX'/'.IXIC'/'.DJI'。
+    返回长表 [source='usidx', symbol, date, open/high/low/close/volume]。RAW(指数无需复权)。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.index_us_stock_sina, timeout, symbol=symbol)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            df = df.rename(columns={c: str(c).lower() for c in df.columns})
+            df = _normalize(df)
+            out = df.reset_index()
+            out.insert(0, "source", "usidx")
+            out.insert(1, "symbol", symbol)
+            keep = [c for c in ("source", "symbol", "date", "open", "high", "low", "close", "volume")
+                    if c in out.columns]
+            return out[keep]
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"us_index {symbol} failed ({last_err})")
+
+
+# futures_foreign_hist 白名单内、西方宏观台账用到的外盘期货符号
+FOREIGN_FUTURE_SYMBOLS = {"GC": "COMEX黄金", "SI": "COMEX白银", "CL": "WTI原油", "OIL": "Brent原油"}
+# 注:外盘铜 futures_foreign_hist 数据失真——LHC 非有效符号(返回 ~82 垃圾值)、HG(COMEX铜)~658,
+# 且 volume/position 全 0,不可用。铜/有色改用沪铜主连(CU0, commodity_price 表, 元/吨),
+# 与项目"铜价"一致。
+
+
+def fetch_foreign_future(symbol: str, timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """外盘期货日线(futures_foreign_hist,investing 源,~10 年;CL/WTI 30 年)。symbol='GC'/'SI'/'CL'/
+    'OIL'/'LHC'/'HG'。返回长表 [source='fut', symbol, date, open/high/low/close/volume]。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.futures_foreign_hist, timeout, symbol=symbol)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            df = df.rename(columns={c: str(c).lower() for c in df.columns})
+            df = _normalize(df)
+            out = df.reset_index()
+            out.insert(0, "source", "fut")
+            out.insert(1, "symbol", symbol)
+            keep = [c for c in ("source", "symbol", "date", "open", "high", "low", "close", "volume")
+                    if c in out.columns]
+            return out[keep]
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"foreign_future {symbol} failed ({last_err})")
+
+
+DXY_FOREX_LEGS = ["EURUSD", "USDJPY", "GBPUSD", "USDCAD", "USDSEK", "USDCHF"]
+
+
+def fetch_forex_pair(symbol: str, timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """外汇对日线(forex_hist_em,eastmoney push2his)。symbol='EURUSD'/'USDJPY'/'GBPUSD'/'USDCAD'/
+    'USDSEK'/'USDCHF'。返回长表 [source='forex', symbol, date, open/high/low/close]。注意 push2his 在
+    部分环境被拦(见 CLAUDE.md 主力资金端点);部署环境通常可用。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.forex_hist_em, timeout, symbol=symbol)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            df = df.rename(columns={c: str(c).lower() for c in df.columns})
+            df = _normalize(df)
+            out = df.reset_index()
+            out.insert(0, "source", "forex")
+            out.insert(1, "symbol", symbol)
+            keep = [c for c in ("source", "symbol", "date", "open", "high", "low", "close", "volume")
+                    if c in out.columns]
+            return out[keep]
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"forex {symbol} failed ({last_err})")
+
+
+def fetch_forex_pairs_ecb(pairs: list[str] = None, start: str = "19990101",
+                          timeout: float = 40.0) -> pd.DataFrame:
+    """6 DXY 成分外汇腿 · ECB 参考汇率(Frankfurter API · 免费·无 key·1999 起日频)。
+
+    AkShare forex_hist_em(push2his 在部分网络被拦)的 fallback。一次调用取 EUR→6 币,换算成
+    USD-base 对(ICE DXY 公式所需口径):
+      EURUSD = USD/EUR;  USDJPY = EURJPY/EURUSD;  GBPUSD = EURUSD/EURGBP;
+      USDCAD = EURCAD/EURUSD;  USDSEK = EURSEK/EURUSD;  USDCHF = EURCHF/EURUSD。
+    返回长表 [source='forex', symbol, date, close]。
+    """
+    import json as _json
+    import urllib.request as _urlreq
+    pairs = pairs or DXY_FOREX_LEGS
+    s = f"{start[:4]}-{start[4:6]}-{start[6:8]}" if len(start) >= 8 else "1999-01-04"
+    end = datetime.now().strftime("%Y-%m-%d")
+    url = (f"https://api.frankfurter.app/{s}..{end}"
+           "?from=EUR&to=USD,JPY,GBP,CAD,SEK,CHF")
+
+    def _do():
+        req = _urlreq.Request(url, headers={"User-Agent": "stockagent"})
+        with _urlreq.urlopen(req, timeout=timeout) as r:
+            return _json.loads(r.read())
+
+    j = _run_with_timeout(_do, timeout)
+    rates = (j or {}).get("rates") or {}
+    rows = []
+    for d in sorted(rates):
+        x = rates[d] or {}
+        try:
+            eu = {k: float(x[k]) for k in ("USD", "JPY", "GBP", "CAD", "SEK", "CHF") if k in x}
+        except (KeyError, ValueError, TypeError):
+            continue
+        usd = eu.get("USD")
+        if not usd or usd <= 0:
+            continue
+        conv = {
+            "EURUSD": usd,
+            "USDJPY": eu["JPY"] / usd if "JPY" in eu else None,
+            "GBPUSD": usd / eu["GBP"] if "GBP" in eu else None,
+            "USDCAD": eu["CAD"] / usd if "CAD" in eu else None,
+            "USDSEK": eu["SEK"] / usd if "SEK" in eu else None,
+            "USDCHF": eu["CHF"] / usd if "CHF" in eu else None,
+        }
+        for p in pairs:
+            v = conv.get(p)
+            if v and v > 0:
+                rows.append({"source": "forex", "symbol": p, "date": d, "close": v})
+    if not rows:
+        raise FetchError("forex_ecb empty")
+    return pd.DataFrame(rows).drop_duplicates(["symbol", "date"]).sort_values(["symbol", "date"])
+
+
+# ICE 美元指数几何加权。USD 为基础货币的对(USDJPY/USDCAD/USDSEK/USDCHF)正指数;USD 为报价货币的
+# 对(EURUSD/GBPUSD)负指数。常数 50.14348112 使基期(1973)=100。实测 2024 末式汇率→DXY≈103(对)。
+_DXY_WEIGHTS = {"EURUSD": -0.576, "USDJPY": 0.136, "GBPUSD": -0.119,
+                "USDCAD": 0.091, "USDSEK": 0.042, "USDCHF": 0.036}
+_DXY_CONST = 50.14348112
+
+
+def reconstruct_dxy(rates: dict) -> float:
+    """单日 ICE DXY 重算。rates={pair: price},6 腿齐全才准(缺腿报 FetchError)。
+    参考快照 {EURUSD:1.10, USDJPY:150, GBPUSD:1.27, USDCAD:1.36, USDSEK:10.5, USDCHF:0.88} → ≈103.0。"""
+    missing = [k for k in _DXY_WEIGHTS if k not in rates or rates[k] is None]
+    if missing:
+        raise FetchError(f"reconstruct_dxy missing legs: {missing}")
+    prod = _DXY_CONST
+    for pair, w in _DXY_WEIGHTS.items():
+        prod *= float(rates[pair]) ** w
+    return prod
+
+
+def reconstruct_dxy_series(leg_closes: dict) -> pd.Series:
+    """逐日重算 DXY 水平时序。leg_closes={pair: pd.Series(close, index=date)}。6 腿 inner-join 对齐
+    (某腿整条缺失或某日缺 → 该日跳过)。返回 pd.Series(DXY level, index=date, 升序)。"""
+    aligned = None
+    for pair, s in leg_closes.items():
+        if pair not in _DXY_WEIGHTS or s is None or len(s) == 0:
+            continue
+        col = s.astype(float).rename(pair)
+        aligned = col.to_frame() if aligned is None else aligned.join(col, how="inner")
+    if aligned is None or len(aligned) == 0:
+        return pd.Series(dtype=float)
+    if len([p for p in _DXY_WEIGHTS if p in aligned.columns]) < len(_DXY_WEIGHTS):
+        return pd.Series(dtype=float)  # 缺整条腿 → 无法重算
+    aligned = aligned.dropna(subset=list(_DXY_WEIGHTS))
+    if len(aligned) == 0:
+        return pd.Series(dtype=float)
+    prod = pd.Series(_DXY_CONST, index=aligned.index, dtype=float)
+    for pair, w in _DXY_WEIGHTS.items():
+        prod = prod * (aligned[pair].astype(float) ** w)
+    return prod.sort_index()

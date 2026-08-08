@@ -39,6 +39,12 @@ python scripts/stock_report.py                    # 生成个股诊断看板（d
 python scripts/stock_report.py --push-alerts      # 生成看板 + 推送个股信号提醒到微信（A1/A2/A3/G1/G2/E3/E4/Q1/P1/M1/M2 触发时）
 python scripts/ai_eval_server.py                  # 🤖AI评估本地服务（首个长驻·127.0.0.1:8765，看板🤖按钮点击时实时调LLM生成；先起它再点🤖）
 
+# 西方宏观预测台账（western_macro · Phase 3 只读旁路 · ADR-0001）
+# 把 JZ《西方经济》96集转写稿抽成可证伪 claim → 对朴素基准打分(edge) → 看板。度量预测者,永不喂引擎
+python scripts/backfill_western_macro.py                          # 回填 UST/美股/外盘期货/外汇 + 6腿重算 DXY（幂等；外汇 push2his 本机重试）
+python scripts/extract_western_claims.py --since 2026-08-01       # LLM 抽 DRAFT claim（幂等·跳过已抽；--force 重抽保 confirmed 状态）
+python scripts/western_macro_report.py --extract                  # 结算到期 claim + 渲染 data/western_macro.html（看板 only·无微信）
+
 # 实盘
 python scripts/run_morning_report.py --force   # 生成+推送晨报
 python scripts/record_actual.py --executed     # 对账自律度

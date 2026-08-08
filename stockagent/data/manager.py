@@ -723,6 +723,84 @@ class DataManager:
             self.store.set_meta("last_stock_forecast_update", fetcher.today_str())
         return results
 
+    # ---- Western-macro series (V6 tracker · 西方宏观预测台账 只读旁路 · ADR-0001) ----
+    # 只读诊断:这些西方宏观数据永不喂 A 股轮动引擎。UST/美股指数/外盘期货/外汇 + 6 腿重算 DXY。
+    # 全 AkShare(forex 单源 push2his,部分环境被拦——失败记日志不致命)。预测台账(claims/settlements)
+    # 在后续阶段接入,本阶段只铺数据。
+    US_INDEX_SYMBOLS_W = [".INX", ".IXIC", ".DJI"]
+    FOREIGN_FUTURE_SYMBOLS_W = ["GC", "SI", "CL", "OIL"]  # 铜用沪铜(见 fetcher 注),不抓外盘铜
+    DXY_FOREX_LEGS_W = ["EURUSD", "USDJPY", "GBPUSD", "USDCAD", "USDSEK", "USDCHF"]
+
+    def update_western_macro(self) -> dict:
+        """抓取并入库西方宏观序列(UST/美股/外盘期货/外汇)+ 6 腿重算 DXY → western_macro_series。
+        幂等(AkShare 全量返回,upsert 覆盖)。逐系列容错(失败跳过,不拖垮整批)。Returns {group: rows}。"""
+        groups = {"ust": 0, "usidx": 0, "fut": 0, "forex": 0, "dxy": 0}
+        try:
+            df = fetcher.fetch_us_treasury()
+            groups["ust"] = self.store.upsert_western_macro(df, source_tag="akshare_bond")
+            log.info("western ust: +%d rows", groups["ust"])
+        except Exception as e:  # noqa: BLE001
+            log.warning("western ust failed: %s", str(e)[:120])
+        for i, sym in enumerate(self.US_INDEX_SYMBOLS_W):
+            if i > 0:
+                time.sleep(0.4)
+            try:
+                df = fetcher.fetch_us_index(sym)
+                n = self.store.upsert_western_macro(df, source_tag="akshare_sina")
+                groups["usidx"] += n
+                log.info("western usidx %s: +%d rows", sym, n)
+            except Exception as e:  # noqa: BLE001
+                log.warning("western usidx %s failed: %s", sym, str(e)[:100])
+        for i, sym in enumerate(self.FOREIGN_FUTURE_SYMBOLS_W):
+            if i > 0:
+                time.sleep(0.4)
+            try:
+                df = fetcher.fetch_foreign_future(sym)
+                n = self.store.upsert_western_macro(df, source_tag="akshare_fut")
+                groups["fut"] += n
+                log.info("western fut %s: +%d rows", sym, n)
+            except Exception as e:  # noqa: BLE001
+                log.warning("western fut %s failed: %s", sym, str(e)[:100])
+        leg_closes: dict = {}
+        for i, sym in enumerate(self.DXY_FOREX_LEGS_W):
+            if i > 0:
+                time.sleep(0.4)
+            try:
+                df = fetcher.fetch_forex_pair(sym)  # AkShare push2his(部分网络被拦)
+                self.store.upsert_western_macro(df, source_tag="akshare_forex")
+                groups["forex"] += len(df)
+                leg_closes[sym] = pd.Series(df["close"].values, index=df["date"].values).astype(float)
+            except Exception as e:  # noqa: BLE001
+                log.warning("western forex(akshare) %s failed: %s", sym, str(e)[:100])
+        if len(leg_closes) < len(self.DXY_FOREX_LEGS_W):
+            # AkShare 缺腿 → fallback ECB/Frankfurter(免费无 key,一次取 6 币换算)。用户授权非 AkShare 源
+            # (DXY 数据优先于"纯 AkShare"洁癖)。AkShare 在本网被拦时这成为事实外汇源。
+            log.info("forex akshare incomplete (%d/6) → fallback ECB/Frankfurter", len(leg_closes))
+            try:
+                df = fetcher.fetch_forex_pairs_ecb()
+                self.store.upsert_western_macro(df, source_tag="ecb_frankfurter")
+                groups["forex"] += len(df)
+                for sym in self.DXY_FOREX_LEGS_W:
+                    sub = df[df["symbol"] == sym]
+                    if len(sub):
+                        leg_closes[sym] = pd.Series(sub["close"].values, index=sub["date"].values).astype(float)
+            except Exception as e:  # noqa: BLE001
+                log.warning("western forex(ECB) failed: %s", str(e)[:120])
+        try:
+            dxy = fetcher.reconstruct_dxy_series(leg_closes)
+            if len(dxy):
+                rows = pd.DataFrame([
+                    {"source": "dxy", "symbol": "DXY", "date": d, "close": float(v)}
+                    for d, v in dxy.items()
+                ])
+                groups["dxy"] = self.store.upsert_western_macro(rows, source_tag="reconstructed")
+                log.info("western dxy reconstructed: +%d rows (to %s)", groups["dxy"], dxy.index[-1])
+        except Exception as e:  # noqa: BLE001
+            log.warning("western dxy reconstruct failed: %s", str(e)[:120])
+        if any(groups.values()):
+            self.store.set_meta("last_western_macro_update", fetcher.today_str())
+        return groups
+
 
 def _recent_report_periods(n: int = 8) -> list[str]:
     """最近 n 个报告期(季末 YYYYMMDD,从今天往回,降序)。季末:3-31/6-30/9-30/12-31。"""

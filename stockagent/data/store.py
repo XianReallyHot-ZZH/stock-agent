@@ -171,6 +171,57 @@ CREATE TABLE IF NOT EXISTS stock_forecast (
     PRIMARY KEY (symbol, report_period)
 );
 CREATE INDEX IF NOT EXISTS idx_stock_forecast_symbol ON stock_forecast(symbol);
+CREATE TABLE IF NOT EXISTS western_macro_series (
+    source     TEXT NOT NULL,   -- ustk/usidx/fut/forex/dxy (只读旁路 · ADR-0001)
+    symbol     TEXT NOT NULL,   -- US10Y / .INX / GC / USDJPY / DXY
+    date       TEXT NOT NULL,
+    open  REAL, high REAL, low REAL, close REAL,   -- close 统一承载价格水平或收益率(UST)
+    volume REAL,
+    source_tag TEXT,
+    PRIMARY KEY (source, symbol, date)
+);
+CREATE INDEX IF NOT EXISTS idx_western_macro_symbol ON western_macro_series(symbol);
+CREATE TABLE IF NOT EXISTS wm_claims (
+    uid          TEXT PRIMARY KEY,   -- 稳定 hash(episode_date|asset|type|statement 规范化)→ 幂等再抽取
+    episode_date TEXT NOT NULL,      -- 哪一期说的 (YYYY-MM-DD)
+    asset        TEXT NOT NULL,      -- 黄金/美元指数/US10Y/标普500/半导体/原油/铜/A股/恒生...
+    claim_type   TEXT NOT NULL,      -- direction/range/level/timing/scenario
+    statement    TEXT NOT NULL,      -- 原话/提炼的可证伪断言
+    direction    TEXT,               -- up/down/flat (direction/range/scenario 主推用)
+    level_value  REAL,               -- 点位(level 类): 如 4800
+    range_low    REAL, range_high REAL,  -- 区间(range 类): 如 70/90
+    horizon      TEXT,               -- 兑现日期 YYYY-MM-DD 或事件触发描述(timing 类)
+    confidence   TEXT,               -- strong/medium/weak
+    basis_nodes  TEXT,               -- 逗号分隔的驱动图节点 id(见 western_macro/drivers.py)
+    is_primary   INTEGER,            -- scenario: 1=主推分支, 0=备选(备选命中不计 edge)
+    parent_uid   TEXT,               -- scenario 备选分支指向主推 uid
+    state        TEXT NOT NULL DEFAULT 'draft',  -- draft/confirmed/vetoed
+    source       TEXT,               -- llm/manual
+    created_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wm_claims_episode ON wm_claims(episode_date);
+CREATE INDEX IF NOT EXISTS idx_wm_claims_asset ON wm_claims(asset);
+CREATE INDEX IF NOT EXISTS idx_wm_claims_state ON wm_claims(state);
+CREATE TABLE IF NOT EXISTS wm_settlements (
+    claim_uid        TEXT PRIMARY KEY,
+    actual_direction TEXT,           -- up/down/flat
+    actual_value     REAL,
+    hit              INTEGER,        -- 方向是否命中 0/1
+    baseline_hit     INTEGER,        -- 朴素基准是否也命中 0/1
+    edge             INTEGER,        -- hit AND NOT baseline_hit
+    method           TEXT,           -- auto/manual
+    settled_at       TEXT,
+    note             TEXT
+);
+CREATE TABLE IF NOT EXISTS wm_rules (
+    uid          TEXT PRIMARY KEY,
+    episode_date TEXT NOT NULL,
+    statement    TEXT NOT NULL,
+    rule_type    TEXT,               -- 禁定投/禁做空/加仓/减仓/止盈...
+    state        TEXT NOT NULL DEFAULT 'draft',
+    note         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wm_rules_episode ON wm_rules(episode_date);
 """
 
 
@@ -1060,3 +1111,185 @@ class Store:
             row = c.execute(
                 "SELECT MAX(report_period) FROM stock_forecast WHERE symbol=?", (symbol,)).fetchone()
             return row[0] if row and row[0] else None
+
+    # ---- western-macro series (V6 tracker · 西方宏观预测台账 只读旁路 · ADR-0001) ----
+    def upsert_western_macro(self, df: pd.DataFrame, source_tag: str = "") -> int:
+        """df columns: source, symbol, date, open, high, low, close, volume(可缺)。
+        幂等 upsert 主键 (source, symbol, date)。close 统一承载价格水平/收益率(UST)。"""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = [
+            (str(r["source"]), str(r["symbol"]), str(r["date"]),
+             _f(r.get("open")), _f(r.get("high")), _f(r.get("low")), _f(r.get("close")),
+             _f(r.get("volume")), source_tag)
+            for _, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO western_macro_series(source,symbol,date,open,high,low,close,volume,source_tag) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(source,symbol,date) DO UPDATE SET "
+                "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
+                "volume=excluded.volume,source_tag=excluded.source_tag",
+                rows,
+            )
+        return len(rows)
+
+    def get_western_series(self, source: str, symbol: str,
+                           start: Optional[str] = None, end: Optional[str] = None) -> pd.DataFrame:
+        """西方宏观某 series(open/high/low/close/volume, indexed by date 升序)。"""
+        q = ("SELECT date,open,high,low,close,volume FROM western_macro_series "
+             "WHERE source=? AND symbol=?")
+        params: list = [source, symbol]
+        if start:
+            q += " AND date>=?"; params.append(start)
+        if end:
+            q += " AND date<=?"; params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def western_symbols(self, source: Optional[str] = None) -> list[str]:
+        with self._conn() as c:
+            if source:
+                rows = c.execute("SELECT DISTINCT symbol FROM western_macro_series WHERE source=?",
+                                 (source,)).fetchall()
+            else:
+                rows = c.execute("SELECT DISTINCT symbol FROM western_macro_series").fetchall()
+        return [r[0] for r in rows]
+
+    def last_western_date(self, source: str, symbol: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(date) FROM western_macro_series WHERE source=? AND symbol=?",
+                (source, symbol)).fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- western-macro prediction ledger (wm_claims / wm_settlements / wm_rules) ----
+    def upsert_wm_claims(self, rows: list[dict]) -> int:
+        """rows: dicts(uid/episode_date/asset/claim_type/statement + 可选 direction/level_value/
+        range_low/range_high/horizon/confidence/basis_nodes/is_primary/parent_uid/state/source/created_at)。
+        幂等 upsert 主键 uid。重抽时**不覆盖 state**(已确认/否决的人工状态保留)。"""
+        if not rows:
+            return 0
+
+        def _s(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else str(x)
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        def _i(x):
+            return int(x) if x is not None and not (isinstance(x, float) and pd.isna(x)) else None
+
+        payload = [(
+            _s(r.get("uid")), _s(r.get("episode_date")), _s(r.get("asset")),
+            _s(r.get("claim_type")), _s(r.get("statement")), _s(r.get("direction")),
+            _f(r.get("level_value")), _f(r.get("range_low")), _f(r.get("range_high")),
+            _s(r.get("horizon")), _s(r.get("confidence")), _s(r.get("basis_nodes")),
+            _i(r.get("is_primary")), _s(r.get("parent_uid")),
+            _s(r.get("state") or "draft"), _s(r.get("source")), _s(r.get("created_at")),
+        ) for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO wm_claims(uid,episode_date,asset,claim_type,statement,direction,"
+                "level_value,range_low,range_high,horizon,confidence,basis_nodes,is_primary,"
+                "parent_uid,state,source,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(uid) DO UPDATE SET "
+                "episode_date=excluded.episode_date,asset=excluded.asset,claim_type=excluded.claim_type,"
+                "statement=excluded.statement,direction=excluded.direction,level_value=excluded.level_value,"
+                "range_low=excluded.range_low,range_high=excluded.range_high,horizon=excluded.horizon,"
+                "confidence=excluded.confidence,basis_nodes=excluded.basis_nodes,"
+                "is_primary=excluded.is_primary,parent_uid=excluded.parent_uid,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_wm_claims(self, state: Optional[str] = None, asset: Optional[str] = None,
+                      episode_date: Optional[str] = None, claim_type: Optional[str] = None,
+                      min_date: Optional[str] = None) -> list[dict]:
+        q, p = "SELECT * FROM wm_claims WHERE 1=1", []
+        if state:
+            q += " AND state=?"; p.append(state)
+        if asset:
+            q += " AND asset=?"; p.append(asset)
+        if episode_date:
+            q += " AND episode_date=?"; p.append(episode_date)
+        if claim_type:
+            q += " AND claim_type=?"; p.append(claim_type)
+        if min_date:
+            q += " AND episode_date>=?"; p.append(min_date)
+        q += " ORDER BY episode_date DESC, asset"
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute(q, p).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_wm_claim_state(self, uid: str, state: str) -> int:
+        """draft → confirmed/vetoed。返回受影响行数(0=uid 不存在)。"""
+        with self._conn() as c:
+            cur = c.execute("UPDATE wm_claims SET state=? WHERE uid=?", (state, uid))
+            return cur.rowcount
+
+    def upsert_wm_settlement(self, row: dict) -> int:
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        def _i(x):
+            return int(x) if x is not None and not (isinstance(x, float) and pd.isna(x)) else None
+
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO wm_settlements(claim_uid,actual_direction,actual_value,hit,baseline_hit,"
+                "edge,method,settled_at,note) VALUES(?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(claim_uid) DO UPDATE SET "
+                "actual_direction=excluded.actual_direction,actual_value=excluded.actual_value,"
+                "hit=excluded.hit,baseline_hit=excluded.baseline_hit,edge=excluded.edge,"
+                "method=excluded.method,settled_at=excluded.settled_at,note=excluded.note",
+                (row.get("claim_uid"), row.get("actual_direction"), _f(row.get("actual_value")),
+                 _i(row.get("hit")), _i(row.get("baseline_hit")), _i(row.get("edge")),
+                 row.get("method"), row.get("settled_at"), row.get("note")),
+            )
+        return 1
+
+    def get_wm_settlements(self) -> list[dict]:
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute("SELECT * FROM wm_settlements").fetchall()
+        return [dict(r) for r in rows]
+
+    def upsert_wm_rules(self, rows: list[dict]) -> int:
+        if not rows:
+            return 0
+
+        def _s(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else str(x)
+
+        payload = [(_s(r.get("uid")), _s(r.get("episode_date")), _s(r.get("statement")),
+                    _s(r.get("rule_type")), _s(r.get("state") or "draft"), _s(r.get("note")))
+                   for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO wm_rules(uid,episode_date,statement,rule_type,state,note) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(uid) DO UPDATE SET "
+                "episode_date=excluded.episode_date,statement=excluded.statement,"
+                "rule_type=excluded.rule_type,note=excluded.note",
+                payload,
+            )
+        return len(payload)
+
+    def get_wm_rules(self, state: Optional[str] = None) -> list[dict]:
+        q, p = "SELECT * FROM wm_rules WHERE 1=1", []
+        if state:
+            q += " AND state=?"; p.append(state)
+        q += " ORDER BY episode_date DESC"
+        with self._conn() as c:
+            c.row_factory = sqlite3.Row
+            rows = c.execute(q, p).fetchall()
+        return [dict(r) for r in rows]

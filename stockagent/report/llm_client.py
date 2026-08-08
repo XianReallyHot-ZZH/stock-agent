@@ -45,7 +45,8 @@ def provider_name() -> str:
     return r[3] if r else "none"
 
 
-def chat(prompt: str, system: str = "", max_tokens: int = 4000) -> str | None:
+def chat(prompt: str, system: str = "", max_tokens: int = 4000,
+         timeout: float = 40.0) -> str | None:
     """Call the LLM. Returns text or None on any failure (caller falls back).
 
     Default max_tokens is generous because reasoning models (deepseek-v4-pro,
@@ -53,6 +54,10 @@ def chat(prompt: str, system: str = "", max_tokens: int = 4000) -> str | None:
     cap starves the actual answer (content comes back ''). 4000 leaves room for
     ~3k reasoning + content. Non-reasoning models just stop early, so the high
     cap costs nothing extra (you pay per generated token, not per cap).
+
+    `timeout` defaults to 40s (short commentary); long-prompt jobs like transcript
+    extraction pass a larger value (e.g. 120) since generating structured JSON over
+    a long input can exceed 40s.
     """
     res = _resolve()
     if not res:
@@ -67,7 +72,7 @@ def chat(prompt: str, system: str = "", max_tokens: int = 4000) -> str | None:
         r = requests.post(
             url, headers=headers,
             json={"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": 0.5},
-            timeout=40,
+            timeout=timeout,
         )
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"].strip()
