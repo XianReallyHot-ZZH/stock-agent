@@ -44,12 +44,11 @@ def main() -> None:
 
     if args.extract:
         paths = extract.discover_transcripts(DOCS, since=args.since)
-        print(f"extract: {len(paths)} transcript(s) to consider")
-        for p in paths:
-            res = extract.process_episode(p, store, asof_full)
-            ep = res.get("episode", p.name)
+        print(f"extract: {len(paths)} transcript(s); 并行抽取...")
+        for res in extract.process_episodes_parallel(paths, store, asof_full):
+            ep = res.get("episode", "?")
             if "skipped" in res:
-                print(f"  {ep}: skip ({res['skipped']})")
+                print(f"  {ep}: {res['skipped']}")
             else:
                 print(f"  {ep}: +{res.get('claims', 0)} claims, +{res.get('rules', 0)} rules")
 

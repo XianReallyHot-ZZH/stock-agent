@@ -57,6 +57,12 @@ def _status_cell(s: Optional[dict]) -> tuple[str, str]:
     return ("hit", "命中") if s["hit"] else ("miss", "未中")
 
 
+def _state_badge(state: str) -> str:
+    cls = {"confirmed": "edge", "vetoed": "miss", "draft": "open"}.get(state, "open")
+    txt = {"confirmed": "已确认", "vetoed": "已否决", "draft": "草稿"}.get(state, state)
+    return f'<span class="badge {cls}">{txt}</span>'
+
+
 def _driver_svg(colors: dict) -> str:
     """Lay out the canonical driver-map as an SVG (nodes by group-column, causal edges as lines)."""
     pos: dict[str, tuple[int, int]] = {}
@@ -242,10 +248,15 @@ def render_western_macro(store, docs_dir: Path, episodes_json: Path,
         cn_dir = _DIR_CN.get(c["direction"] or "", "—")
         cn_actual = _DIR_CN.get(actual, "—")
         cn_nodes = " ".join(drivers.node_label(n) for n in (c.get("basis_nodes") or "").split(",") if n)
+        if c["claim_type"] == "scenario" and c.get("is_primary") == 0:
+            verdict = '<span class="badge open">备选</span>'  # 对冲分支,不计分(只主推情景算)
+        else:
+            verdict = status_badge(s)
         rows_html.append(
             f"<tr><td>{c['episode_date']}</td><td>{c['asset']}</td>"
             f"<td>{cn_type}</td><td>{cn_dir}</td>"
-            f"<td>{c['horizon']}</td><td>{cn_actual}</td><td>{status_badge(s)}</td>"
+            f"<td>{c['horizon']}</td><td>{cn_actual}</td><td>{verdict}</td>"
+            f"<td>{_state_badge(c['state'])}</td>"
             f"<td class='stmt'>{c['statement']}</td>"
             f"<td class='muted'>{cn_nodes}</td><td class='muted'>{note}</td></tr>")
 
@@ -261,6 +272,9 @@ def render_western_macro(store, docs_dir: Path, episodes_json: Path,
         for r in rules) or '<tr><td colspan=3 class="muted">无</td></tr>'
     provisional = (n_anthology and n_transcripts < n_anthology)
     charts_html = _charts_html(store, claims, sett, D)
+    state_counts = {"draft": 0, "confirmed": 0, "vetoed": 0}
+    for c in claims:
+        state_counts[c["state"]] = state_counts.get(c["state"], 0) + 1
 
     html = f"""<!doctype html><html lang="zh" data-theme="dark"><head><meta charset="utf-8">
 <title>西方宏观预测台账 · {asof}</title>
@@ -297,6 +311,7 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 <div class="muted" style="font-size:12px">截至 {asof} · 度量一个自由裁量宏观预测者,绝不自动执行 · 数据来自 AkShare(DXY 6腿重算)</div>
 <div class="banner info">📊 覆盖:已抽取 <b>{n_extracted}</b> 期 / 已转写 <b>{n_transcripts}</b> 期{f" / 合集 {n_anthology} 期" if n_anthology else ""}。
 {f"⚠ 语料仍在回填(转写中),track record 为部分样本、非定论。" if provisional else ""}</div>
+<div class="banner info">📝 审核:草稿 <b>{state_counts['draft']}</b> / 已确认 <b>{state_counts['confirmed']}</b> / 已否决 <b>{state_counts['vetoed']}</b> —— 用 <code>python scripts/wm_confirm.py</code> 审核(已否决的从评分剔除;可执行层建议先确认)。</div>
 {'<div class="banner warn">⚠ 美元指数(DXY)数据缺:外汇端点 push2his 在本环境被拦 → 美元/黄金相关 claim 暂未自动结算。本机重跑 backfill_western_macro.py 即可补。</div>' if not store.get_western_series('dxy','DXY').size else ''}
 
 <h2>🎯 业绩追踪</h2>
@@ -316,7 +331,7 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 {charts_html}
 
 <h2>📋 台账(全部断言 · 未到期=兑现日未到 / 点位·时点=人工结算)</h2>
-<table><tr><th>日期</th><th>标的</th><th>类型</th><th>预测</th><th>兑现</th><th>实际</th><th>结果</th><th>断言</th><th>驱动</th><th>价格</th></tr>
+<table><tr><th>日期</th><th>标的</th><th>类型</th><th>预测</th><th>兑现</th><th>实际</th><th>结果</th><th>状态</th><th>断言</th><th>驱动</th><th>价格</th></tr>
 {"".join(rows_html)}</table>
 
 <h2>🗺️ 因果框架(驱动图 · 断言挂其节点)</h2>

@@ -56,11 +56,16 @@ _SYSTEM = (
     "1. 只抽对【未来】的明确判断/目标/规则(方向、点位、区间、时点、情景分支);不抽对过去事实的陈述、"
     "不抽泛泛而谈(如「黄金长期看涨」无具体时点=不可证伪,不抽)。\n"
     "2. 每个 claim 必须有可判定的 horizon(兑现日期 YYYY-MM-DD,或明确事件触发如「9月美联储会议后」)。\n"
-    "3. asset 必须从给定词汇表选;claim_type 从 direction/range/level/timing/scenario 选。\n"
-    "4. direction(direction/range/scenario主推必填):up/down/flat。\n"
-    "5. scenario 类:同一标的的多分支预测,每条标 is_primary(主推=1,备选=0)并给同一 scenario_group。\n"
-    "6. basis_nodes 从给定节点列表里选 1-3 个该断言依赖的因果驱动节点。\n"
-    "7. rules 是操作纪律(禁定投/禁做空/逢回调加仓/止盈…),不是预测,单列。\n\n"
+    "3. 【资产忠实·最重要】asset 必须是作者【在本期转写稿里实际讨论到的】标的,从给定词汇表选。"
+    "若某标的本期完全没提到,绝不为它建 claim——宁可少抽,不可凭背景知识补。\n"
+    "4. 【方向忠实·最重要】direction 严格照作者明说的方向:涨/上看/突破→up,跌/下探/回调→down,"
+    "震荡/区间→flat。**绝不用你的宏观常识推断方向**;条件句「若X则Y」按 Y 的原话;拿不准就不抽。\n"
+    "5. 【断言忠实】statement 忠实复述作者原意,**不得添加作者没说的条件/限定词/数字**"
+    "(不要凭空加「若未被做空」「极限」「必然」等加工语)。\n"
+    "6. claim_type 从 direction/range/level/timing/scenario 选;scenario 类同标的多分支,每条标 "
+    "is_primary(主推=1,备选=0)并给同一 scenario_group。\n"
+    "7. basis_nodes 从给定节点列表里选 1-3 个该断言依赖的因果驱动节点。\n"
+    "8. rules 是操作纪律(禁定投/禁做空/逢回调加仓/止盈…),不是预测,单列。\n\n"
     "严格只输出一个 JSON 对象,不要任何解释文字。"
 )
 
@@ -207,21 +212,28 @@ def extract_transcript(transcript: str, episode_date: str, asof: str,
         return [], []
     prompt = _USER_TMPL.format(nodes=_NODE_LIST, assets=" / ".join(ASSET_KEYS),
                                episode_date=episode_date, transcript=transcript)
-    try:
-        text = llm_client.chat(prompt, system=_SYSTEM, max_tokens=6000, timeout=180)
-    except Exception as e:  # noqa: BLE001
-        log.warning("LLM extract failed for %s: %s", episode_date, str(e)[:120])
-        return [], []
-    parsed = _parse_llm_json(text)
-    claims = [c for c in (_build_claim(r, episode_date, asof) for r in parsed["claims"]) if c]
+    claims: list[dict] = []
+    rules: list[dict] = []
+    for attempt in range(2):  # 并发/负载下 deepseek 偶返回空 content → 重试一次
+        try:
+            text = llm_client.chat(prompt, system=_SYSTEM, max_tokens=6000, timeout=180)
+        except Exception as e:  # noqa: BLE001
+            log.warning("LLM extract failed for %s: %s", episode_date, str(e)[:120])
+            break
+        parsed = _parse_llm_json(text)
+        claims = [c for c in (_build_claim(r, episode_date, asof) for r in parsed["claims"]) if c]
+        rules = [{
+            "uid": rule_uid(episode_date, str(r.get("statement", ""))),
+            "episode_date": episode_date,
+            "statement": str(r.get("statement", ""))[:300],
+            "rule_type": str(r.get("rule_type", "")).strip()[:40] or "其他",
+            "state": "draft",
+        } for r in parsed["rules"] if str(r.get("statement", "")).strip()]
+        if claims or rules:
+            break
+        if attempt == 0:
+            log.info("extract %s: empty response, retrying once", episode_date)
     _link_scenario_parents(claims)
-    rules = [{
-        "uid": rule_uid(episode_date, str(r.get("statement", ""))),
-        "episode_date": episode_date,
-        "statement": str(r.get("statement", ""))[:300],
-        "rule_type": str(r.get("rule_type", "")).strip()[:40] or "其他",
-        "state": "draft",
-    } for r in parsed["rules"] if str(r.get("statement", "")).strip()]
     log.info("extracted %s: %d claims, %d rules", episode_date, len(claims), len(rules))
     return claims, rules
 
@@ -263,3 +275,39 @@ def process_episode(path: Path, store, asof: str, use_llm: bool = True,
     nc = store.upsert_wm_claims(claims) if claims else 0
     nr = store.upsert_wm_rules(rules) if rules else 0
     return {"episode": ep, "claims": nc, "rules": nr}
+
+
+def process_episodes_parallel(paths: list, store, asof: str, use_llm: bool = True,
+                               force: bool = False, workers: int = 1) -> list[dict]:
+    """LLM 抽取 + 顺序入库(避免 SQLite 多写冲突)。workers 默认 1(顺序)——实测 deepseek 并发会
+    返回空/降质 content(4 claim 掉到 1),故保质量用顺序;换并发稳定的 provider 后可调高。
+    读 transcript + 跳过已抽 在主线程;LLM 调用丢线程池;future 完成一个、主线程 upsert 一个。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def work(item):
+        ep, text = item
+        return ep, extract_transcript(text, ep, asof, use_llm=use_llm)
+
+    jobs = []
+    for p in paths:
+        ep = _episode_date_of(p)
+        if not ep:
+            continue
+        if not force and store.get_wm_claims(episode_date=ep):
+            continue  # 已抽
+        jobs.append((ep, p.read_text(encoding="utf-8")))
+    results = []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(work, item): item[0] for item in jobs}
+        for fu in as_completed(futures):
+            ep = futures[fu]
+            try:
+                _, (claims, rules) = fu.result()
+            except Exception as e:  # noqa: BLE001
+                results.append({"episode": ep, "skipped": f"err {str(e)[:50]}"})
+                continue
+            nc = store.upsert_wm_claims(claims) if claims else 0
+            nr = store.upsert_wm_rules(rules) if rules else 0
+            results.append({"episode": ep, "claims": nc, "rules": nr})
+            log.info("parallel extract %s: +%d claims +%d rules", ep, nc, nr)
+    return results

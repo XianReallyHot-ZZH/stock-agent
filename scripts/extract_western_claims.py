@@ -39,18 +39,16 @@ def main() -> None:
     if not paths:
         print(f"no transcripts found under {DOCS}")
         return
-    print(f"{len(paths)} transcript(s) to consider (--since={args.since})")
-    tot_c = tot_r = 0
-    for p in paths:
-        res = extract.process_episode(p, store, asof, force=args.force)
-        ep = res.get("episode", p.name)
+    print(f"{len(paths)} transcript(s); 顺序抽取(deepseek 并发降质→workers=1, 跳过已抽)...")
+    results = extract.process_episodes_parallel(paths, store, asof, force=args.force)
+    tot_c = sum(r.get("claims", 0) for r in results)
+    tot_r = sum(r.get("rules", 0) for r in results)
+    for res in results:
+        ep = res.get("episode", "?")
         if "skipped" in res:
-            print(f"  {ep}: skip ({res['skipped']})")
+            print(f"  {ep}: {res['skipped']}")
         else:
-            c, r = res.get("claims", 0), res.get("rules", 0)
-            tot_c += c
-            tot_r += r
-            print(f"  {ep}: +{c} claims, +{r} rules")
+            print(f"  {ep}: +{res.get('claims', 0)} claims, +{res.get('rules', 0)} rules")
     print(f"\n=== extract done: +{tot_c} claims, +{tot_r} rules ===")
 
 

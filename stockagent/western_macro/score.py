@@ -34,9 +34,9 @@ def _parse_date(h: str) -> Optional[str]:
 
 
 def _direction(start: float, end: float) -> str:
-    if not start or start <= 0:
+    if not start or abs(start) < 1e-9:
         return "flat"
-    r = (end - start) / start
+    r = (end - start) / abs(start)   # abs 分母 → 负值系列(如倒挂 2s10s 利差)方向也正确
     if r > _DIR_THRESHOLD:
         return "up"
     if r < -_DIR_THRESHOLD:
@@ -110,9 +110,10 @@ def settle_claim(claim: dict, store, asof: str) -> Optional[dict]:
         return None
     start = _value_at_or_after(s, ep)
     end = _value_at_or_before(s, hdate)
-    if start is None or end is None or start <= 0:
+    if start is None or end is None or abs(start) < 1e-9:
         return None
     actual = _direction(start, end)
+    note = f"{start:.2f}->{end:.2f}"
     ctype = claim.get("claim_type")
 
     if ctype == "range":
@@ -128,10 +129,39 @@ def settle_claim(claim: dict, store, asof: str) -> Optional[dict]:
         claimed = claim.get("direction")
         if not claimed:
             return None
+        # 路径感知:捕捉"中途回调/反弹"(端点法会漏掉"跌完又涨回")。窗口内显著波动≥3%即视为该方向发生
+        window = s[(s.index >= ep) & (s.index <= hdate)]
+        if len(window) < 2:
+            return None
+        mfe_up = (float(window.max()) - start) / abs(start)
+        mfe_down = (start - float(window.min())) / abs(start)
+        if mfe_down >= 0.03 and mfe_down >= mfe_up:
+            actual = "down"
+        elif mfe_up >= 0.03:
+            actual = "up"
+        else:
+            actual = _direction(start, end)  # 无显著波动 → 看端点
+        note += f" (中途波动{max(mfe_up, mfe_down) * 100:.0f}%)"
         hit = (actual == claimed)
         bdir = _prior_trend(s, ep, hdate)
-        baseline_hit = (actual == bdir) if bdir else (actual == "up")  # no history → always-up baseline
-    else:  # level / timing / event-horizon → manual
+        baseline_hit = (actual == bdir) if bdir else (actual == "up")
+    elif ctype == "level":
+        L = claim.get("level_value")
+        if L is None:
+            return None
+        window = s[(s.index >= ep) & (s.index <= hdate)]
+        if len(window) == 0:
+            return None
+        d = claim.get("direction")
+        wmax, wmin = float(window.max()), float(window.min())
+        if d == "down":
+            hit = (wmin <= L) and (actual == "down")   # 跌到L 且 整体确实跌(防"摸到就涨回"假命中)
+        elif d == "up":
+            hit = (wmax >= L) and (actual == "up")     # 涨到L 且 整体确实涨
+        else:
+            hit = wmin >= L                            # 守住/不破 L(支撑),不限方向
+        baseline_hit = False              # 精确点位=非随势,命中即 edge
+    else:  # timing / event-horizon → manual
         return None
 
     return {
@@ -143,7 +173,7 @@ def settle_claim(claim: dict, store, asof: str) -> Optional[dict]:
         "edge": 1 if (hit and not baseline_hit) else 0,
         "method": "auto",
         "settled_at": asof,
-        "note": f"{start:.2f}->{end:.2f}",
+        "note": note,
     }
 
 

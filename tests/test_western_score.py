@@ -82,3 +82,62 @@ def test_settle_scenario_alt_branch_skipped(tmp_path):
              "claim_type": "scenario", "direction": "down", "horizon": "2025-01-30",
              "is_primary": 0}  # alt branch → must be skipped
     assert score.settle_claim(claim, st, asof="2025-02-01") is None
+
+
+def test_settle_level_up_reached(tmp_path):
+    st = Store(tmp_path / "t.sqlite")
+    _seed_gold(st, [f"2025-01-{d:02d}" for d in range(1, 31)], [100 + i * 2 for i in range(30)])  # 100→158
+    claim = {"uid": "L1", "episode_date": "2025-01-01", "asset": "黄金", "claim_type": "level",
+             "direction": "up", "level_value": 150, "horizon": "2025-01-30", "is_primary": 1}
+    res = score.settle_claim(claim, st, asof="2025-02-01")
+    assert res and res["hit"] == 1 and res["edge"] == 1   # 摸到 150
+
+
+def test_settle_level_up_not_reached(tmp_path):
+    st = Store(tmp_path / "t.sqlite")
+    _seed_gold(st, [f"2025-01-{d:02d}" for d in range(1, 31)], [100 + i * 0.5 for i in range(30)])  # 100→114
+    claim = {"uid": "L2", "episode_date": "2025-01-01", "asset": "黄金", "claim_type": "level",
+             "direction": "up", "level_value": 150, "horizon": "2025-01-30", "is_primary": 1}
+    res = score.settle_claim(claim, st, asof="2025-02-01")
+    assert res and res["hit"] == 0                         # 最高 114 < 150
+
+
+def test_settle_level_support_held(tmp_path):
+    st = Store(tmp_path / "t.sqlite")
+    _seed_gold(st, [f"2025-01-{d:02d}" for d in range(1, 31)], [100] * 30)   # 平在 100,守住 90
+    claim = {"uid": "L3", "episode_date": "2025-01-01", "asset": "黄金", "claim_type": "level",
+             "direction": "flat", "level_value": 90, "horizon": "2025-01-30", "is_primary": 1}
+    res = score.settle_claim(claim, st, asof="2025-02-01")
+    assert res and res["hit"] == 1                         # 最低 100 >= 90
+
+
+def test_settle_level_down_touched_but_actual_up_miss(tmp_path):
+    # "跌到105":中途插针摸到102,但收在130(整体涨)→ 方向不符 → 未中(防假命中)
+    st = Store(tmp_path / "t.sqlite")
+    _seed_gold(st, ["2025-01-01", "2025-01-15", "2025-01-30"], [110, 102, 130])
+    claim = {"uid": "L4", "episode_date": "2025-01-01", "asset": "黄金", "claim_type": "level",
+             "direction": "down", "level_value": 105, "horizon": "2025-01-30", "is_primary": 1}
+    res = score.settle_claim(claim, st, asof="2025-02-01")
+    assert res and res["hit"] == 0                         # 摸到105但整体涨 → 未中
+
+
+def test_settle_direction_path_correction(tmp_path):
+    # "回调":100→92→101。端点+1%(震荡),但中途跌8%→路径感知下方向"跌"应命中(端点法会误判未中)
+    st = Store(tmp_path / "t.sqlite")
+    _seed_gold(st, ["2024-07-12", "2024-08-01", "2024-08-05", "2024-08-31"], [100, 99, 92, 101])
+    claim = {"uid": "P1", "episode_date": "2024-07-12", "asset": "黄金", "claim_type": "direction",
+             "direction": "down", "horizon": "2024-08-31", "is_primary": 1}
+    res = score.settle_claim(claim, st, asof="2024-09-01")
+    assert res and res["hit"] == 1 and res["actual_direction"] == "down"
+
+
+def test_settle_negative_series_spread(tmp_path):
+    # 2s10s 利差(可负):从 -0.27(倒挂)升到 +0.10(陡峭化)→ 方向"涨"应命中(旧 start<=0 守卫会拒)
+    st = Store(tmp_path / "t.sqlite")
+    df = pd.DataFrame([{"source": "ust", "symbol": "US2S10S", "date": d, "close": v}
+                       for d, v in [("2024-07-12", -0.27), ("2024-09-30", -0.10), ("2024-12-31", 0.10)]])
+    st.upsert_western_macro(df, source_tag="seed")
+    claim = {"uid": "N1", "episode_date": "2024-07-12", "asset": "2s10s", "claim_type": "direction",
+             "direction": "up", "horizon": "2024-12-31", "is_primary": 1}
+    res = score.settle_claim(claim, st, asof="2025-01-01")
+    assert res and res["hit"] == 1 and res["actual_direction"] == "up"
