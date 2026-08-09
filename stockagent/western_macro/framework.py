@@ -301,6 +301,35 @@ def _gold_micro_block(store, c: dict) -> str:
     return "".join(parts)
 
 
+def _gold_vs_chart(store, pairs: list, ylabel_right: str, c: dict, div_id: str, win: int = 500):
+    """黄金(左轴) vs 若干指标(右轴) 双Y轴对比图。pairs=[(label, asset_key, color), ...]。
+    看反向/同向/背离(黄金vs10Y对手盘、vs DXY反向、vs 2s10s陡峭化利好)。"""
+    gold = series_for("黄金", store)
+    if gold is None or len(gold) == 0:
+        return None
+    gold = gold.sort_index().iloc[-win:]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=pd.to_datetime(list(gold.index)), y=[float(v) for v in gold.values],
+                             name="黄金", line=dict(color=c["accent"], width=1.5),
+                             hovertemplate="黄金 %{x|%Y-%m-%d} %{y:.0f}<extra></extra>"))
+    for label, asset, col in pairs:
+        s = series_for(asset, store)
+        if s is None or len(s) == 0:
+            continue
+        s = s.sort_index().iloc[-win:]
+        fig.add_trace(go.Scatter(x=pd.to_datetime(list(s.index)), y=[float(v) for v in s.values],
+                                 name=label, line=dict(color=col, width=1.2), yaxis="y2",
+                                 hovertemplate=f"{label} %{{x|%Y-%m-%d}} %{{y:.2f}}<extra></extra>"))
+    fig.update_layout(margin=dict(l=56, r=56, t=4, b=22), height=220, showlegend=True,
+                      legend=dict(orientation="h", y=1.08, x=0, font=dict(size=9)),
+                      paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
+                      xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
+                      yaxis=dict(title=dict(text="黄金(USD)", font=dict(size=9)), gridcolor=c["border"]),
+                      yaxis2=dict(overlaying="y", side="right", showgrid=False,
+                                  title=dict(text=ylabel_right, font=dict(size=9))))
+    return fig
+
+
 def _gold_locator_block(store, c: dict) -> str:
     """🥇 黄金阶段定位器 v2: 价格结构+微观紧缺+利率美元驱动 → 阶段+驱动三栏+置信度+操作建议。"""
     from .gold_locator import gold_locate
@@ -358,9 +387,22 @@ def _gold_locator_block(store, c: dict) -> str:
         if fig is not None:
             price_html = fig.to_html(False, False, "locator_gold")
 
+    # 黄金 vs 关键驱动 双Y轴对比图(看反向/背离)
+    def _vs(pairs, title, yright, div):
+        fig = _gold_vs_chart(store, pairs, yright, c, div)
+        if fig is None:
+            return ""
+        return f'<div class="chart-t" style="margin-top:10px">{title}</div>' + fig.to_html(False, False, div)
+
+    vs_html = (
+        _vs([("2Y", "美债2Y", c["ink2"]), ("10Y", "美债10Y", c["miss"])],
+            "黄金 vs 美债收益率(对手盘·通常反向; 同涨=框架脱钩)", "收益率 %", "vs_rates")
+        + _vs([("DXY", "美元指数", c["miss"])], "黄金 vs 美元指数 DXY(反向)", "DXY", "vs_dxy")
+        + _vs([("2s10s", "2s10s", c["edge"])], "黄金 vs 2s10s 利差(陡峭化↑=利好)", "利差", "vs_curve"))
+
     return ('<div class="chart"><div class="chart-t">🥇 黄金阶段定位器 '
             '<span class="muted">(价格结构+微观紧缺+利率美元驱动 · 框架四层判定 · 只读不喂引擎 ADR-0001)</span></div>'
-            + head + panel + action + warns + price_html + '</div>')
+            + head + panel + action + warns + price_html + vs_html + '</div>')
 
 
 def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
@@ -392,8 +434,8 @@ def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
         node_html.append("\n".join(parts))
 
     n_valid = sum(1 for an in an_by_asset.values() if an.get("valid"))
-    gold_micro_html = _gold_micro_block(store, D)
-    locator_html = _gold_locator_block(store, D)
+    gold_micro_html = _gold_micro_block(store, L)
+    locator_html = _gold_locator_block(store, L)
     html = f"""<!doctype html><html lang="zh" data-theme="light"><head><meta charset="utf-8">
 <title>宏观框架看板 · {asof}</title>
 <style>
