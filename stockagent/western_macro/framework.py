@@ -212,6 +212,85 @@ def _overview_table(an_by_asset: dict, c: dict) -> str:
             + "".join(rows) + "</table>")
 
 
+def _gold_micro_block(store, c: dict) -> str:
+    """🔬 黄金微观紧缺(L2/L3/L4 实证): COMEX库存 / CFTC非商业(投机)净仓位+分位 / 央行购金节奏。
+    JZ 框架的微观证据层: 库存↓=紧缺, 投机净多单极值=泡沫预警, 央行购金=底的锚。"""
+    ci = store.get_comex_inventory("GC")
+    cf = store.get_cftc_position("GC")
+    cb = store.get_cb_gold("CN")
+    if ci.empty and cf.empty and cb.empty:
+        return ('<div class="chart"><div class="chart-t">🔬 黄金微观紧缺</div>'
+                '<div class="muted">无微观数据。先跑 <code>python scripts/backfill_gold_micro.py</code>。</div></div>')
+
+    def chip(label, val, sub="", color=None):
+        vs = f' style="color:{color}"' if color else ""
+        return (f'<div class="card"><div class="card-v"{vs}>{val}</div><div class="card-l">{label}</div>'
+                f'{f"<div class=card-s>{sub}</div>" if sub else ""}</div>')
+
+    # chips
+    chips = ['<div class="cards">']
+    if not ci.empty:
+        last = float(ci.iloc[-1])
+        yago = float(ci.iloc[-252]) if len(ci) > 252 else float(ci.iloc[0])
+        chg = (last / yago - 1) * 100
+        col = c["miss"] if chg < -5 else (c["edge"] if chg > 5 else c["ink2"])
+        chips.append(chip("COMEX金库存", f"{last:.0f}吨", f"近1年 {chg:+.0f}%", col))
+    if not cf.empty:
+        net = cf["net_pos"].astype(float)
+        cur = float(net.iloc[-1])
+        look = net.iloc[-104:] if len(net) > 104 else net   # 近2年
+        pct = float((look < cur).sum()) / len(look) if len(look) else 0.5
+        col = c["hit"] if pct >= 0.85 else (c["edge"] if pct <= 0.15 else c["ink2"])
+        chips.append(chip("投机净仓位", f"{cur/1000:+.0f}k", f"近2年分位 {pct:.0%}（≥85%泡沫）", col))
+    if not cb.empty:
+        moms = cb["mom"].astype(float).iloc[-12:]
+        avg = float(moms.mean()) if len(moms) else 0.0
+        chips.append(chip("央行(中国)购金", f"+{avg:.2f}%/月", f"近12月均值 @ {cb.index[-1]}", c["accent"]))
+    chips.append('</div>')
+    parts = [f'<div class="chart"><div class="chart-t">🔬 黄金微观紧缺 '
+             f'<span class="muted">(L2库存/L3紧缺/L4投机泡沫 · JZ 框架微观证据 · GOFO/全球ETF无源待补)</span></div>',
+             "".join(chips)]
+
+    # 图: COMEX库存 (近2y)
+    if not ci.empty:
+        s = ci.iloc[-500:]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=pd.to_datetime(list(s.index)), y=[float(v) for v in s.values],
+                                 mode="lines", name="COMEX金库存", line=dict(color=c["accent"], width=1.4),
+                                 fill="tozeroy", hovertemplate="%{x|%Y-%m-%d}  %{y:.0f}吨<extra></extra>"))
+        fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=180, showlegend=False,
+                          paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
+                          xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
+                          yaxis=dict(title="吨", gridcolor=c["border"]))
+        parts.append(f'<div class="chart-t" style="margin-top:8px">COMEX 黄金库存(吨 · ↓=紧缺/逼空压力)</div>' + fig.to_html(False, False, "micro_comex"))
+
+    # 图: CFTC 投机净仓位 + 泡沫分位带 (近3y)
+    if not cf.empty:
+        net = cf["net_pos"].astype(float).iloc[-156:]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=pd.to_datetime(list(net.index)), y=[float(v) for v in net.values],
+                                 mode="lines", name="投机净仓位", line=dict(color=c["hit"], width=1.4),
+                                 hovertemplate="%{x|%Y-%m-%d}  净 %{y:,.0f}<extra></extra>"))
+        hi = float(cf["net_pos"].astype(float).iloc[-156:].quantile(0.85)) if len(cf) > 10 else 0
+        fig.add_hline(y=hi, line_dash="dot", line_color=c["miss"], annotation_text="85%分位(泡沫区)", annotation_font_size=9)
+        fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=180, showlegend=False,
+                          paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
+                          xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
+                          yaxis=dict(title="净仓位(手)", gridcolor=c["border"]))
+        parts.append('<div class="chart-t" style="margin-top:8px">CFTC 非商业(投机)净仓位(↑极值=泡沫预警)</div>' + fig.to_html(False, False, "micro_cftc"))
+
+    # 图: 央行购金 (中国, 月频, 末段2y)
+    if not cb.empty:
+        sub = cb.iloc[-24:]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=pd.to_datetime(list(sub.index)), y=sub["value"].astype(float).values,
+                             name="黄金储备", marker_color=c["accent"], yaxis="y",
+                             hovertemplate="%{x|%Y-%m}  %{y:.0f}<extra></extra>"))
+        parts.append('<div class="chart-t" style="margin-top:8px">中国央行黄金储备(月 · 持续增持=底的锚)</div>' + fig.to_html(False, False, "micro_cb"))
+    parts.append('</div>')
+    return "".join(parts)
+
+
 def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
     """渲染宏观框架看板 → data/macro_framework.html (纯数据·只读·不喂引擎)。"""
     from .dashboard import _DARK, _LIGHT, _css, _driver_svg
@@ -241,6 +320,7 @@ def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
         node_html.append("\n".join(parts))
 
     n_valid = sum(1 for an in an_by_asset.values() if an.get("valid"))
+    gold_micro_html = _gold_micro_block(store, D)
     html = f"""<!doctype html><html lang="zh" data-theme="light"><head><meta charset="utf-8">
 <title>宏观框架看板 · {asof}</title>
 <style>
@@ -277,6 +357,9 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 {_overview_table(an_by_asset, L)}
 
 {''.join(node_html)}
+
+<h2>🔬 黄金微观紧缺(L2/L3/L4 实证 · JZ 框架微观证据)</h2>
+{gold_micro_html}
 
 <div class="foot">
 ⚠ 纯数据诊断看板, 不构成投资建议。阶段/位置标签由价格结构规则(MA60 + 近12月偏离/水平分位)给出, 非预测。

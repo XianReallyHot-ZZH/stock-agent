@@ -15,6 +15,7 @@ import threading
 import time
 from datetime import datetime
 from typing import Optional
+import re
 
 import akshare as ak
 import numpy as np
@@ -1242,3 +1243,101 @@ def reconstruct_dxy_series(leg_closes: dict) -> pd.Series:
     for pair, w in _DXY_WEIGHTS.items():
         prod = prod * (aligned[pair].astype(float) ** w)
     return prod.sort_index()
+
+
+# ---- 黄金微观紧缺数据 (COMEX 库存 / CFTC 非商业持仓 / 央行购金) · 只读旁路 ADR-0001 ----
+# JZ 框架 L2/L3/L4 证据: 库存↓=紧缺/逼空, CFTC非商业(投机)净多单极值=泡沫预警, 央行购金=底的锚。
+# 数据缺口(无免费源): GOFO/租赁利率(LBMA 2015 停发)、全球 ETF(GLD/IAU)流、商业(merchant)持仓(另一CME端点,格式杂,后续)。
+_COMEX_SYM = {"黄金": "GC", "白银": "SI"}
+_CFTC_SYM = {"黄金": "GC", "白银": "SI"}
+_CB_MONTH_RE = re.compile(r"(\d{4})年\s*(\d{1,2})月份")
+
+
+def _retry_ak(fn, retries: int = 2, delay: float = 1.0, **kw):
+    """简单重试包装 ak 调用(ak 易被拦/RemoteDisconnected)。"""
+    last = None
+    for _ in range(retries + 1):
+        try:
+            return fn(**kw)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(delay)
+    raise FetchError(f"ak 调用重试耗尽: {last}")
+
+
+def _norm_date(v) -> Optional[str]:
+    """各种日期形态 → 'YYYY-MM-DD'。"""
+    try:
+        return pd.to_datetime(v).strftime("%Y-%m-%d")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def parse_comex_inventory(df, cn_symbol: str = "黄金") -> list[dict]:
+    """ak.futures_comex_inventory 的 df → [{symbol,date,tonnes,ounces}]。"""
+    sym = _COMEX_SYM.get(cn_symbol, cn_symbol)
+    if df is None or len(df) == 0:
+        return []
+    col_t, col_o = f"COMEX{cn_symbol}库存量-吨", f"COMEX{cn_symbol}库存量-盎司"
+    out = []
+    for _, r in df.iterrows():
+        d = _norm_date(r.get("日期"))
+        if not d:
+            continue
+        out.append({"symbol": sym, "date": d, "tonnes": r.get(col_t), "ounces": r.get(col_o)})
+    return out
+
+
+def fetch_comex_inventory(cn_symbol: str = "黄金", retries: int = 2) -> list[dict]:
+    df = _retry_ak(ak.futures_comex_inventory, retries=retries, symbol=cn_symbol)
+    return parse_comex_inventory(df, cn_symbol)
+
+
+def parse_cftc_speculative(df, cn_assets: tuple = ("黄金", "白银")) -> list[dict]:
+    """ak.macro_usa_cftc_c_holding (CFTC 商品类非商业/投机持仓, 宽表) → [{symbol,date,long_pos,short_pos,net_pos}]。
+    非商业=投机/large speculator; 净多单极值=泡沫预警(JZ)。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for cn, sym in _CFTC_SYM.items():
+        if cn not in cn_assets:
+            continue
+        col_l, col_s, col_n = f"{cn}-多头仓位", f"{cn}-空头仓位", f"{cn}-净仓位"
+        if col_l not in df.columns or col_n not in df.columns:
+            continue
+        for _, r in df.iterrows():
+            d = _norm_date(r.get("日期"))
+            if not d:
+                continue
+            out.append({"symbol": sym, "date": d,
+                        "long_pos": r.get(col_l), "short_pos": r.get(col_s), "net_pos": r.get(col_n)})
+    return out
+
+
+def fetch_cftc_speculative(retries: int = 2) -> list[dict]:
+    df = _retry_ak(ak.macro_usa_cftc_c_holding, retries=retries)
+    return parse_cftc_speculative(df)
+
+
+def parse_cb_gold(df, country: str = "CN") -> list[dict]:
+    """ak.macro_china_fx_gold (月频, 'YYYY年MM月份') → [{country,date,value,yoy,mom}]。跳过缺值。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        m = _CB_MONTH_RE.match(str(r.get("月份") or ""))
+        if not m:
+            continue
+        d = f"{m.group(1)}-{int(m.group(2)):02d}-01"
+        val = r.get("黄金储备-数值")
+        if val is None or val != val:   # NaN 跳过(早期未公布)
+            continue
+        out.append({"country": country, "date": d, "value": val,
+                    "yoy": r.get("黄金储备-同比"), "mom": r.get("黄金储备-环比")})
+    return out
+
+
+def fetch_cb_gold(country: str = "CN", retries: int = 2) -> list[dict]:
+    df = _retry_ak(ak.macro_china_fx_gold, retries=retries)
+    return parse_cb_gold(df, country)
+

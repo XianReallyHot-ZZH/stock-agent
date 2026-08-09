@@ -1,0 +1,91 @@
+"""黄金微观紧缺数据单测: 解析 helper + store 往返。"""
+import datetime
+
+import pandas as pd
+
+from stockagent.data import fetcher
+from stockagent.data.store import Store
+
+
+def _store(tmp_path):
+    return Store(tmp_path / "t.sqlite")
+
+
+# ---- COMEX 库存解析 ----
+def test_parse_comex_inventory():
+    df = pd.DataFrame([
+        {"序号": 1, "日期": datetime.date(2026, 8, 5), "COMEX黄金库存量-吨": 838.0, "COMEX黄金库存量-盎司": 2.69e7},
+        {"序号": 2, "日期": datetime.date(2026, 8, 6), "COMEX黄金库存量-吨": 835.5, "COMEX黄金库存量-盎司": 2.68e7},
+    ])
+    rows = fetcher.parse_comex_inventory(df, "黄金")
+    assert len(rows) == 2
+    assert rows[0] == {"symbol": "GC", "date": "2026-08-05", "tonnes": 838.0, "ounces": 2.69e7}
+    assert rows[1]["symbol"] == "GC" and rows[1]["date"] == "2026-08-06"
+
+
+def test_parse_comex_empty():
+    assert fetcher.parse_comex_inventory(None, "黄金") == []
+    assert fetcher.parse_comex_inventory(pd.DataFrame(), "黄金") == []
+
+
+# ---- CFTC 非商业(投机)持仓解析 ----
+def test_parse_cftc_speculative():
+    df = pd.DataFrame([
+        {"日期": "2026-08-04", "黄金-多头仓位": 250000, "黄金-空头仓位": 52000, "黄金-净仓位": 198000,
+         "白银-多头仓位": 60000, "白银-空头仓位": 30000, "白银-净仓位": 30000},
+    ])
+    rows = fetcher.parse_cftc_speculative(df)
+    by_sym = {r["symbol"]: r for r in rows}
+    assert by_sym["GC"]["net_pos"] == 198000 and by_sym["GC"]["date"] == "2026-08-04"
+    assert by_sym["SI"]["net_pos"] == 30000
+
+
+def test_parse_cftc_missing_col_skipped():
+    # 无黄金列 → 该 symbol 跳过(不崩)
+    df = pd.DataFrame([{"日期": "2026-08-04", "白银-多头仓位": 1, "白银-空头仓位": 1, "白银-净仓位": 0}])
+    rows = fetcher.parse_cftc_speculative(df, cn_assets=("黄金", "白银"))
+    assert all(r["symbol"] == "SI" for r in rows) and len(rows) == 1
+
+
+# ---- 央行黄金储备解析 ----
+def test_parse_cb_gold():
+    df = pd.DataFrame([
+        {"月份": "2008年01月份", "黄金储备-数值": float("nan"), "黄金储备-同比": float("nan"), "黄金储备-环比": float("nan")},
+        {"月份": "2026年7月份", "黄金储备-数值": 3064.0, "黄金储备-同比": 8.6, "黄金储备-环比": 0.3},
+    ])
+    rows = fetcher.parse_cb_gold(df)
+    assert len(rows) == 1                       # NaN 行跳过
+    assert rows[0]["country"] == "CN" and rows[0]["date"] == "2026-07-01"
+    assert rows[0]["value"] == 3064.0 and rows[0]["mom"] == 0.3
+
+
+def test_norm_date_variants():
+    assert fetcher._norm_date(datetime.date(2026, 8, 5)) == "2026-08-05"
+    assert fetcher._norm_date("2026-08-04") == "2026-08-04"
+    assert fetcher._norm_date("junk") is None
+
+
+# ---- store 往返 ----
+def test_store_roundtrip(tmp_path):
+    st = _store(tmp_path)
+    st.upsert_comex_inventory([{"symbol": "GC", "date": "2026-08-05", "tonnes": 838.0, "ounces": 2.69e7},
+                               {"symbol": "GC", "date": "2026-08-06", "tonnes": 835.5, "ounces": 2.68e7}])
+    ci = st.get_comex_inventory("GC")
+    assert list(ci.index) == ["2026-08-05", "2026-08-06"]
+    assert ci.iloc[-1] == 835.5
+
+    st.upsert_cftc_position([{"symbol": "GC", "date": "2026-08-04", "long_pos": 250000,
+                              "short_pos": 52000, "net_pos": 198000}])
+    cf = st.get_cftc_position("GC")
+    assert cf.loc["2026-08-04", "net_pos"] == 198000.0
+
+    st.upsert_cb_gold([{"country": "CN", "date": "2026-07-01", "value": 3064.0, "yoy": 8.6, "mom": 0.3}])
+    cb = st.get_cb_gold("CN")
+    assert cb.loc["2026-07-01", "value"] == 3064.0
+
+
+def test_store_empty_gets(tmp_path):
+    st = _store(tmp_path)
+    assert st.get_comex_inventory("GC").empty
+    assert st.get_cftc_position("GC").empty
+    assert st.get_cb_gold("CN").empty

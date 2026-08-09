@@ -45,6 +45,7 @@ python scripts/backfill_western_macro.py                          # 回填 UST/�
 python scripts/extract_western_claims.py --since 2026-08-01       # LLM 抽 DRAFT claim（幂等·跳过已抽；--force 重抽保 confirmed 状态）
 python scripts/western_macro_report.py --extract                  # 结算到期 claim + 渲染 data/western_macro.html（看板 only·无微信）
 python scripts/macro_framework_report.py                          # 渲染宏观框架看板 data/macro_framework.html（纯数据跟踪·沿因果链 利率→曲线→美元→金属→能源→权益·无claim/台账）
+python scripts/backfill_gold_micro.py                             # 回填黄金微观紧缺数据(COMEX库存/CFTC非商业投机持仓/央行购金)→专表（幂等·只读 ADR-0001）
 
 # 实盘
 python scripts/run_morning_report.py --force   # 生成+推送晨报

@@ -801,6 +801,40 @@ class DataManager:
             self.store.set_meta("last_western_macro_update", fetcher.today_str())
         return groups
 
+    def update_gold_micro(self) -> dict:
+        """抓取并入库黄金微观紧缺数据(COMEX 库存/CFTC 商业持仓/央行购金)→ 专表。幂等, 逐组容错。
+        JZ 框架 L2/L3/L4 证据。Returns {group: rows}。"""
+        out = {"comex": 0, "cftc": 0, "cb": 0}
+        # COMEX 库存(黄金+白银)
+        for cn in ("黄金", "白银"):
+            try:
+                rows = fetcher.fetch_comex_inventory(cn)
+                n = self.store.upsert_comex_inventory(rows)
+                out["comex"] += n
+                log.info("gold-micro comex %s: +%d rows", cn, n)
+            except Exception as e:  # noqa: BLE001
+                log.warning("gold-micro comex %s failed: %s", cn, str(e)[:100])
+            time.sleep(0.3)
+        # CFTC 非商业(投机)持仓(黄金+白银, 一次调用)
+        try:
+            rows = fetcher.fetch_cftc_speculative()
+            n = self.store.upsert_cftc_position(rows)
+            out["cftc"] = n
+            log.info("gold-micro cftc(投机): +%d rows", n)
+        except Exception as e:  # noqa: BLE001
+            log.warning("gold-micro cftc failed: %s", str(e)[:100])
+        # 央行黄金储备(中国, 月频)
+        try:
+            rows = fetcher.fetch_cb_gold()
+            n = self.store.upsert_cb_gold(rows)
+            out["cb"] = n
+            log.info("gold-micro cb(CN): +%d rows", n)
+        except Exception as e:  # noqa: BLE001
+            log.warning("gold-micro cb failed: %s", str(e)[:100])
+        if any(out.values()):
+            self.store.set_meta("last_gold_micro_update", fetcher.today_str())
+        return out
+
 
 def _recent_report_periods(n: int = 8) -> list[str]:
     """最近 n 个报告期(季末 YYYYMMDD,从今天往回,降序)。季末:3-31/6-30/9-30/12-31。"""

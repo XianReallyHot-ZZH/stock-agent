@@ -8,6 +8,23 @@ from typing import Iterable, Optional
 
 import pandas as pd
 
+
+def _num(x):
+    """数值列强转: None/NaN → None, 否则 float。供 upsert 数值列用。"""
+    if x is None:
+        return None
+    try:
+        if isinstance(x, float) and pd.isna(x):
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        f = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if f != f else f  # NaN guard
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_prices (
     symbol TEXT NOT NULL,
@@ -181,6 +198,26 @@ CREATE TABLE IF NOT EXISTS western_macro_series (
     PRIMARY KEY (source, symbol, date)
 );
 CREATE INDEX IF NOT EXISTS idx_western_macro_symbol ON western_macro_series(symbol);
+CREATE TABLE IF NOT EXISTS comex_inventory (   -- 黄金微观·紧缺实证(L2/L3) · 只读旁路 ADR-0001
+    symbol TEXT NOT NULL,                       -- GC 黄金 / SI 白银
+    date   TEXT NOT NULL,
+    tonnes REAL,                                -- COMEX 库存(吨)
+    ounces REAL,                                -- COMEX 库存(盎司)
+    PRIMARY KEY (symbol, date)
+);
+CREATE TABLE IF NOT EXISTS cftc_position (      -- CFTC 非商业持仓(投机)·泡沫预警(L4)
+    symbol   TEXT NOT NULL,                      -- GC 黄金 / SI 白银
+    date     TEXT NOT NULL,                      -- 周频(周二报告)
+    long_pos REAL, short_pos REAL, net_pos REAL, -- 非商业(投机/large spec)多/空/净仓位
+    PRIMARY KEY (symbol, date)
+);
+CREATE TABLE IF NOT EXISTS cb_gold (            -- 央行黄金储备·底的锚(L1/L2) · 月频
+    country TEXT NOT NULL,                       -- CN 中国(后续可扩 RU/IN...)
+    date    TEXT NOT NULL,                       -- YYYY-MM-01
+    value   REAL,                                -- 黄金储备(吨或万盎司,随源)
+    yoy     REAL, mom REAL,                      -- 同比/环比(%)
+    PRIMARY KEY (country, date)
+);
 CREATE TABLE IF NOT EXISTS wm_claims (
     uid          TEXT PRIMARY KEY,   -- 稳定 hash(episode_date|asset|type|statement 规范化)→ 幂等再抽取
     episode_date TEXT NOT NULL,      -- 哪一期说的 (YYYY-MM-DD)
@@ -1170,6 +1207,76 @@ class Store:
                 "SELECT MAX(date) FROM western_macro_series WHERE source=? AND symbol=?",
                 (source, symbol)).fetchone()
             return row[0] if row and row[0] else None
+
+    # ---- 黄金微观紧缺数据 (comex_inventory / cftc_position / cb_gold · L2/L3/L4) ----
+    def upsert_comex_inventory(self, rows: list[dict]) -> int:
+        """rows: {symbol,date,tonnes,ounces}。幂等。"""
+        if not rows:
+            return 0
+        payload = [(r["symbol"], r["date"],
+                    _num(r.get("tonnes")), _num(r.get("ounces")))
+                   for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO comex_inventory(symbol,date,tonnes,ounces) VALUES(?,?,?,?) "
+                "ON CONFLICT(symbol,date) DO UPDATE SET tonnes=excluded.tonnes,ounces=excluded.ounces",
+                payload)
+        return len(payload)
+
+    def get_comex_inventory(self, symbol: str = "GC") -> pd.Series:
+        """COMEX 库存(吨)序列, date 升序 index=date。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT date,tonnes FROM comex_inventory WHERE symbol=? ORDER BY date", c, params=(symbol,))
+        if df.empty:
+            return pd.Series(dtype=float)
+        return df.set_index("date")["tonnes"].astype(float)
+
+    def upsert_cftc_position(self, rows: list[dict]) -> int:
+        """rows: {symbol,date,long_pos,short_pos,net_pos}。幂等。"""
+        if not rows:
+            return 0
+        payload = [(r["symbol"], r["date"],
+                    _num(r.get("long_pos")), _num(r.get("short_pos")), _num(r.get("net_pos")))
+                   for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO cftc_position(symbol,date,long_pos,short_pos,net_pos) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(symbol,date) DO UPDATE SET long_pos=excluded.long_pos,"
+                "short_pos=excluded.short_pos,net_pos=excluded.net_pos", payload)
+        return len(payload)
+
+    def get_cftc_position(self, symbol: str = "GC") -> pd.DataFrame:
+        """CFTC 非商业(投机)持仓 DataFrame(date 升序 index=date, cols=long/short/net)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT date,long_pos,short_pos,net_pos FROM cftc_position WHERE symbol=? ORDER BY date",
+                c, params=(symbol,))
+        if df.empty:
+            return pd.DataFrame(columns=["long_pos", "short_pos", "net_pos"])
+        return df.set_index("date").astype(float)
+
+    def upsert_cb_gold(self, rows: list[dict]) -> int:
+        """rows: {country,date,value,yoy,mom}。幂等。"""
+        if not rows:
+            return 0
+        payload = [(r["country"], r["date"],
+                    _num(r.get("value")), _num(r.get("yoy")), _num(r.get("mom"))) for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO cb_gold(country,date,value,yoy,mom) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(country,date) DO UPDATE SET value=excluded.value,yoy=excluded.yoy,mom=excluded.mom",
+                payload)
+        return len(payload)
+
+    def get_cb_gold(self, country: str = "CN") -> pd.DataFrame:
+        """央行黄金储备 DataFrame(date 升序 index=date, cols=value/yoy/mom)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT date,value,yoy,mom FROM cb_gold WHERE country=? ORDER BY date", c, params=(country,))
+        if df.empty:
+            return pd.DataFrame(columns=["value", "yoy", "mom"])
+        return df.set_index("date")
 
     # ---- western-macro prediction ledger (wm_claims / wm_settlements / wm_rules) ----
     def upsert_wm_claims(self, rows: list[dict]) -> int:
