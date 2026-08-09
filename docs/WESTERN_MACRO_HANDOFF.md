@@ -7,9 +7,10 @@
 **黄金阶段定位器 MVP 完成**(stage.py + wm_gold_stage_eval.py + 看板块 + 32 测试;闸门 56% 未过→降级辅助参考,详见末段)。
 **宏观 call 实时确认视图完成**(live.py + 看板块 + 15 测试;方向语言资产的「定位」落地,用上真 edge)。
 **★ 宏观框架看板完成(北向目标达成)**(`framework.py` + `macro_framework_report.py` + 9 测试;`data/macro_framework.html`)—— 把博主思维框架做成**纯数据跟踪+分析**看板:沿因果链 利率→曲线→美元→金属→能源→权益 铺开,每资产 `asset_analysis` 给趋势/位置/结构标签(price=5阶段 / yield=水平分位高/中/低+趋势 / curve=倒挂+陡峭/趋平) + 总览表 + 分节点图 + 因果框架图。**不含 claim/台账/命中率**(用户定调:不再纠结准不准)。黄金阶段定位器已抽进金属节点。
-- **战略转向(用户 2026-08-09 定调)**:prediction-ledger 实验已给结论(edge 在利率方向 / 美股看空死穴 / 黄金阶段 56%),**继续抠命中率无意义**。北向目标 = 框架数据看板(本段),ledger 收敛为「预测台账(历史档案)」。实时确认块意义有限,置顶 ledger 看板备忘、随新转写稿迭代。
-- **当前快照(2026-08-09,框架看板实证)**:美债2Y/10Y/30Y 全「高位·上行」;2s10s「正常·陡峭化」(倒挂已修正);DXY「回调下跌」;黄金「反弹初期」;白银/原油「回调下跌」;铜/美股「趋势上行」,道指「头部区域」(偏离90%)。
-- **立即任务(待用户拍板)**:① 框架看板日常迭代(加资产/指标,如真实利率 TIPs、期限溢价、CPI/就业等宏观指标);② 把框架看板接入 `dashboards` skill 一键刷新;③ 黄金阶段 P2(多时间尺度筑底/回调判别)仍可做但非优先。
+**★★ 黄金阶段定位器 v2 完成(旗舰·修复 v1 失败)**(`gold_locator.py` + `test_gold_locator.py` 9 测 + 框架看板「🥇黄金阶段定位器」section)。v1 纯价格结构 56% 失败=分不清牛市回调vs终局底;v2 = 价格结构(L3)+微观紧缺+利率/美元驱动,用 **bull_intact(央行购金>0 AND 期限溢价1年↑ OR 实际利率1年↓)** 判底层:bull_intact 时价格"回调/筑底"→"牛市回调(加仓位)"。出 阶段+驱动三栏(底层/中期/短期)+置信度+条件化操作建议(双向防守)。
+- **当前实证(2026-08-09)**:黄金 反弹初期 / bull_intact=True(央行+2吨/月+期限溢价1年↑)→ 操作"切波段→持有,回调加仓不空仓不做空"(**与 JZ 2026-08-07 原话一致,纯数据推出**) / 信心中(实际利率↑逆风拉低)+warning 库存紧缺。
+- **战略转向(用户 2026-08-09 定调)**:prediction-ledger 实验已给结论(edge 在利率方向 / 美股看空死穴 / 黄金阶段 56%),**继续抠命中率无意义**。北向目标 = 框架数据看板 + 黄金定位器(本段),ledger 收敛为「预测台账(历史档案)」。实时确认块置顶 ledger 备忘。
+- **立即任务(待用户拍板)**:① 把宏观框架看板接入 `dashboards` skill 一键刷新;② 黄金定位器迭代(如 bull_intact 阈值调优、加 CPI/就业/地缘事件因子);③ 旧 ledger 看板定位收敛为历史档案。
 
 ## 👤 用户投资哲学(决定怎么 build,务必内化)
 - **不要预测精确时点/价位**(永远买卖不到极值);追求**大概率方向 + 大致区间 + 大致操作**。
@@ -40,10 +41,10 @@
 - `stockagent/data/store.py`:`western_macro_series`(source/symbol/date,close 统一承载价格或收益率)+ `wm_claims/settlements/rules` 表 + 方法(注意:重抽 upsert 不覆盖 state)。
 - `stockagent/data/fetcher.py`:`fetch_us_treasury`(bond_zh_us_rate)/`fetch_us_index`(index_us_stock_sina .INX/.IXIC/.DJI)/`fetch_foreign_future`(futures_foreign_hist GC/SI/CL/OIL)/`fetch_forex_pair`(forex_hist_em,push2his 常被拦)+ `fetch_forex_pairs_ecb`(Frankfurter/ECB fallback,6腿EUR-cross换算USD-base)+ `reconstruct_dxy(_series)`(ICE 6腿公式,abs无须)。
 - `stockagent/data/manager.py`:`update_western_macro()`(AkShare forex 失败→ECB fallback)。
-- `stockagent/western_macro/`:`drivers.py`(canonical 15节点因果图+ASSET映射在extract.py)·`extract.py`(LLM抽DRAFT;`normalize_horizon`年份自纠;空响应重试;`process_episodes_parallel`默认workers=1)·`score.py`(评分;`series_for`支持fut/usidx/ust/dxy/index_daily/commodity)·`dashboard.py`(HTML+Plotly时序图:发布日→兑现日窗口+断言点+level目标线+状态列+**🥇黄金阶段块**+**📡实时确认块**)·`stage.py`(黄金阶段定位器 MVP: MA60+近12月偏离分位→5阶段决策树 + 词映射 + 一致性回测 + 置信度;复用 tracker.indicators/diagnose)·`live.py`(宏观call实时确认: 未到期断言→兑现中/背离/停滞 + 按标的聚合JZ净方向;复用 score 点在时helper)·`framework.py`(★北向目标 宏观框架看板: 纯数据沿因果链 利率→曲线→美元→金属→能源→权益,每资产 asset_analysis 给趋势/位置/结构标签(price=5阶段/yield=水平分位+趋势/curve=倒挂+陡峭) + 总览表+分节点图;复用 stage.classify_stage/dashboard 主题与黄金阶段块;无claim/台账)。
+- `stockagent/western_macro/`:`drivers.py`(canonical 15节点因果图+ASSET映射在extract.py)·`extract.py`(LLM抽DRAFT;`normalize_horizon`年份自纠;空响应重试;`process_episodes_parallel`默认workers=1)·`score.py`(评分;`series_for`支持fut/usidx/ust/dxy/index_daily/commodity)·`dashboard.py`(HTML+Plotly时序图:发布日→兑现日窗口+断言点+level目标线+状态列+**🥇黄金阶段块**+**📡实时确认块**)·`stage.py`(黄金阶段定位器 MVP: MA60+近12月偏离分位→5阶段决策树 + 词映射 + 一致性回测 + 置信度;复用 tracker.indicators/diagnose)·`live.py`(宏观call实时确认: 未到期断言→兑现中/背离/停滞 + 按标的聚合JZ净方向;复用 score 点在时helper)·`framework.py`(★北向目标 宏观框架看板: 纯数据沿因果链 利率→曲线→美元→金属→能源→权益,每资产 asset_analysis 给趋势/位置/结构标签(price=5阶段/yield=水平分位+趋势/curve=倒挂+陡峭) + 总览表+分节点图;复用 stage.classify_stage/dashboard 主题与黄金阶段块;无claim/台账)·`gold_locator.py`(★★旗舰 黄金阶段定位器v2: 价格结构+微观紧缺+利率美元驱动→阶段+驱动三栏+置信度+操作建议;bull_intact判底层修复v1回调vs底;复用 stage.gold_stage_snapshot+微观 getters)。
 - `scripts/`:`backfill_western_macro.py`·`backfill_gold_micro.py`(COMEX库存/CFTC非商业投机持仓/央行购金→专表)·`extract_western_claims.py`·`western_macro_report.py`(结算+渲染+开 ledger)·`wm_confirm.py`(审核CLI)·`wm_audit.py`(抽样审计)·`wm_gold_stage_eval.py`(黄金阶段回测闸门+混淆矩阵+--sweep标定)·`macro_framework_report.py`(渲染宏观框架看板 data/macro_framework.html·纯数据)。
 - **黄金微观紧缺数据**(JZ 框架 L2/L3/L4 证据, 框架来源 `docs/western_macro/GOLD_FRAMEWORK.md`): store 专表 `comex_inventory`/`cftc_position`(投机GC+商业GC_M)/`cb_gold`(实物万盎司); fetcher `fetch_comex_inventory`/`fetch_cftc_speculative`+`fetch_cftc_commercial`/`fetch_cb_gold`(实物); FRED `fetch_fred_series`(DFII10实际利率/T10YIE通胀预期)+ NY Fed `fetch_acm_term_premium`(ACMTP10期限溢价)→western_macro_series; 利率节点含 实际利率/通胀预期/期限溢价; 框架看板「🔬黄金微观」块。**唯一真缺口=GOFO租赁利率**(LBMA 2015停发)+全球ETF(GLD/IAU)。FRED/NYFed=非-akshare免费源(同ECB外汇先例·用户授权)。
-- 测试:`tests/test_western_macro.py`(DXY公式+store)·`tests/test_western_score.py`(~15个:edge/baseline/路径感知/负值系列/点位方向一致)。
+- 测试:`tests/test_western_macro.py`(DXY公式+store)·`tests/test_western_score.py`(~15个:edge/baseline/路径感知/负值系列/点位方向一致)·`tests/test_western_stage.py`(32:阶段决策树/词映射/回测)·`tests/test_western_live.py`(15:实时确认)·`tests/test_western_framework.py`(9:框架看板asset_analysis)·`tests/test_western_gold_micro.py`(9:微观fetch/parse)·`tests/test_gold_locator.py`(9:定位器驱动/bull_intact/精炼/操作)。
 
 ## ⚠️ 已踩平的 10 个坑(别再踩)
 1. **DXY**:AkShare push2his 被网拦 → ECB/Frankfurter fallback(免费无key,6腿重算,实测对)。

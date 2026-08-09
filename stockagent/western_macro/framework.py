@@ -301,6 +301,68 @@ def _gold_micro_block(store, c: dict) -> str:
     return "".join(parts)
 
 
+def _gold_locator_block(store, c: dict) -> str:
+    """🥇 黄金阶段定位器 v2: 价格结构+微观紧缺+利率美元驱动 → 阶段+驱动三栏+置信度+操作建议。"""
+    from .gold_locator import gold_locate
+    r = gold_locate(store)
+    if not r.get("valid"):
+        return ('<div class="chart"><div class="chart-t">🥇 黄金阶段定位器</div>'
+                '<div class="muted">黄金数据不足。</div></div>')
+
+    stage_col = (c["miss"] if "泡沫" in r["stage_note"] else
+                 {"筑底/底部震荡": c["edge"], "反弹初期": c["edge"], "趋势上行": c["accent"],
+                  "头部区域": c["hit"], "回调下跌": c["miss"]}.get(r["stage_note"], c["accent"]))
+    conf_txt = f"{r['confidence']*100:.0f}%·{r['confidence_band']}"
+    regime_col = c["accent"] if r["bull_intact"] else c["ink2"]
+
+    def chip(label, val, sub="", color=None):
+        vs = f' style="color:{color}"' if color else ""
+        return (f'<div class="card"><div class="card-v"{vs}>{val}</div><div class="card-l">{label}</div>'
+                f'{f"<div class=card-s>{sub}</div>" if sub else ""}</div>')
+
+    head = ('<div class="cards">'
+            + chip("当前阶段", r["stage_note"], "价格结构+驱动精炼", stage_col)
+            + chip("底层", r["regime"], "央行+期限溢价+实际利率(1年)", regime_col)
+            + chip("信心", conf_txt, "阶段强度×驱动一致×regime")
+            + '</div>')
+
+    def flag_col(f):
+        if f in ("利好", "紧缺", "逼空"):
+            return c["edge"]
+        if f in ("逆风", "泡沫"):
+            return c["miss"]
+        return c["ink2"]
+
+    def col(title, drvs):
+        rows = "".join(
+            f'<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;'
+            f'border-bottom:1px solid {c["border"]};font-size:12px">'
+            f'<span class="muted">{d["label"]}</span>'
+            f'<span><b>{d["value"]}</b> <span style="color:{flag_col(d["flag"])}">{d["dir"]} {d["flag"]}</span></span>'
+            f'</div>' for d in drvs if d)
+        return f'<div style="flex:1;min-width:220px"><div class="chart-t">{title}</div>{rows}</div>'
+
+    panel = ('<div style="display:flex;gap:16px;flex-wrap:wrap;margin:10px 0">'
+             + col("底层 · 牛市在否(L1)", r["drivers"]["底层"])
+             + col("中期 · 方向(L2)", r["drivers"]["中期"])
+             + col("短期 · 位置(L3)", r["drivers"]["短期"])
+             + '</div>')
+
+    warns = "".join(f'<li style="font-size:12px;color:{c["miss"]}">{w}</li>' for w in r["warnings"])
+    warns = f'<ul style="margin:6px 0;padding-left:18px">{warns}</ul>' if warns else ""
+    action = f'<div class="banner info" style="margin:8px 0">📋 <b>操作建议</b>: {r["action"]}</div>'
+
+    price_html = ""
+    if series_for("黄金", store) is not None:
+        fig = _asset_chart("黄金", store, asset_analysis("黄金", store), c)
+        if fig is not None:
+            price_html = fig.to_html(False, False, "locator_gold")
+
+    return ('<div class="chart"><div class="chart-t">🥇 黄金阶段定位器 '
+            '<span class="muted">(价格结构+微观紧缺+利率美元驱动 · 框架四层判定 · 只读不喂引擎 ADR-0001)</span></div>'
+            + head + panel + action + warns + price_html + '</div>')
+
+
 def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
     """渲染宏观框架看板 → data/macro_framework.html (纯数据·只读·不喂引擎)。"""
     from .dashboard import _DARK, _LIGHT, _css, _driver_svg
@@ -331,6 +393,7 @@ def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
 
     n_valid = sum(1 for an in an_by_asset.values() if an.get("valid"))
     gold_micro_html = _gold_micro_block(store, D)
+    locator_html = _gold_locator_block(store, D)
     html = f"""<!doctype html><html lang="zh" data-theme="light"><head><meta charset="utf-8">
 <title>宏观框架看板 · {asof}</title>
 <style>
@@ -365,6 +428,9 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 
 <h2>📊 总览(全资产 · 一屏看清当前在哪)</h2>
 {_overview_table(an_by_asset, L)}
+
+<h2>🥇 黄金阶段定位器(旗舰 · 价格结构+微观紧缺+利率美元驱动 → 阶段+驱动+置信度+操作建议)</h2>
+{locator_html}
 
 {''.join(node_html)}
 
