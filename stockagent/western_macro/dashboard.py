@@ -465,6 +465,10 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 <div class="banner info">📝 审核:草稿 <b>{state_counts['draft']}</b> / 已确认 <b>{state_counts['confirmed']}</b> / 已否决 <b>{state_counts['vetoed']}</b> —— 用 <code>python scripts/wm_confirm.py</code> 审核(已否决的从评分剔除;可执行层建议先确认)。</div>
 {'<div class="banner warn">⚠ 美元指数(DXY)数据缺:外汇端点 push2his 在本环境被拦 → 美元/黄金相关 claim 暂未自动结算。本机重跑 backfill_western_macro.py 即可补。</div>' if not store.get_western_series('dxy','DXY').size else ''}
 
+<h2>📡 宏观 call 实时确认(未到期断言 · 数据当前是否兑现 · 只读诊断·不喂引擎 ADR-0001)</h2>
+<div class="banner info">JZ 在<b>利率</b>(2Y/10Y/2s10s)上用方向语言(edge 所在), 本视图用「数据当前是否兑现其方向」来量。到期断言沿用结算(本事/命中/未中); 未到期按自发布以来的走势判 兑现中/背离/停滞。本块价值有限,置顶备忘,随新转写稿迭代。</div>
+{live_html}
+
 <h2>🎯 业绩追踪</h2>
 <div class="cards">
 {card("已结算", len(settled), f"共 {len(claims)} 条断言")}
@@ -484,10 +488,6 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 <h2>🥇 黄金阶段定位器(Phase 3 MVP · 规则复现 JZ 阶段语言 · 只读诊断·不喂引擎 ADR-0001)</h2>
 <div class="banner info">规则由黄金自身结构(MA60 + 近12月偏离分位)定阶段, DXY/曲线作确认驱动。置信度按 JZ 黄金择时 32% 命中弱项 ×0.60 折价。回测一致性由 <code>python scripts/wm_gold_stage_eval.py</code> 单独出(MVP 不在此跑回测)。</div>
 {gold_stage_html}
-
-<h2>📡 宏观 call 实时确认(未到期断言 · 数据当前是否兑现 · 只读诊断·不喂引擎 ADR-0001)</h2>
-<div class="banner info">JZ 在<b>利率</b>(2Y/10Y/2s10s)上用方向语言(edge 所在), 本视图用「数据当前是否兑现其方向」来量, 比黄金阶段定位更贴他的强项。到期断言沿用结算(本事/命中/未中); 未到期按自发布以来的走势判 兑现中/背离/停滞。</div>
-{live_html}
 
 <h2>📋 台账(全部断言 · 未到期=兑现日未到 / 点位·时点=人工结算)</h2>
 <table><tr><th>日期</th><th>标的</th><th>类型</th><th>预测</th><th>兑现</th><th>实际</th><th>结果</th><th>状态</th><th>断言</th><th>驱动</th><th>价格</th></tr>
