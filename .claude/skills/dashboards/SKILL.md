@@ -56,6 +56,8 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py --comm
 PYTHONIOENCODING=utf-8 python scripts/backfill_western_macro.py
 # 宏观框架·黄金微观紧缺（COMEX库存/CFTC投机+商业持仓/央行购金/FRED实际利率+通胀预期/NYFed期限溢价）
 PYTHONIOENCODING=utf-8 python scripts/backfill_gold_micro.py
+# 宏观框架·经济日历（近7天已公布+未来45天排期·美国重要性≥2·数据真伪surprise+FOMC/CPI/非农催化剂）
+PYTHONIOENCODING=utf-8 python scripts/backfill_economic_calendar.py
 ```
 
 ### 1b. 日常增量（数据已存在 · 几分钟）
@@ -72,6 +74,8 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py --comm
 PYTHONIOENCODING=utf-8 python scripts/backfill_western_macro.py
 # 宏观框架·黄金微观紧缺（同冷启动：COMEX/CFTC/央行/FRED实际利率/NYFed期限溢价）
 PYTHONIOENCODING=utf-8 python scripts/backfill_gold_micro.py
+# 宏观框架·经济日历（同冷启动：近7天已公布+未来45天排期·美国重要性≥2）
+PYTHONIOENCODING=utf-8 python scripts/backfill_economic_calendar.py
 ```
 任一步失败不影响其余（各自独立）；所有 backfill 幂等，中断重跑即可。
 
@@ -96,7 +100,7 @@ Win/mac/linux 通用。失败就手动双击 `data/*.html`，或 Win 用 `start 
   - 研究：参与排名 N/27、性价比 top 3 + 相位
   - 指数：估值 zone + 大小盘温差 + ⑦相对周期位置 + ⑧地量状态 + 是否有有效突破/跌破信号
   - 个股：观察池触发提醒数 + 周期 tab 商品面板（哪些商品向上/背离/向下）+ 埋伏候选（门槛线≥30 上下）+ 任何异常（避坑/戴维斯/预告拐点/M1-M2 商品背离）
-  - 宏观框架：🥇黄金阶段定位器（阶段 + bull_intact 底层 + 置信度 + 操作建议）+ 利率节点（实际利率/期限溢价方向）+ 微观（COMEX库存/CFTC投机是否泡沫·商业是否逼空/央行购金节奏）
+  - 宏观框架：🥇黄金阶段定位器（阶段 + bull_intact 底层 + 置信度 + 操作建议）+ 利率节点（实际利率/期限溢价方向）+ 微观（COMEX库存/CFTC投机是否泡沫·商业是否逼空/央行购金节奏）+ 📰经济日历（近7天美国高重要性数据公布vs预期surprise + 未来FOMC/CPI/非农催化剂时点）
 - 本轮数据问题（某 ETF 缺失、某股 PE 稀疏、legulegu 限流需重跑等）
 
 ## 何时用统一 skill vs 单看板 skill

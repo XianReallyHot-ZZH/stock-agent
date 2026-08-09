@@ -857,6 +857,19 @@ class DataManager:
             log.info("gold-micro acm 期限溢价: +%d rows", n)
         except Exception as e:  # noqa: BLE001
             log.warning("gold-micro acm failed: %s", str(e)[:100])
+
+    def update_economic_calendar(self, days_back: int = 7, days_forward: int = 45) -> dict:
+        """抓经济日历(近7天已公布+未来21天排期, 筛重要性≥2)→ economic_calendar 表。逐日容错。"""
+        out = {"calendar": 0}
+        try:
+            rows = fetcher.fetch_economic_calendar(days_back=days_back, days_forward=days_forward)
+            out["calendar"] = self.store.upsert_economic_calendar(rows)
+            log.info("economic_calendar: +%d rows", out["calendar"])
+        except Exception as e:  # noqa: BLE001
+            log.warning("economic_calendar failed: %s", str(e)[:120])
+        if out["calendar"]:
+            self.store.set_meta("last_economic_calendar_update", fetcher.today_str())
+        return out
         if any(out.values()):
             self.store.set_meta("last_gold_micro_update", fetcher.today_str())
         return out

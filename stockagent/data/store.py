@@ -218,6 +218,17 @@ CREATE TABLE IF NOT EXISTS cb_gold (            -- 央行黄金储备·底的锚
     yoy     REAL, mom REAL,                      -- 同比/环比(%)
     PRIMARY KEY (country, date)
 );
+CREATE TABLE IF NOT EXISTS economic_calendar (   -- 经济日历/事件·框架催化剂层(数据真伪+未来FOMC/CPI)
+    date       TEXT NOT NULL,                    -- YYYY-MM-DD
+    time       TEXT,                             -- HH:MM
+    region     TEXT,                             -- 地区(美国/中国/欧元区...)
+    event      TEXT NOT NULL,                    -- 事件名
+    actual     REAL,                             -- 公布值(已公布才有)
+    forecast   REAL,                             -- 预期值
+    previous   REAL,                             -- 前值
+    importance INTEGER,                          -- 重要性 1/2/3(筛 ≥2)
+    PRIMARY KEY (date, time, event)
+);
 CREATE TABLE IF NOT EXISTS wm_claims (
     uid          TEXT PRIMARY KEY,   -- 稳定 hash(episode_date|asset|type|statement 规范化)→ 幂等再抽取
     episode_date TEXT NOT NULL,      -- 哪一期说的 (YYYY-MM-DD)
@@ -1277,6 +1288,39 @@ class Store:
         if df.empty:
             return pd.DataFrame(columns=["value", "yoy", "mom"])
         return df.set_index("date")
+
+    # ---- 经济日历 (economic_calendar · 框架催化剂层) ----
+    def upsert_economic_calendar(self, rows: list[dict]) -> int:
+        """rows: {date,time,region,event,actual,forecast,previous,importance}。幂等。"""
+        if not rows:
+            return 0
+        payload = [(r.get("date"), r.get("time"), r.get("region"), r.get("event"),
+                    _num(r.get("actual")), _num(r.get("forecast")), _num(r.get("previous")),
+                    int(r["importance"]) if r.get("importance") not in (None, "") else None)
+                   for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO economic_calendar(date,time,region,event,actual,forecast,previous,importance) "
+                "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(date,time,event) DO UPDATE SET "
+                "region=excluded.region,actual=excluded.actual,forecast=excluded.forecast,"
+                "previous=excluded.previous,importance=excluded.importance", payload)
+        return len(payload)
+
+    def get_economic_calendar(self, region: Optional[str] = None, since: Optional[str] = None,
+                              until: Optional[str] = None, min_importance: int = 2) -> pd.DataFrame:
+        """经济日历 DataFrame(date,time,region,event,actual,forecast,previous,importance, 升序)。"""
+        q, p = "SELECT date,time,region,event,actual,forecast,previous,importance FROM economic_calendar WHERE 1=1", []
+        if region:
+            q += " AND region LIKE ?"; p.append(f"%{region}%")
+        if since:
+            q += " AND date>=?"; p.append(since)
+        if until:
+            q += " AND date<=?"; p.append(until)
+        if min_importance:
+            q += " AND COALESCE(importance,0)>=?"; p.append(min_importance)
+        q += " ORDER BY date,time"
+        with self._conn() as c:
+            return pd.read_sql_query(q, c, params=p)
 
     # ---- western-macro prediction ledger (wm_claims / wm_settlements / wm_rules) ----
     def upsert_wm_claims(self, rows: list[dict]) -> int:

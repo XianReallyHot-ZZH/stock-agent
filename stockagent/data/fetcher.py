@@ -1407,3 +1407,41 @@ def fetch_acm_term_premium(maturity: int = 10, timeout: float = 60.0) -> pd.Data
     return pd.DataFrame({"source": "nyfed_acm", "symbol": col,
                          "date": dates.astype(str), "close": sub[col].astype(float)})
 
+
+# ---- 经济日历/事件 (news_economic_baidu · 框架催化剂层) ----
+def parse_economic_calendar(df, min_importance: int = 2) -> list[dict]:
+    """ak.news_economic_baidu 的 df → [{date,time,region,event,actual,forecast,previous,importance}]。
+    筛重要性≥min(去 EIA 等低重要性噪声)。"""
+    if df is None or len(df) == 0:
+        return []
+    if "重要性" in df.columns:
+        imp = pd.to_numeric(df["重要性"], errors="coerce")
+        df = df[imp.fillna(0) >= min_importance]
+    out = []
+    for _, r in df.iterrows():
+        out.append({
+            "date": str(r.get("日期"))[:10], "time": str(r.get("时间") or ""),
+            "region": str(r.get("地区") or ""), "event": str(r.get("事件") or ""),
+            "actual": r.get("公布"), "forecast": r.get("预期"), "previous": r.get("前值"),
+            "importance": r.get("重要性"),
+        })
+    return out
+
+
+def fetch_economic_calendar(days_back: int = 7, days_forward: int = 45, retries: int = 1) -> list[dict]:
+    """抓 [today-days_back, today+days_forward] 区间的经济日历(逐日 news_economic_baidu), 筛重要性≥2。
+    含已公布(公布值 actual)与未来排期(actual 缺)。逐日容错。前看 45 天(覆盖下次 FOMC)。"""
+    from datetime import date, timedelta
+    today = date.today()
+    out: list[dict] = []
+    for k in range(-days_back, days_forward + 1):
+        d = today + timedelta(days=k)
+        try:
+            df = _retry_ak(ak.news_economic_baidu, retries=retries, date=d.strftime("%Y%m%d"))
+            out.extend(parse_economic_calendar(df))
+        except Exception as e:  # noqa: BLE001
+            log.warning("economic_calendar %s failed: %s", d, str(e)[:80])
+        time.sleep(0.15)
+    return out
+
+

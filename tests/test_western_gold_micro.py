@@ -101,3 +101,31 @@ def test_store_empty_gets(tmp_path):
     assert st.get_comex_inventory("GC").empty
     assert st.get_cftc_position("GC").empty
     assert st.get_cb_gold("CN").empty
+
+
+# ---- 经济日历 ----
+def test_parse_economic_calendar():
+    df = pd.DataFrame([
+        {"日期": "2026-08-12", "时间": "20:30", "地区": "美国", "事件": "美国7月CPI年率",
+         "公布": 3.4, "预期": 3.5, "前值": 3.5, "重要性": 3},
+        {"日期": "2026-08-12", "时间": "00:00", "地区": "美国", "事件": "美国8月EIA天然气产量",
+         "公布": None, "预期": None, "前值": 1112.0, "重要性": 1},   # 低重要性被筛
+    ])
+    rows = fetcher.parse_economic_calendar(df, min_importance=2)
+    assert len(rows) == 1
+    assert rows[0]["event"] == "美国7月CPI年率" and rows[0]["actual"] == 3.4 and rows[0]["importance"] == 3
+
+
+def test_store_economic_calendar(tmp_path):
+    st = Store(tmp_path / "t.sqlite")
+    st.upsert_economic_calendar([
+        {"date": "2026-08-12", "time": "20:30", "region": "美国", "event": "美国7月CPI年率",
+         "actual": 3.4, "forecast": 3.5, "previous": 3.5, "importance": 3},
+        {"date": "2026-09-17", "time": "02:00", "region": "美国", "event": "美联储公布利率决议",
+         "actual": None, "forecast": None, "previous": 5.5, "importance": 3},
+    ])
+    df = st.get_economic_calendar(region="美国", min_importance=2)
+    assert len(df) == 2
+    rel = df[df["actual"].notna()]
+    assert len(rel) == 1 and rel.iloc[0]["event"] == "美国7月CPI年率"
+    assert st.get_economic_calendar(region="欧元区").empty

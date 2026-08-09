@@ -504,6 +504,142 @@ def _gold_locator_block(store, c: dict, first=None) -> str:
             + head + panel + action + warns + price_html + vs_html + '</div>')
 
 
+# 经济日历: 黄金框架相关关键词(利率/数据/美债/Fed)
+_CAL_KEYWORDS = ("利率", "Fed", "美联储", "联邦基金", "FOMC", "会议纪要", "点阵图", "褐皮书", "加息", "降息",
+                 "CPI", "PCE", "核心", "非农", "就业", "ADP", "失业", "JOLTs", "PMI", "GDP", "零售", "通胀", "PPI",
+                 "国债竞拍", "资产负债表", "扩表", "缩表", "赤字", "预算", "消费者信心", "工厂订单", "耐用品", "贸易帐")
+
+# 事件 → 对黄金的影响 (关键词, actual↑影响, actual↓影响); hi==lo=非方向性(条件化全文)
+# 按 JZ 框架: 利率↑=逆风, 通胀/就业强=加息压力=利空, 通胀/就业弱=降息=利好, 扩表=印钱=利好
+_CAL_IMPACT = [
+    (["FOMC", "利率决议", "联邦基金利率"], "降息=利好 / 加息=利空", "降息=利好 / 加息=利空"),
+    (["会议纪要", "点阵图", "褐皮书"], "鸽派=利好 / 鹰派=利空", "鸽派=利好 / 鹰派=利空"),
+    (["核心CPI", "核心PCE", "CPI", "PCE", "PPI", "通胀"], "加息压力·利空", "降息·利好"),
+    (["非农", "ADP", "就业人口", "私营企业"], "走强·利空", "降息·利好"),
+    (["失业率", "初请", "续请"], "降息·利好", "利空"),       # 失业↑=降息=利好(反向)
+    (["JOLTs", "职位空缺"], "利空", "降温·利好"),
+    (["PMI"], "走强·利空", "避险·利好"),
+    (["GDP"], "利空", "降息·利好"),
+    (["零售"], "利空", "利好"),
+    (["资产负债表"], "扩表·利好", "缩表·利空"),             # 余额↑=扩表=利好(反向)
+    (["赤字", "预算"], "赤字扩=债务压力·长期利好", "赤字扩=债务压力·长期利好"),
+    (["贸易帐"], "逆差扩=美元压力·间接利好", "逆差扩=美元压力·间接利好"),
+    (["耐用品", "工厂订单", "工业"], "利空", "利好"),
+    (["消费者信心"], "利空", "避险·利好"),
+    (["国债竞拍"], "需求弱(收益率↑/倍数↓)·利好 / 强·利空", "需求弱(收益率↑/倍数↓)·利好 / 强·利空"),
+]
+
+
+def _impact_parts(event: str):
+    """→ (high_text, low_text) 或 None。high=actual>forecast 的影响。"""
+    for kws, hi, lo in _CAL_IMPACT:
+        if any(k in event for k in kws):
+            return (hi, lo)
+    return None
+
+
+def _color_hint(hint: str, c: dict) -> str:
+    """利好着绿、利空着红, 方便扫读。"""
+    return (hint.replace("利好", f'<span style="color:{c["edge"]}">利好</span>')
+                .replace("利空", f'<span style="color:{c["miss"]}">利空</span>'))
+
+
+def _released_impact(event: str, actual, forecast, c: dict) -> str:
+    """已公布: 按 surprise 方向(actual vs forecast)给命中半句结论; 无法判方向→条件化全文。"""
+    parts = _impact_parts(event)
+    if not parts:
+        return ""
+    hi, lo = parts
+    if hi == lo:
+        return _color_hint(hi, c)                          # 非方向性指标(FOMC/赤字等)
+    if actual is None or actual != actual or forecast is None or forecast != forecast:
+        return _color_hint(f"{hi} / {lo}", c)              # 无 forecast → 给双向条件
+    if actual > forecast:
+        return _color_hint(hi, c)
+    if actual < forecast:
+        return _color_hint(lo, c)
+    return "符合预期"
+
+
+def _upcoming_impact(event: str, c: dict) -> str:
+    """未公布: 给双向条件(高/低各自影响)。"""
+    parts = _impact_parts(event)
+    if not parts:
+        return ""
+    hi, lo = parts
+    return _color_hint(hi, c) if hi == lo else _color_hint(f"{hi} / {lo}", c)
+
+
+
+
+def _economic_calendar_block(store, c: dict, asof: str) -> str:
+    """📰 经济日历/事件: 近期已公布美国高重要性数据(公布vs预期=surprise) + 未来 FOMC/CPI/非农 时点。"""
+    from datetime import date, timedelta
+    today = (asof or date.today().isoformat())[:10]
+    try:
+        t0 = date.fromisoformat(today)
+    except ValueError:
+        t0 = date.today()
+    back = (t0 - timedelta(days=7)).isoformat()
+    fwd = (t0 + timedelta(days=45)).isoformat()
+    df = store.get_economic_calendar(region="美国", since=back, until=fwd, min_importance=2)
+    if df.empty:
+        return ('<div class="chart"><div class="chart-t">📰 经济日历</div>'
+                '<div class="muted">无数据。先跑 <code>python scripts/backfill_economic_calendar.py</code>。</div></div>')
+    df = df[df["event"].fillna("").str.contains("|".join(_CAL_KEYWORDS), regex=True)].copy()
+    if df.empty:
+        return ('<div class="chart"><div class="chart-t">📰 经济日历</div>'
+                '<div class="muted">近 7 天/未来 21 天无美国高重要性相关事件。</div></div>')
+
+    def stars(n):
+        try:
+            return "★" * int(n)
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def cell_actual(a, f):
+        if a is None or a != a:
+            return "—"
+        if f is None or f != f:
+            return f"{a:g}"
+        d = a - f
+        col = c["miss"] if d > 1e-9 else (c["edge"] if d < -1e-9 else c["ink2"])
+        tag = " ↑高于" if d > 1e-9 else (" ↓低于" if d < -1e-9 else "")
+        return f'<span style="color:{col}"><b>{a:g}</b>{tag}</span>'
+
+    # 近期已公布(公布值存在)
+    rel = df[df["actual"].notna()].sort_values("date", ascending=False).head(12)
+    rows_r = "".join(
+        f"<tr><td class='muted'>{r['date']}</td><td class='stmt'>{r['event']}</td>"
+        f"<td>{cell_actual(r['actual'], r['forecast'])}</td>"
+        f"<td class='muted'>{r['forecast'] if r['forecast']==r['forecast'] else '—'}</td>"
+        f"<td class='muted'>{r['previous'] if r['previous']==r['previous'] else '—'}</td>"
+        f"<td class='muted' style='font-size:11px'>{_released_impact(r['event'], r['actual'], r['forecast'], c)}</td></tr>"
+        for _, r in rel.iterrows())
+    tbl_r = (('<div class="chart-t">已公布(近7天 · 粗体=公布值 · 影响=按实际方向给结论)</div>'
+              '<table><tr><th>日期</th><th>事件</th><th>公布</th><th>预期</th><th>前值</th><th>对黄金影响</th></tr>'
+              + rows_r + '</table>') if len(rel) else '<div class="muted">无近期已公布。</div>')
+
+    # 未来排期(公布值缺)
+    up = df[df["actual"].isna()].sort_values(["date", "time"]).head(15)
+    rows_u = "".join(
+        f"<tr><td class='muted'>{r['date']} {r['time'] or ''}</td><td class='stmt'>{r['event']}</td>"
+        f"<td class='muted'>{r['forecast'] if r['forecast']==r['forecast'] else '—'}</td>"
+        f"<td class='muted'>{r['previous'] if r['previous']==r['previous'] else '—'}</td>"
+        f"<td>{stars(r['importance'])}</td>"
+        f"<td class='muted' style='font-size:11px'>{_upcoming_impact(r['event'], c)}</td></tr>"
+        for _, r in up.iterrows())
+    tbl_u = (('<div class="chart-t" style="margin-top:10px">即将公布(未来45天 · 催化剂时点 · 决定埋伏时机)</div>'
+              '<table><tr><th>时间</th><th>事件</th><th>预期</th><th>前值</th><th>重要性</th><th>对黄金影响</th></tr>'
+              + rows_u + '</table>') if len(up) else '<div class="muted">无未来排期。</div>')
+
+    return ('<div class="chart"><div class="chart-t">📰 经济日历 / 事件 '
+            '<span class="muted">(美国 · 重要性≥2 · 利率/通胀/就业/美债/Fed · 数据真伪+催化剂时点)</span></div>'
+            + tbl_r + tbl_u
+            + '<div class="muted" style="font-size:11px;margin-top:6px">↑高于/↓低于=公布 vs 预期(surprise); '
+            '方向对黄金的影响因指标而异(如 CPI 超预期=加息压力=短线利空, 非农走弱=降息预期=利好)。</div></div>')
+
+
 def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
     """渲染宏观框架看板 → data/macro_framework.html (纯数据·只读·不喂引擎)。"""
     from .dashboard import _DARK, _LIGHT, _css, _driver_svg
@@ -537,6 +673,7 @@ def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
 
     n_valid = sum(1 for an in an_by_asset.values() if an.get("valid"))
     gold_micro_html = _gold_micro_block(store, L, first)   # 源文在 nodes 之后
+    calendar_html = _economic_calendar_block(store, L, asof)
     html = f"""<!doctype html><html lang="zh" data-theme="light"><head><meta charset="utf-8">
 <title>宏观框架看板 · {asof}</title>
 <style>
@@ -580,6 +717,9 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 
 <h2>🔬 黄金微观紧缺(L2/L3/L4 实证 · JZ 框架微观证据)</h2>
 {gold_micro_html}
+
+<h2>📰 经济日历 / 事件(美国高重要性 · 数据真伪 + 催化剂时点 · backfill_economic_calendar.py)</h2>
+{calendar_html}
 
 <div class="foot">
 ⚠ 纯数据诊断看板, 不构成投资建议。阶段/位置标签由价格结构规则(MA60 + 近12月偏离/水平分位)给出, 非预测。
