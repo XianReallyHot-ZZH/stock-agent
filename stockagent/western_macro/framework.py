@@ -213,9 +213,12 @@ def _overview_table(an_by_asset: dict, c: dict) -> str:
             + "".join(rows) + "</table>")
 
 
-def _gold_micro_block(store, c: dict) -> str:
+def _gold_micro_block(store, c: dict, first=None) -> str:
     """🔬 黄金微观紧缺(L2/L3/L4 实证): COMEX库存 / CFTC非商业(投机)净仓位+分位 / 央行购金节奏。
-    JZ 框架的微观证据层: 库存↓=紧缺, 投机净多单极值=泡沫预警, 央行购金=底的锚。"""
+    JZ 框架的微观证据层: 库存↓=紧缺, 投机净多单极值=泡沫预警, 央行购金=底的锚。
+    first=[bool] 共享标志(由首个图块嵌入 plotly.js, 本块复用)。"""
+    if first is None:
+        first = [True]
     ci = store.get_comex_inventory("GC")
     cf = store.get_cftc_position("GC")
     cb = store.get_cb_gold("CN")
@@ -254,6 +257,11 @@ def _gold_micro_block(store, c: dict) -> str:
              f'<span class="muted">(L2库存/L3紧缺/L4投机泡沫 · JZ 框架微观证据 · GOFO/全球ETF无源待补)</span></div>',
              "".join(chips)]
 
+    def _embed(fig, div_id):
+        h = fig.to_html(include_plotlyjs=first[0], full_html=False, div_id=div_id)
+        first[0] = False
+        return h
+
     # 图: COMEX库存 (近2y)
     if not ci.empty:
         s = ci.iloc[-500:]
@@ -265,7 +273,7 @@ def _gold_micro_block(store, c: dict) -> str:
                           paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
                           xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
                           yaxis=dict(title="吨", gridcolor=c["border"]))
-        parts.append(f'<div class="chart-t" style="margin-top:8px">COMEX 黄金库存(吨 · ↓=紧缺/逼空压力)</div>' + fig.to_html(False, False, "micro_comex"))
+        parts.append('<div class="chart-t" style="margin-top:8px">COMEX 黄金库存(吨 · ↓=紧缺/逼空压力)</div>' + _embed(fig, "micro_comex"))
 
     # 图: CFTC 投机净仓位(净多) + 商业净仓位(净空, 镜像) + 泡沫分位带 (近3y)
     if not cf.empty:
@@ -287,7 +295,7 @@ def _gold_micro_block(store, c: dict) -> str:
                           paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
                           xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
                           yaxis=dict(title="净仓位(手)", gridcolor=c["border"]))
-        parts.append('<div class="chart-t" style="margin-top:8px">CFTC 持仓: 投机净多(金,↑极值=泡沫) vs 商业净空(红,空单极小=逼空前兆)</div>' + fig.to_html(False, False, "micro_cftc"))
+        parts.append('<div class="chart-t" style="margin-top:8px">CFTC 持仓: 投机净多(金,↑极值=泡沫) vs 商业净空(红,空单极小=逼空前兆)</div>' + _embed(fig, "micro_cftc"))
 
     # 图: 央行购金 (中国, 月频, 末段2y)
     if not cb.empty:
@@ -296,7 +304,7 @@ def _gold_micro_block(store, c: dict) -> str:
         fig.add_trace(go.Bar(x=pd.to_datetime(list(sub.index)), y=sub["value"].astype(float).values,
                              name="黄金储备", marker_color=c["accent"], yaxis="y",
                              hovertemplate="%{x|%Y-%m}  %{y:.0f}<extra></extra>"))
-        parts.append('<div class="chart-t" style="margin-top:8px">中国央行黄金储备(月 · 持续增持=底的锚)</div>' + fig.to_html(False, False, "micro_cb"))
+        parts.append('<div class="chart-t" style="margin-top:8px">中国央行黄金储备(月 · 持续增持=底的锚)</div>' + _embed(fig, "micro_cb"))
     parts.append('</div>')
     return "".join(parts)
 
@@ -330,8 +338,11 @@ def _gold_vs_chart(store, pairs: list, ylabel_right: str, c: dict, div_id: str, 
     return fig
 
 
-def _gold_locator_block(store, c: dict) -> str:
-    """🥇 黄金阶段定位器 v2: 价格结构+微观紧缺+利率美元驱动 → 阶段+驱动三栏+置信度+操作建议。"""
+def _gold_locator_block(store, c: dict, first=None) -> str:
+    """🥇 黄金阶段定位器 v2: 价格结构+微观紧缺+利率美元驱动 → 阶段+驱动三栏+置信度+操作建议。
+    first=[bool] 共享标志: 本块在源文最前 → 首图(金价)嵌入 plotly.js,其后图复用。"""
+    if first is None:
+        first = [True]
     from .gold_locator import gold_locate
     r = gold_locate(store)
     if not r.get("valid"):
@@ -385,14 +396,17 @@ def _gold_locator_block(store, c: dict) -> str:
     if series_for("黄金", store) is not None:
         fig = _asset_chart("黄金", store, asset_analysis("黄金", store), c)
         if fig is not None:
-            price_html = fig.to_html(False, False, "locator_gold")
+            price_html = fig.to_html(include_plotlyjs=first[0], full_html=False, div_id="locator_gold")
+            first[0] = False
 
     # 黄金 vs 关键驱动 双Y轴对比图(看反向/背离)
     def _vs(pairs, title, yright, div):
         fig = _gold_vs_chart(store, pairs, yright, c, div)
         if fig is None:
             return ""
-        return f'<div class="chart-t" style="margin-top:10px">{title}</div>' + fig.to_html(False, False, div)
+        h = fig.to_html(include_plotlyjs=first[0], full_html=False, div_id=div)
+        first[0] = False
+        return f'<div class="chart-t" style="margin-top:10px">{title}</div>' + h
 
     vs_html = (
         _vs([("2Y", "美债2Y", c["ink2"]), ("10Y", "美债10Y", c["miss"])],
@@ -413,8 +427,11 @@ def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
     all_assets = [a for _, assets in CHAIN_NODES for a in assets]
     an_by_asset = {a: asset_analysis(a, store) for a in all_assets}
 
-    # 分节点图 (统一普通数据跟踪展示; 黄金定位器由 ledger 看板单独做)
-    first = [True]  # plotly.js 只嵌一次
+    # plotly.js 只嵌一次: 按源文顺序, 首个图块(locator 金价图)嵌入, nodes/micro 复用
+    first = [True]
+    locator_html = _gold_locator_block(store, L, first)
+
+    # 分节点图 (统一普通数据跟踪展示)
     node_html: list[str] = []
     for node, assets in CHAIN_NODES:
         parts = [f'<h2>🔗 {node}</h2>']
@@ -428,14 +445,13 @@ def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
                    f"· 偏离{_fmt_pct(an.get('dev_pct'))} · {_fmt_pct(an.get('ret_60'), sign=True)}/60日")
             div_id = f"fw_{a.replace(' ','_')}"
             parts.append(f'<div class="chart"><div class="chart-t">{a} <span class="muted">({sub})</span></div>'
-                         + fig.to_html(full_html=False, include_plotlyjs=first[0], div_id=div_id)
+                         + fig.to_html(include_plotlyjs=first[0], full_html=False, div_id=div_id)
                          + '</div>')
             first[0] = False
         node_html.append("\n".join(parts))
 
     n_valid = sum(1 for an in an_by_asset.values() if an.get("valid"))
-    gold_micro_html = _gold_micro_block(store, L)
-    locator_html = _gold_locator_block(store, L)
+    gold_micro_html = _gold_micro_block(store, L, first)   # 源文在 nodes 之后
     html = f"""<!doctype html><html lang="zh" data-theme="light"><head><meta charset="utf-8">
 <title>宏观框架看板 · {asof}</title>
 <style>
