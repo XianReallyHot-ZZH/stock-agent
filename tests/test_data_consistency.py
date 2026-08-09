@@ -212,3 +212,18 @@ def test_new_commodity_stocks_wired():
     for code, var in expected.items():
         assert code in DataManager.STOCK_WATCHLIST, f"{code} 不在观察池"
         assert cm.get(code) == var, f"{code} 映射应为 {var}, 实际 {cm.get(code)}"
+
+
+def test_each_commodity_has_multiple_watchlist_stocks():
+    """每个被观察池覆盖的商品至少 2 只 + 全 13 种都被覆盖(单只=个股信号单一不稳)。"""
+    from collections import Counter
+    from stockagent.config import get_config
+    from stockagent.data import fetcher
+    from stockagent.data.manager import DataManager
+    cm = (get_config().params.get("stock", {}) or {}).get("commodity_map", {}) or {}
+    watch = set(DataManager.STOCK_WATCHLIST)
+    counts = Counter(v for s, v in cm.items() if s in watch)
+    assert set(counts) == set(fetcher.COMMODITY_CODES), \
+        f"未覆盖商品: {set(fetcher.COMMODITY_CODES) - set(counts)}"
+    single = [v for v, n in counts.items() if n < 2]
+    assert not single, f"商品仅 1 只观察池股票: {single}"
