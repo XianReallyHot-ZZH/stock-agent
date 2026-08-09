@@ -25,6 +25,7 @@ _PAL = {
     "close": "#2a78d6", "rev": "#2563eb", "profit": "#008300", "yoy": "#ea580c", "rev_yoy": "#c026d3",
     "val": "#7c3aed", "val_now": "#dc2626",
     "pos_extreme": "#d03b3b", "neg_extreme": "#1c5cab", "div": "#16a34a",
+    "comm": "#d97706",
 }
 
 _METRIC_LABEL = {"pe_ttm": "PE(TTM)", "pb": "PB"}
@@ -250,14 +251,10 @@ def attribution_figure(sym: str, name: str, rows: list[dict]) -> go.Figure:
     return fig
 
 
-# ---- ⑦ 商品价(A 类领先信号;周期股上游,领先财报 1-4 月)----
-def commodity_price_figure(variety: str, series: pd.Series) -> go.Figure:
-    """商品价时序图(周期股业绩的因果领先指标)。单线 + "1 年前"参考虚线(让同比可视化),
-    标题带判定(向上🟢/背离🟡/震荡⚪/向下🔴)。空/不足 → 占位。"""
-    if series is None or len(series) < 2:
-        return _placeholder(variety, "商品价", "无商品价数据")
-    s = series.astype(float)
-    idx = pd.to_datetime(s.index)
+def _commodity_judge(s: pd.Series) -> tuple[str, float, float]:
+    """商品判定(向上🟢/背离🟡/震荡⚪/向下🔴) + 同比 + 近60日。
+    口径:同比(趋势)>+10% 且 近60日(边际)>-5% → 向上;同比>+10% 但近期回落 → 背离;
+    同比±10% 内 → 震荡;同比<-10% → 向下。商品单图与股价叠加图共用,口径一致。"""
     n252 = min(252, len(s) - 1)
     n60 = min(60, len(s) - 1)
     yoy = float(s.iloc[-1]) / float(s.iloc[-1 - n252]) - 1.0 if n252 >= 1 else float("nan")
@@ -270,6 +267,19 @@ def commodity_price_figure(variety: str, series: pd.Series) -> go.Figure:
         judge = "震荡⚪"
     else:
         judge = "向下🔴"
+    return judge, yoy, rec
+
+
+# ---- ⑦ 商品价(A 类领先信号;周期股上游,领先财报 1-4 月)----
+def commodity_price_figure(variety: str, series: pd.Series) -> go.Figure:
+    """商品价时序图(周期股业绩的因果领先指标)。单线 + "1 年前"参考虚线(让同比可视化),
+    标题带判定(向上🟢/背离🟡/震荡⚪/向下🔴)。空/不足 → 占位。"""
+    if series is None or len(series) < 2:
+        return _placeholder(variety, "商品价", "无商品价数据")
+    s = series.astype(float)
+    idx = pd.to_datetime(s.index)
+    judge, yoy, rec = _commodity_judge(s)
+    n252 = min(252, len(s) - 1)   # "1 年前"参考线(同比可视化)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=idx, y=s, name=variety, line=dict(color=_PAL["close"], width=2),
                              hovertemplate="%{x|%Y-%m-%d}<br>" + variety + " %{y:.0f}<extra></extra>"))
@@ -285,4 +295,53 @@ def commodity_price_figure(variety: str, series: pd.Series) -> go.Figure:
     _rr = f"{rec:+.0%}" if not pd.isna(rec) else "—"
     fig.update_layout(**_layout(f"{variety}价 · {judge}(同比{_yy}/近60日{_rr})", height=300, showlegend=True))
     _style_axes(fig)
+    return fig
+
+
+# ---- ⑦b 股价 vs 上游商品价(双 Y 轴叠加;周期股模态首图)----
+def commodity_stock_overlay_figure(sym: str, name: str, variety: str,
+                                   stock_df: pd.DataFrame, comm_series: pd.Series) -> go.Figure:
+    """股价 + 上游商品价 双 Y 轴叠加(绝对价位,直观比对商品→股价的传导/背离)。
+    左轴=股价(元),右轴=商品价;两条线同图,hovermode=x unified 同日双值。
+    双轴默认按各自数据 min-max 自适应(不人工设范围,避免操纵相关性)。
+    数据缺一股:只有商品→退独立商品图;都缺→占位。"""
+    has_stock = stock_df is not None and len(stock_df) > 0 and "close" in stock_df.columns
+    has_comm = comm_series is not None and len(comm_series) >= 2
+    if not has_stock and not has_comm:
+        return _placeholder(name, "股价vs商品价", "无数据")
+    if has_comm and not has_stock:
+        return commodity_price_figure(variety, comm_series)   # 兜底:仅商品 → 退独立商品图
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    close = stock_df["close"].astype(float)
+    six = pd.to_datetime(close.index)
+    fig.add_trace(go.Scatter(x=six, y=close, name=f"{name}股价(左轴)",
+                             line=dict(color=_PAL["close"], width=2),
+                             hovertemplate="%{x|%Y-%m-%d}<br>股价 %{y:.2f}元<extra></extra>"),
+                  secondary_y=False)
+    sma60 = ti.ma_series(close, 60)   # 股价 MA60(左轴),同口径平滑,读趋势(与商品 MA60 对称)
+    fig.add_trace(go.Scatter(x=six, y=sma60, name="股价 MA60",
+                             line=dict(color=_PAL["muted"], width=1.4, dash="dash"),
+                             hovertemplate="%{x|%Y-%m-%d}<br>股价 MA60 %{y:.2f}<extra></extra>"),
+                  secondary_y=False)
+    title_core = f"{name}({sym}) 股价 vs {variety}价"
+    if has_comm:
+        cs = comm_series.astype(float)
+        cix = pd.to_datetime(cs.index)
+        judge, yoy, _ = _commodity_judge(cs)
+        _yy = f"{yoy:+.0%}" if not pd.isna(yoy) else "—"
+        title_core = f"{title_core} · {variety}{judge}(同比{_yy})"
+        fig.add_trace(go.Scatter(x=cix, y=cs, name=f"{variety}价(右轴)",
+                                 line=dict(color=_PAL["comm"], width=2),
+                                 hovertemplate="%{x|%Y-%m-%d}<br>" + variety + " %{y:.0f}<extra></extra>"),
+                      secondary_y=True)
+        cma60 = ti.ma_series(cs, 60)   # 商品 MA60(右轴),与单图同口径平滑,读趋势(合图时别再丢)
+        fig.add_trace(go.Scatter(x=cix, y=cma60, name=f"{variety} MA60",
+                                 line=dict(color=_PAL["muted"], width=1.4, dash="dash"),
+                                 hovertemplate="%{x|%Y-%m-%d}<br>" + variety + " MA60 %{y:.0f}<extra></extra>"),
+                      secondary_y=True)
+    fig.update_layout(**_layout(f"{title_core} · 双轴(左股价/右商品)", height=320, showlegend=True))
+    _style_axes(fig)
+    fig.update_yaxes(title_text="股价(元)", secondary_y=False)
+    fig.update_yaxes(title_text=f"{variety}价", secondary_y=True, gridcolor=None)  # 右轴不画第二层网格
     return fig

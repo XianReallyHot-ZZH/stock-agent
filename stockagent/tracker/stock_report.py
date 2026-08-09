@@ -101,12 +101,14 @@ def _alerts_region(alerts_list: list, title: str = "📡 信号提醒", empty_ms
 
 
 def _commodity_region(store) -> str:
-    """🧲 商品 A 类面板:5 商品 现价/同比/近60日/判定(向上·背离·向下)+ 板块指引。
+    """🧲 商品 A 类面板:全品种(13) 现价/同比/近60日/判定(向上·背离·向下)+ 板块指引。
 
-    商品价领先周期股财报 1-4 月;判定看同比(趋势)+ 近60日(边际):向上=埋伏方向,背离/向下=避。"""
+    商品价领先周期股财报 1-4 月;判定看同比(趋势)+ 近60日(边际):向上=埋伏方向,背离/向下=避。
+    品种清单源自 fetcher.COMMODITY_CODES(单一数据源),无数据的品种自动跳过。"""
     if store is None or not hasattr(store, "get_commodity_series"):
         return ""
-    varieties = ["碳酸锂", "铜", "螺纹钢", "黄金", "原油"]
+    from ..data import fetcher
+    varieties = list(fetcher.COMMODITY_CODES.keys())
     td = "padding:6px;border-bottom:1px solid var(--border)"
     th = "padding:8px;border-bottom:2px solid var(--border)"
     rows, summary = [], {"向上": [], "背离": [], "向下": [], "震荡": []}
@@ -150,13 +152,14 @@ def _commodity_region(store) -> str:
 
 
 def _commodity_charts(store) -> str:
-    """📈 商品价时序图面板(5 商品折线,inline 渲染于周期 tab)。复用 stock_figures.commodity_price_figure;
-    DOMContentLoaded 时 newPlot(Plotly 已由个股图表模态加载)。"""
+    """📈 商品价时序图面板(全品种折线,inline 渲染于周期 tab)。复用 stock_figures.commodity_price_figure;
+    DOMContentLoaded 时 newPlot(Plotly 已由个股图表模态加载)。品种清单源自 fetcher.COMMODITY_CODES(单一数据源)。"""
     if store is None or not hasattr(store, "get_commodity_series"):
         return ""
     from . import stock_figures as sf
+    from ..data import fetcher
     import re
-    varieties = ["碳酸锂", "铜", "螺纹钢", "黄金", "原油"]
+    varieties = list(fetcher.COMMODITY_CODES.keys())
     figs = [(v, sf.commodity_price_figure(v, store.get_commodity_series(v))) for v in varieties]
     if not figs:
         return ""
@@ -550,7 +553,8 @@ document.addEventListener('DOMContentLoaded', function(){
 
 
 def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str:
-    """点卡片 📊 弹模态窗看该股 4 张时序图(价格+偏离 / 估值分位 / 业绩年报 / 分红)。
+    """点卡片 📊 弹模态窗看该股时序图(价格+偏离 / PE / PB / 业绩 / S07归因 / 分红;
+    周期股额外在首位插「股价 vs 上游商品价」双轴叠加图)。
     store=None → 空串(向后兼容)。图表以 JSON 嵌入 CHARTS dict,点开时才 Plotly.newPlot
     懒渲染——页面只承载紧凑 JSON,股票再多也只画当前这一只(可扩展,避免一次性渲染几百张)。"""
     if store is None:
@@ -575,11 +579,12 @@ def _chart_assets(stock_diagnoses: dict, names: dict, store, period: int) -> str
             sf.attribution_figure(sym, name, sd.attribution_by_year(sym, store, 6)),
             sf.dividend_figure(sym, name, store.get_stock_dividend_series(sym)),
         ]
-        # 周期股:映射商品价时序放首位(A 类领先信号,打开 📊 先看上游商品价)
+        # 周期股:股价 vs 上游商品价 双轴叠加放首位(A 类领先信号,打开 📊 先看商品→股价传导)
         variety = commodity_map.get(sym)
-        comm = sf.commodity_price_figure(variety, store.get_commodity_series(variety)) if variety else None
-        if comm is not None:
-            built = [comm] + built
+        if variety:
+            overlay = sf.commodity_stock_overlay_figure(
+                sym, name, variety, store.get_series(sym), store.get_commodity_series(variety))
+            built = [overlay] + built
         max_n = max(max_n, len(built))
         charts[sym] = [f.to_json() for f in built]
 

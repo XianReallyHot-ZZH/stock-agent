@@ -90,7 +90,7 @@ def main():
     ap.add_argument("--fin", action="store_true", help="仅个股财报(→stock_financials, 17 指标)")
     ap.add_argument("--div", action="store_true", help="仅个股分红(→stock_dividend)")
     ap.add_argument("--forecast", action="store_true", help="仅业绩预告(→stock_forecast, 最近8期)")
-    ap.add_argument("--comm", action="store_true", help="回填商品现货价(周期上游领先·碳酸锂/铜/螺纹钢/黄金/原油)")
+    ap.add_argument("--comm", action="store_true", help="回填商品价(周期上游领先·13种:碳酸锂/铜/铝/锌/螺纹钢/铁矿石/焦煤/黄金/白银/原油/玻璃/纯碱/生猪)")
     ap.add_argument("--codes", type=str, default="",
                     help="逗号分隔的 6 位个股代码(默认 STOCK_WATCHLIST)")
     args = ap.parse_args()

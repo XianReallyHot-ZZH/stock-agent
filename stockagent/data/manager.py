@@ -469,7 +469,7 @@ class DataManager:
             self.store.set_meta("last_index_pb_update", fetcher.today_str())
         return results
 
-    COMMODITY_VARIETIES = ["碳酸锂", "铜", "螺纹钢", "黄金", "原油"]  # COMMODITY_CODES 全集(周期上游领先)
+    COMMODITY_VARIETIES = list(fetcher.COMMODITY_CODES.keys())  # 与 fetcher 同源(周期上游领先全集,单一数据源)
 
     def update_commodity_price(self, varieties: Optional[list[str]] = None,
                                start: str = "2020-01-01", end: Optional[str] = None) -> dict:
@@ -574,6 +574,15 @@ class DataManager:
         "600019",  # 宝钢股份 钢铁·周期
         "601857",  # 中国石油 能源·周期
         "600938",  # 中海油   能源·周期
+        # 商品周期代表(扩展·新品种上游跟踪;commodity_map 映射,补齐有色/黑色链/贵金属/化工建材/农业)
+        "601600",  # 中国铝业 铝·周期
+        "000060",  # 中金岭南 锌·周期
+        "601969",  # 海南矿业 铁矿石·周期(含油,A股最接近代理)
+        "000983",  # 山西焦煤 焦煤·周期
+        "000603",  # 盛达资源 白银·周期(A股最纯白银代理)
+        "601636",  # 旗滨集团 玻璃·周期
+        "000683",  # 远兴能源 纯碱·周期
+        "002714",  # 牧原股份 生猪·周期
     ]
     STOCK_NAMES = {  # 显示名(server/scripts 共享,避免两处维护;C1 迁 stock_pool.yaml 时带 name 字段)
         "600519": "贵州茅台", "600036": "招商银行", "300750": "宁德时代",
@@ -583,6 +592,8 @@ class DataManager:
         "600362": "江西铜业", "000630": "铜陵有色", "601899": "紫金矿业", "603993": "洛阳钼业",
         "600547": "山东黄金", "600916": "中金黄金", "600019": "宝钢股份",
         "601857": "中国石油", "600938": "中海油",
+        "601600": "中国铝业", "000060": "中金岭南", "601969": "海南矿业", "000983": "山西焦煤",
+        "000603": "盛达资源", "601636": "旗滨集团", "000683": "远兴能源", "002714": "牧原股份",
     }
 
     def update_stock_daily(self, symbols: Optional[list[str]] = None,
@@ -857,6 +868,8 @@ class DataManager:
             log.info("gold-micro acm 期限溢价: +%d rows", n)
         except Exception as e:  # noqa: BLE001
             log.warning("gold-micro acm failed: %s", str(e)[:100])
+
+        return out
 
     def update_economic_calendar(self, days_back: int = 7, days_forward: int = 45) -> dict:
         """抓经济日历(近7天已公布+未来21天排期, 筛重要性≥2)→ economic_calendar 表。逐日容错。"""

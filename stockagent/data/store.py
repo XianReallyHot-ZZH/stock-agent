@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS industry_pe (
     PRIMARY KEY (industry, date)
 );
 CREATE TABLE IF NOT EXISTS commodity_price (
-    variety  TEXT NOT NULL,   -- 碳酸锂/铜/螺纹钢/黄金/原油(周期股上游领先指标)
+    variety  TEXT NOT NULL,   -- 碳酸锂/铜/铝/锌/螺纹钢/铁矿石/焦煤/黄金/白银/原油/玻璃/纯碱/生猪(周期上游领先,见 fetcher.COMMODITY_CODES)
     date     TEXT NOT NULL,
     close    REAL,
     source   TEXT,

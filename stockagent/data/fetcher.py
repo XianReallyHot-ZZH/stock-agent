@@ -677,7 +677,14 @@ def fetch_index_pb(name: str, timeout: float = 40.0, retries: int = 3) -> pd.Dat
 
 
 # 商品(周期股上游领先指标)→ 期货代码映射。用于 A 类强形式领先信号(周期股业绩的日频领先)。
-COMMODITY_CODES = {"碳酸锂": "LC", "铜": "CU", "螺纹钢": "RB", "黄金": "AU", "原油": "SC"}
+# 有序 dict:顺序即看板展示顺序(新能源金属→基本金属→黑色→贵金属→能源→化工建材→农业)。
+# 新增/调整品种只改这里;manager.COMMODITY_VARIETIES 与 stock_report 看板品种列表均从此派生(单一数据源)。
+COMMODITY_CODES = {
+    "碳酸锂": "LC", "铜": "CU", "铝": "AL", "锌": "ZN",
+    "螺纹钢": "RB", "铁矿石": "I", "焦煤": "JM",
+    "黄金": "AU", "白银": "AG", "原油": "SC",
+    "玻璃": "FG", "纯碱": "SA", "生猪": "LH",
+}
 
 
 def fetch_commodity_price(varieties: list[str], start: str = "2020-01-01",

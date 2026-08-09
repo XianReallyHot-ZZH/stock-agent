@@ -165,6 +165,28 @@ def test_commodity_price_figure():
     assert sf.commodity_price_figure("铜", pd.Series(dtype=float)) is not None
 
 
+def test_commodity_stock_overlay_figure():
+    """股价 vs 商品价 双轴叠加:双线 + 右轴(y2);缺股价 → 退独立商品图;都缺 → 占位。"""
+    import pandas as pd
+    from stockagent.tracker import stock_figures as sf
+    idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    stock_df = pd.DataFrame({"close": [10.0 + i * 0.01 for i in range(300)]}, index=idx)
+    comm = pd.Series([100.0 + i * 0.5 for i in range(300)], index=idx, dtype=float)  # 上升→向上
+    fig = sf.commodity_stock_overlay_figure("600362", "江西铜业", "铜", stock_df, comm)
+    names = [t.name for t in fig.data]
+    assert "江西铜业股价(左轴)" in names and "铜价(右轴)" in names      # 股价 + 商品价
+    assert "股价 MA60" in names and "铜 MA60" in names                 # 两条 MA60(左右轴对称)
+    assert len(fig.data) == 4                                          # 4 线
+    assert any(getattr(t, "yaxis", "") == "y2" for t in fig.data)     # 双轴(右轴 y2)
+    assert "双轴" in fig.layout.title.text and "江西铜业" in fig.layout.title.text
+    # 缺股价 → 退独立商品图(标题无"双轴")
+    fig2 = sf.commodity_stock_overlay_figure("600362", "江西铜业", "铜", pd.DataFrame(), comm)
+    assert "双轴" not in (fig2.layout.title.text or "")
+    # 都缺 → 占位(不抛)
+    assert sf.commodity_stock_overlay_figure("600362", "江西铜业", "铜",
+                                             pd.DataFrame(), pd.Series(dtype=float)) is not None
+
+
 def test_render_commodity_panel_and_modal_7th():
     # 002466 在 commodity_map → 周期 tab:含商品价时序面板 + 模态第 7 张商品图
     h = srep.render({"002466": _diag()}, [], as_of="2026-07-22", names={"002466": "天齐"}, store=_StubStore())
@@ -174,3 +196,28 @@ def test_render_commodity_panel_and_modal_7th():
     # 非商品股(600519)只有 6 槽
     h2 = srep.render({"600519": _diag()}, [], as_of="2026-07-22", names={"600519": "茅台"}, store=_StubStore())
     assert h2.count('class="modal-chart"') == 6
+
+
+def test_commodity_panel_covers_all_varieties():
+    """面板品种清单与 fetcher.COMMODITY_CODES 同源(单一数据源);新增 8 种齐备,全 13 种渲染入面板。"""
+    from stockagent.data import fetcher
+    from stockagent.data.manager import DataManager
+
+    # 单一数据源:manager 列表派生自 fetcher(等长同序)
+    assert DataManager.COMMODITY_VARIETIES == list(fetcher.COMMODITY_CODES.keys())
+    # 新增 8 种齐备(回归守卫:防止品种被误删)
+    assert set(["铝", "锌", "铁矿石", "焦煤", "白银", "玻璃", "纯碱", "生猪"]) <= set(fetcher.COMMODITY_CODES)
+    assert len(fetcher.COMMODITY_CODES) == 13
+
+    # store 给每个品种返回真实序列(300 点上升 → 判定"向上")→ 面板应渲染全部品种名
+    idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    series = pd.Series([100.0 + i * 0.5 for i in range(300)], index=idx, dtype=float)
+
+    class _ComStore(_StubStore):
+        def get_commodity_series(self, variety):
+            return series
+
+    h = srep.render({"002466": _diag()}, [], as_of="2026-07-22",
+                    names={"002466": "天齐"}, store=_ComStore())
+    for v in fetcher.COMMODITY_CODES:                # 全 13 个品种名都出现在面板
+        assert v in h, f"面板缺品种 {v}"

@@ -182,3 +182,33 @@ def test_update_symbol_accepts_raw_into_split_adj_history(monkeypatch):
                         lambda *a, **k: (raw_df, "sina_raw"))
     assert dm.update_symbol("X") == 1                 # accepted (was skipped before fix)
     assert st.last_date("X") == "2026-07-17"
+
+
+# ---------- commodity_map ↔ watchlist ↔ COMMODITY_CODES consistency ----------
+def test_commodity_map_varieties_all_backfilled():
+    """commodity_map 指向的品种必须都在 fetcher.COMMODITY_CODES —— 否则该股 A 类商品信号静默失效
+    (variety 拼错/漏加进 COMMODITY_CODES 都会被这条抓住)。"""
+    from stockagent.config import get_config
+    from stockagent.data import fetcher
+    cm = (get_config().params.get("stock", {}) or {}).get("commodity_map", {}) or {}
+    bad = {s: v for s, v in cm.items() if v not in fetcher.COMMODITY_CODES}
+    assert not bad, f"commodity_map 指向未回填品种: {bad}"
+
+
+def test_watchlist_stocks_all_have_names():
+    """STOCK_WATCHLIST 每只都有 STOCK_NAMES 条目(看板不露裸代码)。"""
+    from stockagent.data.manager import DataManager
+    missing = [s for s in DataManager.STOCK_WATCHLIST if s not in DataManager.STOCK_NAMES]
+    assert not missing, f"缺名字: {missing}"
+
+
+def test_new_commodity_stocks_wired():
+    """8 只新品种周期股已写进 watchlist + commodity_map(回归守卫:防误删/拼错)。"""
+    from stockagent.config import get_config
+    from stockagent.data.manager import DataManager
+    cm = (get_config().params.get("stock", {}) or {}).get("commodity_map", {}) or {}
+    expected = {"601600": "铝", "000060": "锌", "601969": "铁矿石", "000983": "焦煤",
+                "000603": "白银", "601636": "玻璃", "000683": "纯碱", "002714": "生猪"}
+    for code, var in expected.items():
+        assert code in DataManager.STOCK_WATCHLIST, f"{code} 不在观察池"
+        assert cm.get(code) == var, f"{code} 映射应为 {var}, 实际 {cm.get(code)}"
