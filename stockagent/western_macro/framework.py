@@ -55,10 +55,11 @@ CHAIN_NODES: list[tuple[str, list[str]]] = [
 _CHART_WIN = 1500
 
 
-def _xaxis_ranges(c: dict) -> dict:
-    """x 轴配置: 日期轴 + range 按钮(1m/3m/6m/1y/3y/all) + 底部 range slider(可拖拽改观察窗口)。"""
+def _xaxis_ranges(c: dict, hover_fmt: str = "%Y-%m-%d") -> dict:
+    """x 轴配置: 日期轴 + range 按钮(1m/3m/6m/1y/3y/all) + 底部 range slider(可拖拽改观察窗口)。
+    hover_fmt: 悬停日期格式(日频默认 %Y-%m-%d; 月频传 %Y-%m 避免显示无意义的 -01)。"""
     return dict(
-        type="date", tickformat="%Y-%m", gridcolor=c["border"],
+        type="date", tickformat="%Y-%m", hoverformat=hover_fmt, gridcolor=c["border"],
         rangeselector=dict(
             buttons=[
                 dict(count=1, label="1m", step="month", stepmode="backward"),
@@ -72,6 +73,50 @@ def _xaxis_ranges(c: dict) -> dict:
             font=dict(size=10, color=c["ink"]), x=0, xanchor="left"),
         rangeslider=dict(visible=True, thickness=0.04),
     )
+
+
+# 单图放大悬浮框(modal)的 CSS + JS —— 普通 string(f-string 不再二次解析括号)
+_MODAL_CSS = """
+.chart-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center}
+.chart-modal.open{display:flex}
+.chart-modal-box{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:30px 14px 14px;width:min(94vw,1500px);max-height:92vh;overflow:auto;position:relative}
+.chart-modal-close{position:absolute;top:8px;right:12px;cursor:pointer;background:var(--border);color:var(--ink);border:none;border-radius:6px;padding:4px 12px;font-size:13px;z-index:5}
+.expand-btn{position:absolute;top:4px;right:8px;z-index:1002;cursor:pointer;background:var(--surface);color:var(--ink2);border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px}
+.expand-btn:hover{color:var(--accent);border-color:var(--accent)}
+"""
+
+_MODAL_JS = """
+<script>
+(function(){
+  var m=document.createElement('div');m.className='chart-modal';
+  m.innerHTML='<div class="chart-modal-box"><button class="chart-modal-close" type="button">\\u2715 关闭</button><div id="chartModalPlot"></div></div>';
+  document.body.appendChild(m);
+  function _close(){m.classList.remove('open');try{Plotly.purge('chartModalPlot');}catch(e){}}
+  m.querySelector('.chart-modal-close').onclick=_close;
+  m.addEventListener('click',function(e){if(e.target===m){_close();}});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&m.classList.contains('open')){_close();}});
+  window.expandChart=function(srcId){
+    var src=document.getElementById(srcId);
+    if(!src||!src.data){return;}
+    m.classList.add('open');
+    var h=Math.max(440, window.innerHeight*0.78);
+    Plotly.newPlot('chartModalPlot', src.data,
+      Object.assign({}, src.layout, {height:h, autosize:true, margin:{l:70,r:60,t:30,b:50}}),
+      {responsive:true, displaylogo:false, scrollZoom:true});
+  };
+  function inject(){
+    document.querySelectorAll('.plotly-graph-div').forEach(function(gd){
+      if(gd.querySelector('.expand-btn')){return;}
+      if(!gd.style.position){gd.style.position='relative';}
+      var b=document.createElement('button');b.className='expand-btn';b.type='button';b.textContent='\\u{1F50D} 展开';
+      b.onclick=function(ev){ev.preventDefault();ev.stopPropagation();window.expandChart(gd.id);};
+      gd.appendChild(b);
+    });
+  }
+  window.addEventListener('load',function(){inject();setTimeout(inject,800);setTimeout(inject,2500);});
+})();
+</script>
+"""
 
 
 def _rolling_pct(s: pd.Series, lookback: int = DEV_LOOKBACK, min_bars: int = 20) -> pd.Series:
@@ -305,34 +350,45 @@ def _gold_micro_block(store, c: dict, first=None) -> str:
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=pd.to_datetime(list(net.index)), y=[float(v) for v in net.values],
                                  mode="lines", name="投机(净多)", line=dict(color=c["hit"], width=1.4),
-                                 hovertemplate="投机 %{x|%Y-%m-%d}  净 %{y:,.0f}<extra></extra>"))
+                                 hovertemplate="%{y:,.0f}<extra></extra>"))
         cfm = store.get_cftc_position("GC_M")
         if not cfm.empty:
             nm = cfm["net_pos"].astype(float).iloc[-312:]
             fig.add_trace(go.Scatter(x=pd.to_datetime(list(nm.index)), y=[float(v) for v in nm.values],
                                      mode="lines", name="商业(净空)", line=dict(color=c["miss"], width=1.2, dash="dot"),
-                                     hovertemplate="商业 %{x|%Y-%m-%d}  净 %{y:,.0f}<extra></extra>"))
+                                     hovertemplate="%{y:,.0f}<extra></extra>"))
         hi = float(cf["net_pos"].astype(float).iloc[-312:].quantile(0.85)) if len(cf) > 10 else 0
         fig.add_hline(y=hi, line_dash="dot", line_color=c["miss"], annotation_text="投机85%分位(泡沫区)", annotation_font_size=9)
         fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=200, showlegend=True,
+                          hovermode="x unified",
                           legend=dict(orientation="h", y=1.02, x=0, font=dict(size=9)),
                           paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
                           xaxis=_xaxis_ranges(c),
                           yaxis=dict(title="净仓位(手)", gridcolor=c["border"]))
         parts.append('<div class="chart-t" style="margin-top:8px">CFTC 持仓: 投机净多(金,↑极值=泡沫) vs 商业净空(红,空单极小=逼空前兆)</div>' + _embed(fig, "micro_cftc"))
 
-    # 图: 央行购金 (中国, 月频, 近10y)
+    # 图: 央行购金 (中国, 月频, 近10y): 柱=存量(万oz) / 线=月环比%
     if not cb.empty:
         sub = cb.iloc[-120:]
+        vals = sub["value"].astype(float)
+        mom = (vals.pct_change() * 100.0)         # 月环比增减%(=净购金节奏)
+        dtm = pd.to_datetime(list(sub.index))
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=pd.to_datetime(list(sub.index)), y=sub["value"].astype(float).values,
-                             name="黄金储备", marker_color=c["accent"], yaxis="y",
-                             hovertemplate="%{x|%Y-%m}  %{y:.0f}<extra></extra>"))
-        fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=200, showlegend=False,
+        fig.add_trace(go.Bar(x=dtm, y=vals.values, name="黄金储备(万oz)",
+                             marker_color=c["accent"], yaxis="y",
+                             hovertemplate="%{y:.0f}<extra></extra>"))
+        fig.add_trace(go.Scatter(x=dtm, y=mom.values, name="环比%", mode="lines+markers",
+                                 yaxis="y2", line=dict(color=c["hit"], width=1.4),
+                                 marker=dict(size=4),
+                                 hovertemplate="%{y:+.2f}%<extra></extra>"))
+        fig.update_layout(margin=dict(l=56, r=52, t=6, b=24), height=220, showlegend=True,
+                          hovermode="x unified",
+                          legend=dict(orientation="h", y=1.08, x=0, font=dict(size=9)),
                           paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
-                          xaxis=_xaxis_ranges(c),
-                          yaxis=dict(title="万盎司", gridcolor=c["border"]))
-        parts.append('<div class="chart-t" style="margin-top:8px">中国央行黄金储备(月 · 持续增持=底的锚)</div>' + _embed(fig, "micro_cb"))
+                          xaxis=_xaxis_ranges(c, "%Y-%m"),
+                          yaxis=dict(title="万盎司", gridcolor=c["border"]),
+                          yaxis2=dict(overlaying="y", side="right", title="环比%", showgrid=False))
+        parts.append('<div class="chart-t" style="margin-top:8px">中国央行黄金储备(柱=存量万oz / 线=月环比% · 持续增持=底的锚)</div>' + _embed(fig, "micro_cb"))
     parts.append('</div>')
     return "".join(parts)
 
@@ -503,6 +559,7 @@ tr:hover{{background:color-mix(in srgb,var(--accent) 6%,transparent)}}
 .toggle{{position:fixed;top:14px;right:18px;cursor:pointer;background:var(--surface);border:1px solid var(--border);
 color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 .foot{{margin-top:24px;color:var(--ink2);font-size:11px;border-top:1px solid var(--border);padding-top:10px}}
+{_MODAL_CSS}
 </style></head><body>
 <button class="toggle" onclick="toggle()">🌓 浅/深</button>
 <div class="wrap">
@@ -535,7 +592,7 @@ const PAL={{dark:{{paper:"#1a1a19",plot:"#0d0d0c",ink:"#ffffff",grid:"#2c2c2a"}}
 function applyPlotly(t){{const p=PAL[t];document.querySelectorAll('.plotly-graph-div').forEach(function(gd){{
  Plotly.relayout(gd,{{"paper_bgcolor":p.paper,"plot_bgcolor":p.plot,"font.color":p.ink,"xaxis.gridcolor":p.grid,"yaxis.gridcolor":p.grid}});}});}}
 function toggle(){{var h=document.documentElement;var t=h.dataset.theme==='dark'?'light':'dark';h.dataset.theme=t;applyPlotly(t);}}
-</script></body></html>"""
+</script>{_MODAL_JS}</body></html>"""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")
     return out_path
