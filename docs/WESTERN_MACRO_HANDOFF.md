@@ -4,7 +4,11 @@
 
 ## ⚡ 当前状态 & 立即任务
 **Slice 1 全部完成并经审计**(数据层+LLM抽取+评分+看板+抽样审计+confirm闸门,全打通有测试)。
-**立即任务 = 黄金阶段定位器 MVP**(详见末段「下一步详规」)。这是验证"能否把 JZ 的框架演化成自己的、数据驱动的看板"的最短一刀。
+**黄金阶段定位器 MVP 完成**(stage.py + wm_gold_stage_eval.py + 看板块 + 32 测试;闸门 56% 未过→降级辅助参考,详见末段)。
+**宏观 call 实时确认视图完成**(live.py + 看板块 + 15 测试;方向语言资产的「定位」落地,用上真 edge)。
+- **数据修正**:阶段语言(筑底/反弹/头部/回调)是**黄金特有**;JZ 对**利率**(2Y/10Y/2s10s)用**方向语言**(上行/下降/陡峭化),DXY 弱(1/5)、真 edge 在**美债2Y 方向**(8/12)。→ 不能把阶段定位器平移到利率(无阶段词→全剔除)。
+- **实时确认视图产出(2026-08-09)**:对每条未到期 call 判 兑现中/背离/停滞 (到期沿用结算)。**实证亮点**:标普500 未到期 12 条**全背离**(JZ 看空、市场涨 11.9%)——实时坐实「美股看空是死穴」;美债10Y 9/14 兑现(看多10Y 对);美债2Y 当前 6/7 背离(看降息但 2Y 涨 8.9%)。108 条未到期 / 兑现39 背离56 停滞13。
+- **立即任务(待用户拍板)**:① 实时确认视图已可用,继续观察/精修(如 level claim 的进度量化、把「背离」接入告警);② 回黄金阶段定位器 P2(多时间尺度筑底/回调判别 + 真实利率);③ confirm 清洗 claim 后重跑两套。
 
 ## 👤 用户投资哲学(决定怎么 build,务必内化)
 - **不要预测精确时点/价位**(永远买卖不到极值);追求**大概率方向 + 大致区间 + 大致操作**。
@@ -35,8 +39,8 @@
 - `stockagent/data/store.py`:`western_macro_series`(source/symbol/date,close 统一承载价格或收益率)+ `wm_claims/settlements/rules` 表 + 方法(注意:重抽 upsert 不覆盖 state)。
 - `stockagent/data/fetcher.py`:`fetch_us_treasury`(bond_zh_us_rate)/`fetch_us_index`(index_us_stock_sina .INX/.IXIC/.DJI)/`fetch_foreign_future`(futures_foreign_hist GC/SI/CL/OIL)/`fetch_forex_pair`(forex_hist_em,push2his 常被拦)+ `fetch_forex_pairs_ecb`(Frankfurter/ECB fallback,6腿EUR-cross换算USD-base)+ `reconstruct_dxy(_series)`(ICE 6腿公式,abs无须)。
 - `stockagent/data/manager.py`:`update_western_macro()`(AkShare forex 失败→ECB fallback)。
-- `stockagent/western_macro/`:`drivers.py`(canonical 15节点因果图+ASSET映射在extract.py)·`extract.py`(LLM抽DRAFT;`normalize_horizon`年份自纠;空响应重试;`process_episodes_parallel`默认workers=1)·`score.py`(评分;`series_for`支持fut/usidx/ust/dxy/index_daily/commodity)·`dashboard.py`(HTML+Plotly时序图:发布日→兑现日窗口+断言点+level目标线+状态列)。
-- `scripts/`:`backfill_western_macro.py`·`extract_western_claims.py`·`western_macro_report.py`(结算+渲染+开)·`wm_confirm.py`(审核CLI)·`wm_audit.py`(抽样审计)。
+- `stockagent/western_macro/`:`drivers.py`(canonical 15节点因果图+ASSET映射在extract.py)·`extract.py`(LLM抽DRAFT;`normalize_horizon`年份自纠;空响应重试;`process_episodes_parallel`默认workers=1)·`score.py`(评分;`series_for`支持fut/usidx/ust/dxy/index_daily/commodity)·`dashboard.py`(HTML+Plotly时序图:发布日→兑现日窗口+断言点+level目标线+状态列+**🥇黄金阶段块**+**📡实时确认块**)·`stage.py`(黄金阶段定位器 MVP: MA60+近12月偏离分位→5阶段决策树 + 词映射 + 一致性回测 + 置信度;复用 tracker.indicators/diagnose)·`live.py`(宏观call实时确认: 未到期断言→兑现中/背离/停滞 + 按标的聚合JZ净方向;复用 score 点在时helper)。
+- `scripts/`:`backfill_western_macro.py`·`extract_western_claims.py`·`western_macro_report.py`(结算+渲染+开)·`wm_confirm.py`(审核CLI)·`wm_audit.py`(抽样审计)·`wm_gold_stage_eval.py`(黄金阶段回测闸门+混淆矩阵+--sweep标定)。
 - 测试:`tests/test_western_macro.py`(DXY公式+store)·`tests/test_western_score.py`(~15个:edge/baseline/路径感知/负值系列/点位方向一致)。
 
 ## ⚠️ 已踩平的 10 个坑(别再踩)
@@ -76,5 +80,6 @@ python scripts/extract_western_claims.py --since 2026-08-01   # 抽新集(幂等
 python scripts/backfill_western_macro.py               # 补数据(含ECB外汇+DXY)
 python scripts/wm_confirm.py --veto <uid前8位>          # 审核清洗
 python scripts/wm_audit.py --seed 42                   # 抽样审计
-python -m pytest tests/test_western_macro.py tests/test_western_score.py -q   # 测试
+python scripts/wm_gold_stage_eval.py --show-dropped    # 黄金阶段回测闸门+混淆矩阵(--sweep 标定)
+python -m pytest tests/test_western_macro.py tests/test_western_score.py tests/test_western_stage.py -q   # 测试
 ```

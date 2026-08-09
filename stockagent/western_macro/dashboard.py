@@ -195,6 +195,155 @@ def _charts_html(store, claims, sett, c: dict) -> str:
     return "\n".join(parts)
 
 
+_STAGE_COLOR = {  # 阶段 → theme key
+    "筑底/底部震荡": "edge", "反弹初期": "edge", "趋势上行": "accent",
+    "头部区域": "hit", "回调下跌": "miss",
+}
+
+
+def _gold_stage_block(store, c: dict) -> str:
+    """黄金阶段定位块: chips(阶段/信心/偏离/MA60/驱动) + Plotly(close+MA60+12月偏离分位+当前阶段点)。
+
+    MVP 只读快照(不在 render 里跑回测); 一致性由 wm_gold_stage_eval.py 单独出。
+    无黄金数据 → 降级提示。"""
+    from .stage import (GOLD_DEV_HIGH, GOLD_DEV_LOW, GOLD_DISCOUNT, gold_stage_snapshot,
+                        _rolling_dev_pct)
+    from .score import series_for
+    from stockagent.tracker.indicators import deviation_series, ma_series
+
+    snap = gold_stage_snapshot(store)
+    if not snap.get("valid"):
+        return ('<div class="chart"><div class="chart-t">🥇 黄金阶段定位</div>'
+                '<div class="muted">黄金数据不足,无法定位阶段。</div></div>')
+
+    ev = snap["evidence"]
+    st = snap["stage"]
+    stage_col = c.get(_STAGE_COLOR.get(st, "accent"), c["accent"])
+    st_label = st + ("（震荡·信号衰减）" if snap.get("noise") else "")
+
+    def chip(label, val, sub="", color=None):
+        vs = f' style="color:{color}"' if color else ""
+        return (f'<div class="card"><div class="card-v"{vs}>{val}</div><div class="card-l">{label}</div>'
+                f'{f"<div class=card-s>{sub}</div>" if sub else ""}</div>')
+
+    pvsma = ev.get("price_vs_ma_pct")
+    above = "上" if ev.get("above_ma") else "下"
+    pvsma_txt = f"{above} {pvsma:+.1%}" if (pvsma is not None and pvsma == pvsma) else "—"
+    drv = snap.get("drivers") or {}
+    conf_txt = f"{snap['confidence']*100:.0f}%·{snap['confidence_band']}"
+    strength_txt = f"强度{snap['strength']:.2f}×折价{GOLD_DISCOUNT:.1f}"
+    dev_txt = f"{ev['dev_pct_12m']:.2f}"
+    ma_side = "均线↑" if ev.get("ma_trend_up") else "均线↓"
+    drv_txt = f"DXY {drv.get('dxy_phase', '—')} · 曲线 {drv.get('curve_phase', '—')}"
+    chips = (
+        '<div class="cards">'
+        + chip("当前阶段", st_label, "黄金·规则复现JZ阶段语言", stage_col)
+        + chip("信心", conf_txt, strength_txt)
+        + chip("偏离分位(近12月)", dev_txt, "0=超卖 / 1=超买")
+        + chip("MA60 侧", pvsma_txt, ma_side)
+        + chip("驱动", drv_txt, drv.get("note", ""))
+        + '</div>')
+
+    # 图: 近2年 close + MA60 + 12月偏离分位(y2) + 当前阶段点 + DEV 带
+    gold = series_for("黄金", store).sort_index()
+    n = min(500, len(gold))
+    g = gold.iloc[-n:]
+    ma60 = ma_series(gold, 60).iloc[-n:]
+    devp = _rolling_dev_pct(deviation_series(gold, 60), 252).iloc[-n:]
+    dt = pd.to_datetime(list(g.index))
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=dt, y=[float(v) for v in g.values], mode="lines", name="黄金",
+                             line=dict(color=c["accent"], width=1.4),
+                             hovertemplate="%{x|%Y-%m-%d}  %{y:.0f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=dt, y=[float(v) for v in ma60.values], mode="lines", name="MA60",
+                             line=dict(color=c["ink2"], width=1.0), hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=dt, y=[float(v) if v == v else None for v in devp.values],
+                             mode="lines", name="12月偏离分位", yaxis="y2",
+                             line=dict(color=c["open"], width=1.0, dash="dot"),
+                             fill="tozeroy", hovertemplate="偏离分位 %{y:.2f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=[dt[-1]], y=[float(g.iloc[-1])], mode="markers", name=st,
+                             marker=dict(size=14, color=stage_col, symbol="diamond",
+                                         line=dict(width=1.5, color="#ffffff")), hoverinfo="skip"))
+    for y0, y1, col in [(0.0, GOLD_DEV_LOW, c["edge"]), (GOLD_DEV_HIGH, 1.0, c["miss"])]:
+        fig.add_shape(type="rect", xref="paper", yref="y2", x0=0, x1=1, y0=y0, y1=y1,
+                      fillcolor=col, opacity=0.10, line_width=0, layer="below")
+    fig.add_annotation(x=dt[-1], y=float(g.iloc[-1]), text=st_label, showarrow=False,
+                       xanchor="left", xshift=8, font=dict(color=stage_col, size=11))
+    fig.update_layout(margin=dict(l=64, r=44, t=8, b=28), height=300, showlegend=False,
+                      paper_bgcolor=c["surface"], plot_bgcolor=c["bg"],
+                      font=dict(size=11, color=c["ink"]),
+                      xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
+                      yaxis=dict(title=dict(text="COMEX黄金(USD)", font=dict(size=10)),
+                                 gridcolor=c["border"]),
+                      yaxis2=dict(overlaying="y", side="right", range=[0, 1], showgrid=False,
+                                  title=dict(text="偏离分位", font=dict(size=9))))
+    fig_html = fig.to_html(full_html=False, include_plotlyjs=False, div_id="stage_gold")
+    return (f'<div class="chart"><div class="chart-t">🥇 黄金阶段定位 '
+            f'<span class="muted">(MA60 + 近12月偏离分位 · ◆当前阶段点 · 绿带=超卖区/红带=超买区)</span></div>'
+            f'{chips}{fig_html}</div>')
+
+
+def _live_confirm_block(store, c: dict) -> str:
+    """宏观 call 实时确认块: 未到期 claim 当前是否被数据兑现 (兑现中/背离/停滞) + 按标的聚合 + 背离清单。
+
+    利率(2Y/10Y/2s10s) 等 JZ 用*方向语言*的资产, 在此用方向兑现来量 (而非阶段); 用上真 edge。"""
+    from .live import (ALT_BRANCH, DIVERGING, MANUAL, NO_SERIES, ON_TRACK, RES_EDGE,
+                       RES_HIT, RES_MISS, STALLED, live_confirmation_overview)
+    ov = live_confirmation_overview(store)
+    counts = ov["counts"]
+    open_total = ov["open_total"]
+
+    def chip(label, val, sub="", color=None):
+        vs = f' style="color:{color}"' if color else ""
+        return (f'<div class="card"><div class="card-v"{vs}>{val}</div><div class="card-l">{label}</div>'
+                f'{f"<div class=card-s>{sub}</div>" if sub else ""}</div>')
+
+    cards = (
+        '<div class="cards">'
+        + chip("未到期 call", open_total, f"共 {ov['total']} 条断言")
+        + chip("兑现中", counts.get(ON_TRACK, 0), "数据正向预测走", c["edge"])
+        + chip("背离", counts.get(DIVERGING, 0), "数据反向走", c["miss"])
+        + chip("停滞", counts.get(STALLED, 0), "基本没动", c["ink2"])
+        + '</div>')
+
+    # 按标的聚合
+    by_asset = ov["by_asset"]
+
+    def _fmt_ret(d):
+        return f"{d['avg_ret']*100:+.1f}%" if d['avg_ret'] is not None else "—"
+
+    if by_asset:
+        asset_rows = "".join(
+            f"<tr><td>{a}</td><td>{d['open']}</td><td>{d[ON_TRACK]}</td><td>{d[DIVERGING]}</td>"
+            f"<td>{d[STALLED]}</td><td>{d['net_direction'] or '—'}</td><td>{_fmt_ret(d)}</td></tr>"
+            for a, d in sorted(by_asset.items(), key=lambda kv: -kv[1]["open"]))
+        asset_tbl = (
+            '<table style="margin-top:8px"><tr><th>标的</th><th>未到期</th><th>兑现中</th>'
+            '<th>背离</th><th>停滞</th><th>JZ净方向</th><th>平均走势(自发布)</th></tr>'
+            + asset_rows + '</table>')
+    else:
+        asset_tbl = '<div class="muted">无未到期 call。</div>'
+
+    # 背离清单 (最可操作: JZ 说 X, 数据说 otherwise)
+    diverging = sorted([r for r in ov["rows"] if r["status"] == DIVERGING],
+                       key=lambda x: x["episode_date"], reverse=True)[:10]
+    if diverging:
+        div_rows = "".join(
+            f"<tr><td>{r['episode_date']}</td><td>{r['asset']}</td><td>{r['direction']}</td>"
+            f"<td class='muted'>{r['note']}</td><td class='stmt'>{r['statement'][:48]}</td></tr>"
+            for r in diverging)
+        div_tbl = (
+            '<div class="chart-t" style="margin-top:10px">⚠ 当前背离的 call (JZ 预测 vs 数据反向 · 前 10)</div>'
+            '<table><tr><th>日期</th><th>标的</th><th>预测</th><th>走势</th><th>断言</th></tr>'
+            + div_rows + '</table>')
+    else:
+        div_tbl = '<div class="muted" style="margin-top:10px">无当前背离的 call。</div>'
+
+    return (f'<div class="chart"><div class="chart-t">📡 宏观 call 实时确认 '
+            f'<span class="muted">(未到期断言 · 数据当前是否兑现 · 利率用方向兑现量 edge)</span></div>'
+            f'{cards}{asset_tbl}{div_tbl}</div>')
+
+
 def render_western_macro(store, docs_dir: Path, episodes_json: Path,
                          out_path: Path, asof: str = "") -> Path:
     claims = store.get_wm_claims()
@@ -272,6 +421,8 @@ def render_western_macro(store, docs_dir: Path, episodes_json: Path,
         for r in rules) or '<tr><td colspan=3 class="muted">无</td></tr>'
     provisional = (n_anthology and n_transcripts < n_anthology)
     charts_html = _charts_html(store, claims, sett, D)
+    gold_stage_html = _gold_stage_block(store, D)
+    live_html = _live_confirm_block(store, D)
     state_counts = {"draft": 0, "confirmed": 0, "vetoed": 0}
     for c in claims:
         state_counts[c["state"]] = state_counts.get(c["state"], 0) + 1
@@ -329,6 +480,14 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 
 <h2>📈 标的时序图(验证用 · 实心点=兑现日 / 空心点=发布日 / 竖色带=评判窗口 / 虚线=这段走势 · 🟢本事 / 🟡命中 / 🔴未中 / ⚪未到期)</h2>
 {charts_html}
+
+<h2>🥇 黄金阶段定位器(Phase 3 MVP · 规则复现 JZ 阶段语言 · 只读诊断·不喂引擎 ADR-0001)</h2>
+<div class="banner info">规则由黄金自身结构(MA60 + 近12月偏离分位)定阶段, DXY/曲线作确认驱动。置信度按 JZ 黄金择时 32% 命中弱项 ×0.60 折价。回测一致性由 <code>python scripts/wm_gold_stage_eval.py</code> 单独出(MVP 不在此跑回测)。</div>
+{gold_stage_html}
+
+<h2>📡 宏观 call 实时确认(未到期断言 · 数据当前是否兑现 · 只读诊断·不喂引擎 ADR-0001)</h2>
+<div class="banner info">JZ 在<b>利率</b>(2Y/10Y/2s10s)上用方向语言(edge 所在), 本视图用「数据当前是否兑现其方向」来量, 比黄金阶段定位更贴他的强项。到期断言沿用结算(本事/命中/未中); 未到期按自发布以来的走势判 兑现中/背离/停滞。</div>
+{live_html}
 
 <h2>📋 台账(全部断言 · 未到期=兑现日未到 / 点位·时点=人工结算)</h2>
 <table><tr><th>日期</th><th>标的</th><th>类型</th><th>预测</th><th>兑现</th><th>实际</th><th>结果</th><th>状态</th><th>断言</th><th>驱动</th><th>价格</th></tr>
