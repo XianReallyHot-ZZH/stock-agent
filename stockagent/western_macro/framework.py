@@ -35,6 +35,7 @@ DEV_HIGH = GOLD_DEV_HIGH
 # 资产 → 分析家族 (price=5阶段树 / yield=水平分位+trend / curve=倒挂/陡峭)
 ASSET_FAMILIES: dict[str, str] = {
     "美债2Y": "yield", "美债10Y": "yield", "美债30Y": "yield",
+    "实际利率10Y": "yield", "通胀预期10Y": "yield", "期限溢价10Y": "yield",
     "2s10s": "curve",
     "美元指数": "price", "黄金": "price", "白银": "price", "铜": "price",
     "原油": "price", "标普500": "price", "纳斯达克": "price", "道琼斯": "price", "A股": "price",
@@ -42,7 +43,7 @@ ASSET_FAMILIES: dict[str, str] = {
 
 # 因果链节点 (顺序 = 框架传导方向)
 CHAIN_NODES: list[tuple[str, list[str]]] = [
-    ("利率 · 美债收益率", ["美债2Y", "美债10Y", "美债30Y"]),
+    ("利率 · 美债收益率 / 实际利率 / 期限溢价", ["美债2Y", "美债10Y", "美债30Y", "实际利率10Y", "通胀预期10Y", "期限溢价10Y"]),
     ("曲线 · 2s10s", ["2s10s"]),
     ("美元 · DXY", ["美元指数"]),
     ("金属", ["黄金", "白银", "铜"]),
@@ -243,9 +244,11 @@ def _gold_micro_block(store, c: dict) -> str:
         col = c["hit"] if pct >= 0.85 else (c["edge"] if pct <= 0.15 else c["ink2"])
         chips.append(chip("投机净仓位", f"{cur/1000:+.0f}k", f"近2年分位 {pct:.0%}（≥85%泡沫）", col))
     if not cb.empty:
-        moms = cb["mom"].astype(float).iloc[-12:]
-        avg = float(moms.mean()) if len(moms) else 0.0
-        chips.append(chip("央行(中国)购金", f"+{avg:.2f}%/月", f"近12月均值 @ {cb.index[-1]}", c["accent"]))
+        val = cb["value"].astype(float)
+        cur = float(val.iloc[-1])
+        prev = float(val.iloc[-2]) if len(val) > 1 else cur
+        delta = cur - prev                              # 万盎司/月(实物净购金)
+        chips.append(chip("央行(中国)黄金", f"{cur:.0f}万oz", f"近月净购 {delta:+.0f}万oz(≈{delta*0.0311:+.1f}吨)", c["accent"]))
     chips.append('</div>')
     parts = [f'<div class="chart"><div class="chart-t">🔬 黄金微观紧缺 '
              f'<span class="muted">(L2库存/L3紧缺/L4投机泡沫 · JZ 框架微观证据 · GOFO/全球ETF无源待补)</span></div>',
@@ -264,20 +267,27 @@ def _gold_micro_block(store, c: dict) -> str:
                           yaxis=dict(title="吨", gridcolor=c["border"]))
         parts.append(f'<div class="chart-t" style="margin-top:8px">COMEX 黄金库存(吨 · ↓=紧缺/逼空压力)</div>' + fig.to_html(False, False, "micro_comex"))
 
-    # 图: CFTC 投机净仓位 + 泡沫分位带 (近3y)
+    # 图: CFTC 投机净仓位(净多) + 商业净仓位(净空, 镜像) + 泡沫分位带 (近3y)
     if not cf.empty:
         net = cf["net_pos"].astype(float).iloc[-156:]
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=pd.to_datetime(list(net.index)), y=[float(v) for v in net.values],
-                                 mode="lines", name="投机净仓位", line=dict(color=c["hit"], width=1.4),
-                                 hovertemplate="%{x|%Y-%m-%d}  净 %{y:,.0f}<extra></extra>"))
+                                 mode="lines", name="投机(净多)", line=dict(color=c["hit"], width=1.4),
+                                 hovertemplate="投机 %{x|%Y-%m-%d}  净 %{y:,.0f}<extra></extra>"))
+        cfm = store.get_cftc_position("GC_M")
+        if not cfm.empty:
+            nm = cfm["net_pos"].astype(float).iloc[-156:]
+            fig.add_trace(go.Scatter(x=pd.to_datetime(list(nm.index)), y=[float(v) for v in nm.values],
+                                     mode="lines", name="商业(净空)", line=dict(color=c["miss"], width=1.2, dash="dot"),
+                                     hovertemplate="商业 %{x|%Y-%m-%d}  净 %{y:,.0f}<extra></extra>"))
         hi = float(cf["net_pos"].astype(float).iloc[-156:].quantile(0.85)) if len(cf) > 10 else 0
-        fig.add_hline(y=hi, line_dash="dot", line_color=c["miss"], annotation_text="85%分位(泡沫区)", annotation_font_size=9)
-        fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=180, showlegend=False,
+        fig.add_hline(y=hi, line_dash="dot", line_color=c["miss"], annotation_text="投机85%分位(泡沫区)", annotation_font_size=9)
+        fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=200, showlegend=True,
+                          legend=dict(orientation="h", y=1.02, x=0, font=dict(size=9)),
                           paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
                           xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
                           yaxis=dict(title="净仓位(手)", gridcolor=c["border"]))
-        parts.append('<div class="chart-t" style="margin-top:8px">CFTC 非商业(投机)净仓位(↑极值=泡沫预警)</div>' + fig.to_html(False, False, "micro_cftc"))
+        parts.append('<div class="chart-t" style="margin-top:8px">CFTC 持仓: 投机净多(金,↑极值=泡沫) vs 商业净空(红,空单极小=逼空前兆)</div>' + fig.to_html(False, False, "micro_cftc"))
 
     # 图: 央行购金 (中国, 月频, 末段2y)
     if not cb.empty:

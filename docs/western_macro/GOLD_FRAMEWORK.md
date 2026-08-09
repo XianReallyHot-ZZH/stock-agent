@@ -94,13 +94,16 @@
 | 铜（沪铜 CU0） | 结构 | ✅ 已得 | 铜金比、有色 |
 | **COMEX 黄金/白银库存** | L2/L3 | ✅ 已得（`futures_comex_inventory`, 日频 2021+） | 库存↓=紧缺/逼空 |
 | **CFTC 非商业(投机)持仓** | L4 | ✅ 已得（`macro_usa_cftc_c_holding`, 周频 1986+） | 投机净多单极值=泡沫预警 |
-| **央行黄金储备(中国)** | L1/L2 | ✅ 已得（`macro_china_fx_gold`, 月频 2008+） | 持续增持=底的锚 |
-| **期限溢价 / 实际利率（TIPS）** | 中期 | ❌ 待补 | 经典但 JZ 不直盯；优先级中 |
-| **黄金租赁利率 GOFO/JLR** | L3 | ❌ 无源（LBMA 2015 停发） | 择时核心，无免费源 |
-| **全球 ETF（GLD/IAU）持仓流** | L2/L4 | ❌ 待补 | 炒作检测（中国黄金ETF可得，全球不可） |
-| **商业(merchant)持仓** | L3 | ❌ 待补（`macro_usa_cme_merchant_goods_holding` 格式杂） | 套保/逼空（空单极小） |
+| **CFTC 商业(merchant)持仓** | L3 | ✅ 已得（`macro_usa_cftc_merchant_goods_holding`, 周频 1986+） | 净空单极小=逼空前兆 |
+| **央行黄金储备(中国, 实物)** | L1/L2 | ✅ 已得（`macro_china_foreign_exchange_gold`, 万盎司存量, 月频 1978+） | 月度差分=净购金=底的锚 |
+| **实际利率10Y (TIPS)** | 中期 | ✅ 已得（FRED `DFII10`, 免费CSV） | 黄金的"死敌"；上行=逆风 |
+| **通胀预期10Y (盈亏平衡)** | 中期 | ✅ 已得（FRED `T10YIE`, 免费CSV） | 拆名义利率=实际+预期 |
+| **期限溢价10Y (ACM)** | 中期 | ✅ 已得（NY Fed `ACMTP10`, XLS） | 信任驱动=利好黄金 |
+| **黄金租赁利率 GOFO/JLR** | L3 | ❌ 无源（LBMA 2015 停发） | 择时核心，唯一真缺口 |
+| **全球 ETF（GLD/IAU）持仓流** | L2/L4 | ❌ 无源（仅中国黄金ETF可得） | 炒作检测 |
 
-回填：`python scripts/backfill_gold_micro.py`（COMEX/CFTC/央行→专表）。**已得微观 3 项**(库存/投机持仓/央行购金)覆盖了 JZ 最强调的紧缺+泡沫+底三信号；GOFO 和全球 ETF 是真实数据缺口。
+回填：`python scripts/backfill_gold_micro.py`（COMEX/CFTC 投机+商业/央行实物→专表 + FRED 实际利率/通胀预期 + NY Fed 期限溢价→western_macro_series）。
+**微观已得 7 项**（库存/投机/商业/央行实物/实际利率/通胀预期/期限溢价）覆盖 JZ 缺紧+泡沫+逼空+底+对手盘全信号链。FRED/NY Fed 为非-akshare 免费源（同 ECB 外汇先例，用户授权）。**唯一真缺口=GOFO 租赁利率**（LBMA 2015 停发）+ 全球 ETF。
 
 ---
 

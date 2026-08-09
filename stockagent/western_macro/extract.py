@@ -36,6 +36,9 @@ ASSET_REGISTRY: dict[str, tuple] = {
     "美债2Y":  ("real_rate",  ("ust", "US2Y")),
     "美债30Y": ("real_rate",  ("ust", "US30Y")),
     "2s10s":   ("curve_2s10s", ("ust", "US2S10S")),
+    "实际利率10Y": ("real_rate", ("fred", "DFII10")),   # 10年期TIPS收益率(黄金死敌)·FRED免费CSV
+    "通胀预期10Y": ("term_premium", ("fred", "T10YIE")),  # 10年期盈亏平衡通胀·FRED
+    "期限溢价10Y": ("term_premium", ("nyfed_acm", "ACMTP10")),  # NY Fed ACM 10年期期限溢价·XLS
     "标普500": ("us_equity",  ("usidx", ".INX")),
     "纳斯达克": ("us_equity", ("usidx", ".IXIC")),
     "道琼斯":  ("us_equity",  ("usidx", ".DJI")),

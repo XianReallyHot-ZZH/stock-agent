@@ -823,14 +823,40 @@ class DataManager:
             log.info("gold-micro cftc(投机): +%d rows", n)
         except Exception as e:  # noqa: BLE001
             log.warning("gold-micro cftc failed: %s", str(e)[:100])
-        # 央行黄金储备(中国, 月频)
+        # CFTC 商业(merchant)持仓(套保/逼空信号, 另一 COT 半)
+        try:
+            rows = fetcher.fetch_cftc_commercial()
+            n = self.store.upsert_cftc_position(rows)
+            out["cftc"] += n
+            log.info("gold-micro cftc(商业): +%d rows", n)
+        except Exception as e:  # noqa: BLE001
+            log.warning("gold-micro cftc(商业) failed: %s", str(e)[:100])
+        # 央行黄金储备(中国, 月频, 实物万盎司存量)
         try:
             rows = fetcher.fetch_cb_gold()
             n = self.store.upsert_cb_gold(rows)
             out["cb"] = n
-            log.info("gold-micro cb(CN): +%d rows", n)
+            log.info("gold-micro cb(CN 实物): +%d rows", n)
         except Exception as e:  # noqa: BLE001
             log.warning("gold-micro cb failed: %s", str(e)[:100])
+        # FRED 实际利率/通胀预期(免费CSV, 非-akshare 源, 用户授权; 黄金的死敌=实际利率)
+        out["fred"] = 0
+        for sid in ("DFII10", "T10YIE"):
+            try:
+                df = fetcher.fetch_fred_series(sid)
+                n = self.store.upsert_western_macro(df, source_tag="fred")
+                out["fred"] += n
+                log.info("gold-micro fred %s: +%d rows", sid, n)
+            except Exception as e:  # noqa: BLE001
+                log.warning("gold-micro fred %s failed: %s", sid, str(e)[:100])
+        # NY Fed ACM 期限溢价(XLS, 非-akshare 源·用户授权)
+        try:
+            df = fetcher.fetch_acm_term_premium(10)
+            n = self.store.upsert_western_macro(df, source_tag="nyfed_acm")
+            out["fred"] += n
+            log.info("gold-micro acm 期限溢价: +%d rows", n)
+        except Exception as e:  # noqa: BLE001
+            log.warning("gold-micro acm failed: %s", str(e)[:100])
         if any(out.values()):
             self.store.set_meta("last_gold_micro_update", fetcher.today_str())
         return out

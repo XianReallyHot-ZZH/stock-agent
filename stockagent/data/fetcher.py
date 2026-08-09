@@ -15,7 +15,10 @@ import threading
 import time
 from datetime import datetime
 from typing import Optional
+import io
 import re
+
+import requests
 
 import akshare as ak
 import numpy as np
@@ -1245,12 +1248,15 @@ def reconstruct_dxy_series(leg_closes: dict) -> pd.Series:
     return prod.sort_index()
 
 
-# ---- 黄金微观紧缺数据 (COMEX 库存 / CFTC 非商业持仓 / 央行购金) · 只读旁路 ADR-0001 ----
-# JZ 框架 L2/L3/L4 证据: 库存↓=紧缺/逼空, CFTC非商业(投机)净多单极值=泡沫预警, 央行购金=底的锚。
-# 数据缺口(无免费源): GOFO/租赁利率(LBMA 2015 停发)、全球 ETF(GLD/IAU)流、商业(merchant)持仓(另一CME端点,格式杂,后续)。
+# ---- 黄金微观紧缺数据 (COMEX 库存 / CFTC 投机+商业持仓 / 央行购金) · 只读旁路 ADR-0001 ----
+# JZ 框架 L2/L3/L4 证据: 库存↓=紧缺, CFTC投机净多单极值=泡沫/商业净空单极小=逼空, 央行净购金=底的锚。
+# 央行口径=实物万盎司存量(月度差分=净购金), 不用美元价值(被金价驱动会误导)。
+# 数据缺口(无免费源): GOFO/租赁利率(LBMA 2015 停发)、全球 ETF(GLD/IAU)流。
+# FRED(免费无key, 同 ECB 外汇先例, 用户授权非-akshare 源): DFII10 实际利率 / T10YIE 通胀预期。
 _COMEX_SYM = {"黄金": "GC", "白银": "SI"}
 _CFTC_SYM = {"黄金": "GC", "白银": "SI"}
-_CB_MONTH_RE = re.compile(r"(\d{4})年\s*(\d{1,2})月份")
+_CB_DATE_RE = re.compile(r"(\d{4})[\./](\d{1,2})")
+_FRED_SERIES = {"DFII10": "10年期实际利率", "T10YIE": "10年期通胀预期"}
 
 
 def _retry_ak(fn, retries: int = 2, delay: float = 1.0, **kw):
@@ -1319,25 +1325,85 @@ def fetch_cftc_speculative(retries: int = 2) -> list[dict]:
     return parse_cftc_speculative(df)
 
 
+def parse_cftc_commercial(df, cn_assets: tuple = ("黄金", "白银")) -> list[dict]:
+    """ak.macro_usa_cftc_merchant_goods_holding (CFTC 商品类商业/merchant 持仓, 宽表) → [{symbol='GC_M',...}]。
+    商业=矿商/银行套保, 通常净空; 净空单极小=逼空前兆(JZ)。symbol 加 _M 后缀与投机(GC)区分。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for cn, sym in _CFTC_SYM.items():
+        if cn not in cn_assets:
+            continue
+        col_l, col_s, col_n = f"{cn}-多头仓位", f"{cn}-空头仓位", f"{cn}-净仓位"
+        if col_l not in df.columns or col_n not in df.columns:
+            continue
+        for _, r in df.iterrows():
+            d = _norm_date(r.get("日期"))
+            if not d:
+                continue
+            out.append({"symbol": sym + "_M", "date": d,
+                        "long_pos": r.get(col_l), "short_pos": r.get(col_s), "net_pos": r.get(col_n)})
+    return out
+
+
+def fetch_cftc_commercial(retries: int = 2) -> list[dict]:
+    df = _retry_ak(ak.macro_usa_cftc_merchant_goods_holding, retries=retries)
+    return parse_cftc_commercial(df)
+
+
 def parse_cb_gold(df, country: str = "CN") -> list[dict]:
-    """ak.macro_china_fx_gold (月频, 'YYYY年MM月份') → [{country,date,value,yoy,mom}]。跳过缺值。"""
+    """ak.macro_china_foreign_exchange_gold (月频, 'YYYY.M', 黄金储备=**实物万盎司存量**) → [{country,date,value}]。
+    用实物口径(非美元价值); 月度差分=真实净购金量(看板算)。早期缺值跳过。"""
     if df is None or len(df) == 0:
         return []
     out = []
     for _, r in df.iterrows():
-        m = _CB_MONTH_RE.match(str(r.get("月份") or ""))
+        m = _CB_DATE_RE.match(str(r.get("统计时间") or ""))
         if not m:
             continue
         d = f"{m.group(1)}-{int(m.group(2)):02d}-01"
-        val = r.get("黄金储备-数值")
-        if val is None or val != val:   # NaN 跳过(早期未公布)
+        val = r.get("黄金储备")
+        if val is None or val != val:   # NaN 跳过
             continue
-        out.append({"country": country, "date": d, "value": val,
-                    "yoy": r.get("黄金储备-同比"), "mom": r.get("黄金储备-环比")})
+        out.append({"country": country, "date": d, "value": float(val), "yoy": None, "mom": None})
     return out
 
 
 def fetch_cb_gold(country: str = "CN", retries: int = 2) -> list[dict]:
-    df = _retry_ak(ak.macro_china_fx_gold, retries=retries)
+    df = _retry_ak(ak.macro_china_foreign_exchange_gold, retries=retries)
     return parse_cb_gold(df, country)
+
+
+def fetch_fred_series(series_id: str, timeout: float = 30.0) -> pd.DataFrame:
+    """FRED 公开 fredgraph.csv(免费无 key) → western_macro_series 行(source=fred)。
+    列: observation_date, <series_id>; 缺值 '.'/NaN 丢弃。"""
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    resp = requests.get(url, timeout=timeout)
+    resp.raise_for_status()
+    df = pd.read_csv(io.StringIO(resp.text))
+    if series_id not in df.columns:
+        return pd.DataFrame(columns=["source", "symbol", "date", "close"])
+    df = df.rename(columns={"observation_date": "date", series_id: "close"}).dropna(subset=["close"])
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    out = pd.DataFrame({"source": "fred", "symbol": series_id,
+                        "date": df["date"].astype(str), "close": df["close"].astype(float)})
+    return out
+
+
+_ACM_URL = "https://www.newyorkfed.org/medialibrary/media/research/data_indicators/ACMTermPremium.xls"
+
+
+def fetch_acm_term_premium(maturity: int = 10, timeout: float = 60.0) -> pd.DataFrame:
+    """NY Fed ACM 期限溢价(XLS, 免费无key, 非-akshare 源·用户授权) → western_macro_series 行。
+    maturity=10 → ACMTP10(10年期期限溢价)。DATE 形如 '31-Jul-2026'。"""
+    resp = requests.get(_ACM_URL, timeout=timeout)
+    resp.raise_for_status()
+    df = pd.read_excel(io.BytesIO(resp.content))
+    col = f"ACMTP{int(maturity):02d}"
+    if "DATE" not in df.columns or col not in df.columns:
+        return pd.DataFrame(columns=["source", "symbol", "date", "close"])
+    sub = df[["DATE", col]].dropna()
+    dates = pd.to_datetime(sub["DATE"]).dt.strftime("%Y-%m-%d")
+    return pd.DataFrame({"source": "nyfed_acm", "symbol": col,
+                         "date": dates.astype(str), "close": sub[col].astype(float)})
 

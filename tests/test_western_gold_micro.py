@@ -47,16 +47,28 @@ def test_parse_cftc_missing_col_skipped():
     assert all(r["symbol"] == "SI" for r in rows) and len(rows) == 1
 
 
+def test_parse_cftc_commercial():
+    # macro_usa_cftc_merchant_goods_holding: 商业持仓, 宽表同 c_holding; symbol 加 _M 后缀
+    df = pd.DataFrame([
+        {"日期": "2026-08-04", "黄金-多头仓位": 50000, "黄金-空头仓位": 276491, "黄金-净仓位": -226491,
+         "白银-多头仓位": 10, "白银-空头仓位": 20, "白银-净仓位": -10},
+    ])
+    rows = fetcher.parse_cftc_commercial(df)
+    by = {r["symbol"]: r for r in rows}
+    assert by["GC_M"]["net_pos"] == -226491 and by["GC_M"]["date"] == "2026-08-04"
+    assert by["SI_M"]["net_pos"] == -10
+
+
 # ---- 央行黄金储备解析 ----
 def test_parse_cb_gold():
+    # macro_china_foreign_exchange_gold: 统计时间 'YYYY.M', 黄金储备=实物万盎司
     df = pd.DataFrame([
-        {"月份": "2008年01月份", "黄金储备-数值": float("nan"), "黄金储备-同比": float("nan"), "黄金储备-环比": float("nan")},
-        {"月份": "2026年7月份", "黄金储备-数值": 3064.0, "黄金储备-同比": 8.6, "黄金储备-环比": 0.3},
+        {"统计时间": "2026.6", "黄金储备": 7544.0, "国家外汇储备": 34162.62},
+        {"统计时间": "2026.7", "黄金储备": 7608.0, "国家外汇储备": 34187.76},
     ])
     rows = fetcher.parse_cb_gold(df)
-    assert len(rows) == 1                       # NaN 行跳过
-    assert rows[0]["country"] == "CN" and rows[0]["date"] == "2026-07-01"
-    assert rows[0]["value"] == 3064.0 and rows[0]["mom"] == 0.3
+    assert len(rows) == 2
+    assert rows[1] == {"country": "CN", "date": "2026-07-01", "value": 7608.0, "yoy": None, "mom": None}
 
 
 def test_norm_date_variants():
