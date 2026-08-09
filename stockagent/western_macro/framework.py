@@ -51,6 +51,28 @@ CHAIN_NODES: list[tuple[str, list[str]]] = [
     ("权益", ["标普500", "纳斯达克", "道琼斯", "A股"]),
 ]
 
+# 时序图默认渲染窗口(日频 bar ≈ 6y), 供下方 rangeselector 按钮导航(可缩到 1m/3m/6m/1y/3y)
+_CHART_WIN = 1500
+
+
+def _xaxis_ranges(c: dict) -> dict:
+    """x 轴配置: 日期轴 + range 按钮(1m/3m/6m/1y/3y/all) + 底部 range slider(可拖拽改观察窗口)。"""
+    return dict(
+        type="date", tickformat="%Y-%m", gridcolor=c["border"],
+        rangeselector=dict(
+            buttons=[
+                dict(count=1, label="1m", step="month", stepmode="backward"),
+                dict(count=3, label="3m", step="month", stepmode="backward"),
+                dict(count=6, label="6m", step="month", stepmode="backward"),
+                dict(count=1, label="1y", step="year", stepmode="backward"),
+                dict(count=3, label="3y", step="year", stepmode="backward"),
+                dict(label="all", step="all"),
+            ],
+            bgcolor=c["surface"], activecolor=c["accent"],
+            font=dict(size=10, color=c["ink"]), x=0, xanchor="left"),
+        rangeslider=dict(visible=True, thickness=0.04),
+    )
+
 
 def _rolling_pct(s: pd.Series, lookback: int = DEV_LOOKBACK, min_bars: int = 20) -> pd.Series:
     """trailing-lookback 水平分位 (防前视): 每 bar 用截至当时的末 lookback 个原始值算 (w<cur).sum()/len。
@@ -150,7 +172,7 @@ def _asset_chart(asset: str, store, an: dict, c: dict):
     if s is None or len(s) == 0:
         return None
     s = s.sort_index().astype(float)
-    n = min(500, len(s))
+    n = min(_CHART_WIN, len(s))
     g = s.iloc[-n:]
     ma60 = ma_series(s, MA_PERIOD).iloc[-n:]
     devp = _rolling_dev_pct(deviation_series(s, MA_PERIOD), DEV_LOOKBACK).iloc[-n:]
@@ -159,13 +181,14 @@ def _asset_chart(asset: str, store, an: dict, c: dict):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=dt, y=[float(v) for v in g.values], mode="lines", name=asset,
                              line=dict(color=c["accent"], width=1.4),
-                             hovertemplate="%{x|%Y-%m-%d}  %{y:.2f}<extra></extra>"))
+                             hovertemplate="%{y:.2f}<extra></extra>"))
     fig.add_trace(go.Scatter(x=dt, y=[float(v) for v in ma60.values], mode="lines", name="MA60",
-                             line=dict(color=c["ink2"], width=1.0), hoverinfo="skip"))
+                             line=dict(color=c["ink2"], width=1.0),
+                             hovertemplate="%{y:.2f}<extra></extra>"))
     fig.add_trace(go.Scatter(x=dt, y=[float(v) if v == v else None for v in devp.values],
                              mode="lines", name="偏离分位", yaxis="y2",
                              line=dict(color=c["open"], width=1.0, dash="dot"),
-                             fill="tozeroy", hovertemplate="偏离分位 %{y:.2f}<extra></extra>"))
+                             fill="tozeroy", hovertemplate="%{y:.2f}<extra></extra>"))
     fig.add_trace(go.Scatter(x=[dt[-1]], y=[float(g.iloc[-1])], mode="markers",
                              marker=dict(size=12, color=label_col, symbol="diamond",
                                          line=dict(width=1.5, color="#ffffff")), hoverinfo="skip"))
@@ -175,9 +198,10 @@ def _asset_chart(asset: str, store, an: dict, c: dict):
     from .dashboard import ASSET_YLABEL
     ylabel = ASSET_YLABEL.get(asset, asset)   # 左轴: 资产单位(价/收益率/指数...)
     fig.update_layout(margin=dict(l=64, r=50, t=8, b=28), height=240, showlegend=False,
+                      hovermode="x unified",
                       paper_bgcolor=c["surface"], plot_bgcolor=c["bg"],
                       font=dict(size=11, color=c["ink"]),
-                      xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
+                      xaxis=_xaxis_ranges(c),
                       yaxis=dict(title=dict(text=ylabel, font=dict(size=10)), gridcolor=c["border"]),
                       yaxis2=dict(overlaying="y", side="right", range=[0, 1], showgrid=False,
                                   title=dict(text="偏离分位", font=dict(size=9))))
@@ -264,52 +288,56 @@ def _gold_micro_block(store, c: dict, first=None) -> str:
 
     # 图: COMEX库存 (近2y)
     if not ci.empty:
-        s = ci.iloc[-500:]
+        s = ci.iloc[-_CHART_WIN:]
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=pd.to_datetime(list(s.index)), y=[float(v) for v in s.values],
                                  mode="lines", name="COMEX金库存", line=dict(color=c["accent"], width=1.4),
                                  fill="tozeroy", hovertemplate="%{x|%Y-%m-%d}  %{y:.0f}吨<extra></extra>"))
         fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=180, showlegend=False,
                           paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
-                          xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
+                          xaxis=_xaxis_ranges(c),
                           yaxis=dict(title="吨", gridcolor=c["border"]))
         parts.append('<div class="chart-t" style="margin-top:8px">COMEX 黄金库存(吨 · ↓=紧缺/逼空压力)</div>' + _embed(fig, "micro_comex"))
 
-    # 图: CFTC 投机净仓位(净多) + 商业净仓位(净空, 镜像) + 泡沫分位带 (近3y)
+    # 图: CFTC 投机净仓位(净多) + 商业净仓位(净空, 镜像) + 泡沫分位带 (近6y)
     if not cf.empty:
-        net = cf["net_pos"].astype(float).iloc[-156:]
+        net = cf["net_pos"].astype(float).iloc[-312:]
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=pd.to_datetime(list(net.index)), y=[float(v) for v in net.values],
                                  mode="lines", name="投机(净多)", line=dict(color=c["hit"], width=1.4),
                                  hovertemplate="投机 %{x|%Y-%m-%d}  净 %{y:,.0f}<extra></extra>"))
         cfm = store.get_cftc_position("GC_M")
         if not cfm.empty:
-            nm = cfm["net_pos"].astype(float).iloc[-156:]
+            nm = cfm["net_pos"].astype(float).iloc[-312:]
             fig.add_trace(go.Scatter(x=pd.to_datetime(list(nm.index)), y=[float(v) for v in nm.values],
                                      mode="lines", name="商业(净空)", line=dict(color=c["miss"], width=1.2, dash="dot"),
                                      hovertemplate="商业 %{x|%Y-%m-%d}  净 %{y:,.0f}<extra></extra>"))
-        hi = float(cf["net_pos"].astype(float).iloc[-156:].quantile(0.85)) if len(cf) > 10 else 0
+        hi = float(cf["net_pos"].astype(float).iloc[-312:].quantile(0.85)) if len(cf) > 10 else 0
         fig.add_hline(y=hi, line_dash="dot", line_color=c["miss"], annotation_text="投机85%分位(泡沫区)", annotation_font_size=9)
         fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=200, showlegend=True,
                           legend=dict(orientation="h", y=1.02, x=0, font=dict(size=9)),
                           paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
-                          xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
+                          xaxis=_xaxis_ranges(c),
                           yaxis=dict(title="净仓位(手)", gridcolor=c["border"]))
         parts.append('<div class="chart-t" style="margin-top:8px">CFTC 持仓: 投机净多(金,↑极值=泡沫) vs 商业净空(红,空单极小=逼空前兆)</div>' + _embed(fig, "micro_cftc"))
 
-    # 图: 央行购金 (中国, 月频, 末段2y)
+    # 图: 央行购金 (中国, 月频, 近10y)
     if not cb.empty:
-        sub = cb.iloc[-24:]
+        sub = cb.iloc[-120:]
         fig = go.Figure()
         fig.add_trace(go.Bar(x=pd.to_datetime(list(sub.index)), y=sub["value"].astype(float).values,
                              name="黄金储备", marker_color=c["accent"], yaxis="y",
                              hovertemplate="%{x|%Y-%m}  %{y:.0f}<extra></extra>"))
+        fig.update_layout(margin=dict(l=56, r=16, t=6, b=24), height=200, showlegend=False,
+                          paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
+                          xaxis=_xaxis_ranges(c),
+                          yaxis=dict(title="万盎司", gridcolor=c["border"]))
         parts.append('<div class="chart-t" style="margin-top:8px">中国央行黄金储备(月 · 持续增持=底的锚)</div>' + _embed(fig, "micro_cb"))
     parts.append('</div>')
     return "".join(parts)
 
 
-def _gold_vs_chart(store, pairs: list, ylabel_right: str, c: dict, div_id: str, win: int = 500):
+def _gold_vs_chart(store, pairs: list, ylabel_right: str, c: dict, div_id: str, win: int = _CHART_WIN):
     """黄金(左轴) vs 若干指标(右轴) 双Y轴对比图。pairs=[(label, asset_key, color), ...]。
     看反向/同向/背离(黄金vs10Y对手盘、vs DXY反向、vs 2s10s陡峭化利好)。"""
     gold = series_for("黄金", store)
@@ -319,7 +347,7 @@ def _gold_vs_chart(store, pairs: list, ylabel_right: str, c: dict, div_id: str, 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=pd.to_datetime(list(gold.index)), y=[float(v) for v in gold.values],
                              name="黄金", line=dict(color=c["accent"], width=1.5),
-                             hovertemplate="黄金 %{x|%Y-%m-%d} %{y:.0f}<extra></extra>"))
+                             hovertemplate="%{y:.0f}<extra></extra>"))
     for label, asset, col in pairs:
         s = series_for(asset, store)
         if s is None or len(s) == 0:
@@ -327,11 +355,12 @@ def _gold_vs_chart(store, pairs: list, ylabel_right: str, c: dict, div_id: str, 
         s = s.sort_index().iloc[-win:]
         fig.add_trace(go.Scatter(x=pd.to_datetime(list(s.index)), y=[float(v) for v in s.values],
                                  name=label, line=dict(color=col, width=1.2), yaxis="y2",
-                                 hovertemplate=f"{label} %{{x|%Y-%m-%d}} %{{y:.2f}}<extra></extra>"))
+                                 hovertemplate="%{y:.2f}<extra></extra>"))
     fig.update_layout(margin=dict(l=56, r=56, t=4, b=22), height=220, showlegend=True,
+                      hovermode="x unified",
                       legend=dict(orientation="h", y=1.08, x=0, font=dict(size=9)),
                       paper_bgcolor=c["surface"], plot_bgcolor=c["bg"], font=dict(size=10, color=c["ink"]),
-                      xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
+                      xaxis=_xaxis_ranges(c),
                       yaxis=dict(title=dict(text="黄金(USD)", font=dict(size=9)), gridcolor=c["border"]),
                       yaxis2=dict(overlaying="y", side="right", showgrid=False,
                                   title=dict(text=ylabel_right, font=dict(size=9))))
