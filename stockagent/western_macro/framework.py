@@ -25,8 +25,7 @@ from stockagent.tracker.diagnose import diagnose_index
 from stockagent.tracker.indicators import deviation_series, fresh_cross_direction, ma_series
 from .score import series_for
 from .stage import (GOLD_DEV_HIGH, GOLD_DEV_LOW, GOLD_DEV_LOOKBACK, GOLD_FRESH,
-                    GOLD_MA_PERIOD, MIN_BARS, _rolling_dev_pct, classify_stage,
-                    gold_stage_snapshot)
+                    GOLD_MA_PERIOD, MIN_BARS, _rolling_dev_pct, classify_stage)
 
 MA_PERIOD = GOLD_MA_PERIOD
 DEV_LOOKBACK = GOLD_DEV_LOOKBACK
@@ -172,12 +171,15 @@ def _asset_chart(asset: str, store, an: dict, c: dict):
     for y0, y1, col in [(0.0, DEV_LOW, c["edge"]), (DEV_HIGH, 1.0, c["miss"])]:
         fig.add_shape(type="rect", xref="paper", yref="y2", x0=0, x1=1, y0=y0, y1=y1,
                       fillcolor=col, opacity=0.10, line_width=0, layer="below")
-    fig.update_layout(margin=dict(l=60, r=44, t=8, b=28), height=240, showlegend=False,
+    from .dashboard import ASSET_YLABEL
+    ylabel = ASSET_YLABEL.get(asset, asset)   # 左轴: 资产单位(价/收益率/指数...)
+    fig.update_layout(margin=dict(l=64, r=50, t=8, b=28), height=240, showlegend=False,
                       paper_bgcolor=c["surface"], plot_bgcolor=c["bg"],
                       font=dict(size=11, color=c["ink"]),
                       xaxis=dict(type="date", tickformat="%Y-%m", gridcolor=c["border"]),
-                      yaxis=dict(gridcolor=c["border"]),
-                      yaxis2=dict(overlaying="y", side="right", range=[0, 1], showgrid=False))
+                      yaxis=dict(title=dict(text=ylabel, font=dict(size=10)), gridcolor=c["border"]),
+                      yaxis2=dict(overlaying="y", side="right", range=[0, 1], showgrid=False,
+                                  title=dict(text="偏离分位", font=dict(size=9))))
     return fig
 
 
@@ -212,25 +214,20 @@ def _overview_table(an_by_asset: dict, c: dict) -> str:
 
 def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
     """渲染宏观框架看板 → data/macro_framework.html (纯数据·只读·不喂引擎)。"""
-    from .dashboard import _DARK, _LIGHT, _css, _driver_svg, _gold_stage_block
+    from .dashboard import _DARK, _LIGHT, _css, _driver_svg
 
     D, L = _DARK, _LIGHT
     all_assets = [a for _, assets in CHAIN_NODES for a in assets]
     an_by_asset = {a: asset_analysis(a, store) for a in all_assets}
 
-    # 分节点图 (黄金节点用完整阶段块, 其余用通用图)
+    # 分节点图 (统一普通数据跟踪展示; 黄金定位器由 ledger 看板单独做)
     first = [True]  # plotly.js 只嵌一次
     node_html: list[str] = []
     for node, assets in CHAIN_NODES:
         parts = [f'<h2>🔗 {node}</h2>']
         for a in assets:
             an = an_by_asset.get(a) or {}
-            # 黄金: 抽出来的阶段定位器 (chips + fig)
-            if a == "黄金" and an.get("valid"):
-                parts.append(_gold_stage_block(store, D))
-                first[0] = False  # _gold_stage_block 内已 embed plotlyjs=False (charts 没跑)
-                continue
-            fig = _asset_chart(a, store, an, D)
+            fig = _asset_chart(a, store, an, L)
             if fig is None:
                 parts.append(f'<div class="chart"><div class="chart-t">{a}</div><div class="muted">无数据</div></div>')
                 continue
@@ -244,10 +241,10 @@ def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
         node_html.append("\n".join(parts))
 
     n_valid = sum(1 for an in an_by_asset.values() if an.get("valid"))
-    html = f"""<!doctype html><html lang="zh" data-theme="dark"><head><meta charset="utf-8">
+    html = f"""<!doctype html><html lang="zh" data-theme="light"><head><meta charset="utf-8">
 <title>宏观框架看板 · {asof}</title>
 <style>
-:root{{{_css(D)}}}[data-theme="light"]{{{_css(L)}}}
+:root{{{_css(L)}}}[data-theme="dark"]{{{_css(D)}}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);
 font:14px/1.5 -apple-system,"Microsoft YaHei",sans-serif}}
 .wrap{{max-width:1280px;margin:0 auto;padding:20px}}
@@ -274,10 +271,10 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 <div class="banner info">📍 <b>怎么读</b>: 总览表看全局状态(色=阶段/位置); 因果框架图看传导链; 分节点图看每个资产的趋势+偏离。price 标的=5阶段(筑底/反弹/趋势/头部/回调), 利率=水平分位(高/中/低)+趋势, 曲线=倒挂/正常+陡峭/趋平。偏离分位 0=区间最超卖, 1=最超买。</div>
 
 <h2>🗺️ 因果框架(博主思维链 · 蓝点=有数据标的 · 政策节点为链路上下文)</h2>
-{_driver_svg(D)}
+{_driver_svg(L)}
 
 <h2>📊 总览(全资产 · 一屏看清当前在哪)</h2>
-{_overview_table(an_by_asset, D)}
+{_overview_table(an_by_asset, L)}
 
 {''.join(node_html)}
 

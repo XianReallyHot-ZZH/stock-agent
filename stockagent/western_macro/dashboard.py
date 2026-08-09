@@ -420,17 +420,17 @@ def render_western_macro(store, docs_dir: Path, episodes_json: Path,
         f"<tr><td>{r['episode_date']}</td><td>{r['rule_type']}</td><td class='stmt'>{r['statement']}</td></tr>"
         for r in rules) or '<tr><td colspan=3 class="muted">无</td></tr>'
     provisional = (n_anthology and n_transcripts < n_anthology)
-    charts_html = _charts_html(store, claims, sett, D)
-    gold_stage_html = _gold_stage_block(store, D)
-    live_html = _live_confirm_block(store, D)
+    charts_html = _charts_html(store, claims, sett, L)
+    gold_stage_html = _gold_stage_block(store, L)
+    live_html = _live_confirm_block(store, L)
     state_counts = {"draft": 0, "confirmed": 0, "vetoed": 0}
     for c in claims:
         state_counts[c["state"]] = state_counts.get(c["state"], 0) + 1
 
-    html = f"""<!doctype html><html lang="zh" data-theme="dark"><head><meta charset="utf-8">
+    html = f"""<!doctype html><html lang="zh" data-theme="light"><head><meta charset="utf-8">
 <title>西方宏观预测台账 · {asof}</title>
 <style>
-:root{{{_css(D)}}}[data-theme="light"]{{{_css(L)}}}
+:root{{{_css(L)}}}[data-theme="dark"]{{{_css(D)}}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);
 font:14px/1.5 -apple-system,"Microsoft YaHei",sans-serif}}
 .wrap{{max-width:1280px;margin:0 auto;padding:20px}}
@@ -494,7 +494,7 @@ color:var(--ink);border-radius:8px;padding:6px 12px;font-size:12px}}
 {"".join(rows_html)}</table>
 
 <h2>🗺️ 因果框架(驱动图 · 断言挂其节点)</h2>
-{_driver_svg(D if True else L)}
+{_driver_svg(L)}
 <div class="muted" style="font-size:11px">蓝=可结算标的节点;箭头=因果传导。框架小而稳,可演化。</div>
 
 <h2>📜 操作规则(隔离 · 非预测)</h2>
