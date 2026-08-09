@@ -6,7 +6,7 @@ A股板块轮动 ETF 决策助手。规则引擎出决策、大模型出解释�
 
 ```bash
 # 开发
-python -m pytest tests/ -q                    # 跑全部测试（456 个）
+python -m pytest tests/ -q                    # 跑全部测试（548 个）
 python scripts/run_backtest.py                 # 单次回测（默认信号）
 python scripts/sweep_params.py                 # 参数扫描（全部信号）
 python scripts/walk_forward.py                 # 样本外验证
@@ -45,7 +45,7 @@ python scripts/backfill_western_macro.py                          # 回填 UST/�
 python scripts/extract_western_claims.py --since 2026-08-01       # LLM 抽 DRAFT claim（幂等·跳过已抽；--force 重抽保 confirmed 状态）
 python scripts/western_macro_report.py --extract                  # 结算到期 claim + 渲染 data/western_macro.html（看板 only·无微信）
 python scripts/macro_framework_report.py                          # 渲染宏观框架看板 data/macro_framework.html（纯数据跟踪·沿因果链 利率→曲线→美元→金属→能源→权益·无claim/台账）
-python scripts/backfill_gold_micro.py                             # 回填黄金微观紧缺数据(COMEX库存/CFTC非商业投机持仓/央行购金)→专表（幂等·只读 ADR-0001）
+python scripts/backfill_gold_micro.py                             # 回填黄金微观紧缺(COMEX库存/CFTC投机+商业持仓/央行购金实物/FRED实际利率+通胀预期/NYFed期限溢价)→专表
 python scripts/backfill_economic_calendar.py                      # 回填经济日历(近7天已公布+未来45天排期·美国重要性≥2·数据真伪+催化剂)→专表
 
 # 实盘

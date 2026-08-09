@@ -2,13 +2,13 @@
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Tests](https://img.shields.io/badge/tests-454%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-548%20passing-brightgreen.svg)
 ![Data](https://img.shields.io/badge/data-AkShare-orange.svg)
 ![Status](https://img.shields.io/badge/status-shadow%20only-lightgrey.svg)
 
-> 一个 **A股** 板块轮动 ETF 决策助手：规则引擎出决策、大模型出解释、每日微信报告；并带三套只读诊断看板（ETF 行业研究 / 指数择时 / 个股诊断）。
+> 一个 **A股** 板块轮动 ETF 决策助手：规则引擎出决策、大模型出解释、每日微信报告；并带四套只读诊断看板（ETF 行业研究 / 指数择时 / 个股诊断 / 宏观框架）。
 
-**决策归规则引擎，解释归大模型**——模型不发明数字，只解释引擎已算出的结果。四套模块共用同一数据底座（AkShare 多源 → SQLite），其中后三套是**只读诊断旁路**，不参与交易引擎。
+**决策归规则引擎，解释归大模型**——模型不发明数字，只解释引擎已算出的结果。五套模块共用同一数据底座（AkShare 多源 → SQLite），其中后四套是**只读诊断旁路**，不参与交易引擎。
 
 > 📐 设计溯源见 [`DESIGN.md`](./DESIGN.md)（16 项决策、架构图、路线图）；
 > 🔧 开发规范见 [`CLAUDE.md`](./CLAUDE.md)（快速命令、架构、代码风格、数据质量注意）。
@@ -21,7 +21,7 @@
 - [🧭 设计哲学](#-设计哲学)
 - [🏗️ 架构](#️-架构)
 - [🚀 快速开始](#-快速开始)
-- [📊 四大模块](#-四大模块)
+- [📊 五大模块](#-五大模块)
 - [🗓️ 日常使用](#️-日常使用)
 - [🔧 配置](#-配置)
 - [📡 数据源](#-数据源)
@@ -41,15 +41,16 @@
 - **ETF 行业研究看板**：按价值/成长/周期三类分流算性价比，十类信号提醒（筹码×估值交叉、趋势突破、股息、业绩预告、大盘开关、周期反转），交互式 HTML。
 - **指数择时层看板**：沪深 300 估值开关（同口径 PE+PB 四档）、大小盘温差、蓝筹 vs 成长、60 日线趋势 / 真穿越突破跌破 / 偏离极值。
 - **个股诊断看板**：三类自动判定 + S07 利润归因 + S10 戴维斯 + S08 避坑 + **A 类商品价领先信号**（碳酸锂/铜/螺纹钢/黄金/原油 → alignment 商品健康×股价落后度 → 埋伏分）+ **按类型分 tab**（周期含商品面板/时序图/埋伏表子 tab）+ 十一条信号提醒 + 🤖AI 评估（点击实时生成，周期打法含商品驱动逻辑）。
+- **宏观框架看板**：沿 JZ 因果链（利率→曲线→美元→金属→能源→权益）做纯数据跟踪与分析；🥇**黄金阶段定位器**（价格结构+微观紧缺+利率美元驱动→阶段+驱动三栏+置信度+操作建议）；🔬黄金微观紧缺（COMEX 库存/CFTC 投机+商业持仓/央行购金/实际利率/期限溢价）；📰经济日历（美国高重要性事件·数据真伪 surprise+催化剂·对黄金影响）。
 - **自律度对账**：记录目标持仓 vs 实际执行，量化自己的纪律。
-- **纯函数 + 配置驱动 + 全测试覆盖**（454 个 pytest），回测与实盘共用同一引擎函数。
+- **纯函数 + 配置驱动 + 全测试覆盖**（548 个 pytest），回测与实盘共用同一引擎函数。
 
 ---
 
 ## 🧭 设计哲学
 
 1. **决策归规则引擎，解释归大模型**——模型零预测，只翻译引擎输出。避免 LLM 幻觉造数。
-2. **三套诊断看板是只读旁路**——研究/择时/个股诊断**不喂交易引擎**，只帮你「看清」，决策仍归引擎。
+2. **四套诊断看板是只读旁路**——研究/择时/个股诊断/宏观框架**不喂交易引擎**，只帮你「看清」，决策仍归引擎。
 3. **大部分早晨的报告是「维持持有，无需操作」**——挡住交易欲，这本身就是核心价值。
 4. **优先级硬规则**：止损 > 轮动 > 择时。
 5. **T+1**：信号 T 收盘生成、T+1 开盘成交。
@@ -70,7 +71,7 @@
   │   大盘择时(RegimeFilter A+B)        │   │   • ETF 行业研究 (research/)  │
   │   × 6 可插拔信号                    │   │   • 指数择时    (tracker/)    │
   │   × 双层止损(ATR/entry_stop)        │   │   • 个股诊断    (tracker/)    │
-  │   → 组合决策 → Engine 编排           │   │   → 交互式 HTML 看板          │
+  │   → 组合决策 → Engine 编排           │   │   → 4 套交互式 HTML 看板      │
   └──────────────────┬─────────────────┘   └─────────────────────────────┘
                      ▼
   ┌────────────────────────────────────┐
@@ -105,11 +106,16 @@ python scripts/update_data.py                         # 日线（幂等，~1 分
 python scripts/backfill_scale.py --start 2021-01-01   # ETF 份额历史（~10 分钟）
 python scripts/fix_splits.py                          # 修拆分（运行一次）
 
-# 三套看板所需（首次较久，之后增量）
+# 四套看板所需（首次较久，之后增量）
 python scripts/setup_research_dashboard.py            # ETF 研究看板一键（价格+份额+净值+PE+渲染）
 python scripts/backfill_index.py                      # 6 宽基日线(含上证综指) + 沪深300 PE/PB + 全市场 PB
 python scripts/backfill_stock_data.py                 # 观察池个股 日线/估值/财报/分红/预告
 python scripts/backfill_stock_data.py --comm          # 商品价(碳酸锂/铜/螺纹钢/黄金/原油)
+
+# 宏观框架看板所需（首次 ~5 分钟）
+python scripts/backfill_western_macro.py               # UST/美股/外盘期货/外汇 + DXY 6腿重算
+python scripts/backfill_gold_micro.py                  # COMEX库存/CFTC持仓/央行购金/FRED实际利率/NYFed期限溢价
+python scripts/backfill_economic_calendar.py           # 经济日历(美国高重要性事件)
 ```
 
 > 新机器冷启动（全套数据回填）约 1 小时，详见 [`.claude/skills/research-dashboard-setup/SKILL.md`](.claude/skills/research-dashboard-setup/SKILL.md)。
@@ -117,12 +123,12 @@ python scripts/backfill_stock_data.py --comm          # 商品价(碳酸锂/铜/
 ### 验证安装
 
 ```bash
-python -m pytest tests/ -q          # 454 个测试全过即环境 OK
+python -m pytest tests/ -q          # 548 个测试全过即环境 OK
 ```
 
 ---
 
-## 📊 四大模块
+## 📊 五大模块
 
 ### 1. ETF 轮动决策引擎（核心）
 
@@ -171,6 +177,16 @@ python scripts/stock_report.py                # 生成 data/stock_diagnose.html
 python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1/A2/A3/G1/G2/E3/E4/Q1/P1/M1/M2 触发时）
 ```
 
+### 5. 宏观框架看板（Phase 3 · 北向目标）
+
+沿 JZ《西方经济》因果链（利率→曲线→美元→金属→能源→权益）做**纯数据跟踪与分析**，不再纠结预测准不准。旗舰 = 🥇**黄金阶段定位器**：价格结构（MA60+偏离分位→5 阶段）+ 微观紧缺（COMEX 库存/CFTC 投机+商业持仓/央行购金）+ 利率美元驱动 → `bull_intact`（央行购金+期限溢价/实际利率趋势）判底层 → 阶段精炼（牛市回调 vs 终局底）+ 置信度 + 条件化操作建议（双向防守）。另含 📰**经济日历**（美国高重要性事件·公布 vs 预期 surprise + 未来 45 天催化剂 + 对黄金影响结论）。数据含 FRED 实际利率/通胀预期 + NY Fed ACM 期限溢价（非-AkShare 免费源）。
+
+```bash
+python scripts/macro_framework_report.py          # 生成 data/macro_framework.html（纯数据·无LLM·深浅色可切）
+# 只刷宏观一个看板（~3 分钟）：详见 .claude/skills/macro-dashboard/SKILL.md
+# 或全刷 4 个看板：python /dashboards（详见 .claude/skills/dashboards/SKILL.md）
+```
+
 ---
 
 ## 🗓️ 日常使用
@@ -180,7 +196,7 @@ python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1
 | 每日 15:30 | `python scripts/run_eod.py` | 收盘数据更新（幂等自愈） |
 | 每日 08:30 | `python scripts/run_morning_report.py` | 生成 + 推送晨报（基于前日收盘） |
 | 每周 | `python scripts/record_actual.py --executed` | 对账自律度 |
-| 按需 | `python scripts/research_report.py` 等 | 刷新三套诊断看板 |
+| 按需 | `python scripts/research_report.py` 等 | 刷新四套诊断看板（`/dashboards` 全刷 或 `/macro-dashboard` 只刷宏观） |
 
 > A 股交易日 9:30–11:30 / 13:00–15:00；报告 8:30 前基于前日收盘。Windows 可用「任务计划程序」设这两个定时任务。
 
@@ -200,7 +216,7 @@ python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1
 
 ## 📡 数据源
 
-python -m pytest tests/ -q          # 454 个
+python -m pytest tests/ -q          # 548 个
 
 数据为**不复权**原始价，需 `fix_splits.py` 修拆分后用于价格序列（真 NAV 不受影响）。
 
@@ -240,7 +256,7 @@ stock-agent/
 ├── scripts/           update_data · run_eod · run_morning_report · run_backtest ·
 │                      sweep_params · walk_forward · backfill_scale · fix_splits ·
 │                      research_report · index_timing_report · stock_report · ...
-├── tests/             单测(454)
+├── tests/             单测(548)
 ├── docs/              PRD · 执行计划 · 课程笔记 · Phase 交接
 ├── DESIGN.md          产品设计(16 决策 + 架构 + 路线图 + 回测结论)
 ├── CLAUDE.md          开发规范(命令 + 架构 + 代码风格 + 数据质量)
