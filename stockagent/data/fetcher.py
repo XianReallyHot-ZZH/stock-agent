@@ -1376,9 +1376,23 @@ def parse_cb_gold(df, country: str = "CN") -> list[dict]:
     return out
 
 
-def fetch_cb_gold(country: str = "CN", retries: int = 2) -> list[dict]:
-    df = _retry_ak(ak.macro_china_foreign_exchange_gold, retries=retries)
-    return parse_cb_gold(df, country)
+def fetch_cb_gold(country: str = "CN", retries: int = 4) -> list[dict]:
+    """央行黄金储备(实物万盎司, 月频)。
+
+    sina jsonp 端点(macro_china_foreign_exchange_gold)内部对 ~13 页分页各发一次请求,
+    偶发被拦返回非 JSON → demjson 抛 JSONDecodeError, 13 页里任一页被拦整批作废。
+    这里用指数退避重试(比 _retry_ak 固定间隔更耐临时被拦); 单次成功即返回, 全失败抛 FetchError。
+    """
+    last = None
+    for i in range(retries + 1):
+        try:
+            df = ak.macro_china_foreign_exchange_gold()
+            return parse_cb_gold(df, country)
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if i < retries:
+                time.sleep(2.0 * (i + 1))   # 2,4,6,8s 退避
+    raise FetchError(f"cb_gold 抓取重试耗尽(sina jsonp 偶发被拦): {last}")
 
 
 def fetch_fred_series(series_id: str, timeout: float = 30.0) -> pd.DataFrame:

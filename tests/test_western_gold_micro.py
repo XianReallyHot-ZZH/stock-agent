@@ -2,6 +2,7 @@
 import datetime
 
 import pandas as pd
+import pytest
 
 from stockagent.data import fetcher
 from stockagent.data.store import Store
@@ -129,3 +130,45 @@ def test_store_economic_calendar(tmp_path):
     rel = df[df["actual"].notna()]
     assert len(rel) == 1 and rel.iloc[0]["event"] == "美国7月CPI年率"
     assert st.get_economic_calendar(region="欧元区").empty
+
+
+# ---- fetch_cb_gold 重试韧性(sina jsonp 分页端点偶发被拦) ----
+def test_fetch_cb_gold_retry_then_ok(monkeypatch):
+    """前两次被拦(JSONDecodeError), 第三次返回 → 退避重试后成功, 返回解析行。"""
+    calls = {"n": 0}
+    good = pd.DataFrame([{"统计时间": "2026.7", "黄金储备": 7608.0, "国家外汇储备": 34187.76}])
+
+    def fake():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ValueError("No value to decode")   # 仿 sina 返回非 JSON
+        return good
+
+    monkeypatch.setattr(fetcher.ak, "macro_china_foreign_exchange_gold", fake)
+    monkeypatch.setattr(fetcher.time, "sleep", lambda *_, **__: None)   # 不真睡
+    rows = fetcher.fetch_cb_gold(retries=4)
+    assert calls["n"] == 3            # 第三次成功, 没白跑
+    assert len(rows) == 1 and rows[0]["value"] == 7608.0
+
+
+def test_fetch_cb_gold_exhausts_raises(monkeypatch):
+    """持续被拦 → 重试耗尽抛 FetchError(实物口径不变, 不静默吞)。"""
+    monkeypatch.setattr(fetcher.ak, "macro_china_foreign_exchange_gold",
+                        lambda *_, **__: (_ for _ in ()).throw(ValueError("No value to decode")))
+    monkeypatch.setattr(fetcher.time, "sleep", lambda *_, **__: None)
+    with pytest.raises(fetcher.FetchError):
+        fetcher.fetch_cb_gold(retries=1)
+
+
+# ---- _gold_micro_block: cb 空时占位(不静默漏图) ----
+def test_gold_micro_block_cb_empty_placeholder(tmp_path):
+    """有 COMEX 数据但无 cb → 第三张图走占位标题+说明, 不再消失。"""
+    from stockagent.western_macro.dashboard import _LIGHT
+    from stockagent.western_macro.framework import _gold_micro_block
+
+    st = Store(tmp_path / "t.sqlite")
+    st.upsert_comex_inventory([{"symbol": "GC", "date": "2026-08-07", "tonnes": 838.0, "ounces": 2.69e7}])
+    html = _gold_micro_block(st, _LIGHT, first=[False])
+    assert "中国央行黄金储备" in html          # 标题仍在(第三张图位不空)
+    assert "央行购金数据暂缺" in html           # 占位说明
+    assert "micro_cb" not in html               # 无 cb 图(plotly div 未生成)

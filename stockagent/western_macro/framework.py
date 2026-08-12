@@ -389,6 +389,11 @@ def _gold_micro_block(store, c: dict, first=None) -> str:
                           yaxis=dict(title="万盎司", gridcolor=c["border"]),
                           yaxis2=dict(overlaying="y", side="right", title="环比%", showgrid=False))
         parts.append('<div class="chart-t" style="margin-top:8px">中国央行黄金储备(柱=存量万oz / 线=月环比% · 持续增持=底的锚)</div>' + _embed(fig, "micro_cb"))
+    else:
+        # cb 数据暂缺(sina jsonp 端点偶发被拦): 占位标题+说明, 不再静默漏图
+        parts.append('<div class="chart-t" style="margin-top:8px">中国央行黄金储备(实物万oz · 持续增持=底的锚)</div>'
+                     '<div class="muted" style="padding:10px 0">央行购金数据暂缺'
+                     '(sina 端点偶发被拦,重跑 <code>python scripts/backfill_gold_micro.py</code> 即可恢复)。</div>')
     parts.append('</div>')
     return "".join(parts)
 
