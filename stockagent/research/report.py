@@ -262,6 +262,81 @@ def _extremeness(sn: dict) -> float:
     return abs(p - 0.5) if not _nan(p) else -1.0
 
 
+# 偏离度极端区阈值（与 deviation_extreme_events 的 lo_pct/hi_pct、图里 chip 同口径）
+_OVERSOLD_PCT = 0.05      # 超卖：净值大幅低于均线，分位 ≤5%
+_OVERBOUGHT_PCT = 0.95    # 超买：净值大幅高于均线，分位 ≥95%
+
+
+def _extreme_rank(snap: dict) -> int | None:
+    """当前偏离在「同侧历史极端事件」里的排名（与图里 ▲▼ 第N 标记同源）。不在 top-N 内 → None。"""
+    cur = snap.get("nav_dev_cur")
+    if _nan(cur):
+        return None
+    side = "low" if cur < 0 else "high"
+    evs = [e for e in (snap.get("nav_extreme_events") or []) if e.get("side") == side]
+    if not evs:
+        return None
+    if side == "low":
+        more = sum(1 for e in evs if e["dev"] < cur)   # 比当前更低（更极端）的事件数
+    else:
+        more = sum(1 for e in evs if e["dev"] > cur)
+    rank = more + 1
+    return rank if rank <= len(evs) else None
+
+
+def _partition_extremes(snapshots: dict) -> tuple[list, list]:
+    """把快照分成 (超卖, 超买) 两组，各按极端程度排序。data_sufficient=False / 无分位者排除。"""
+    oversold, overbought = [], []
+    for sym, snap in snapshots.items():
+        if not snap.get("data_sufficient", True):
+            continue
+        p = snap.get("nav_dev_pct")
+        if _nan(p):
+            continue
+        if p <= _OVERSOLD_PCT:
+            oversold.append((sym, snap))
+        elif p >= _OVERBOUGHT_PCT:
+            overbought.append((sym, snap))
+    oversold.sort(key=lambda kv: kv[1].get("nav_dev_pct"))                       # 最超卖在前
+    overbought.sort(key=lambda kv: kv[1].get("nav_dev_pct"), reverse=True)       # 最超买在前
+    return oversold, overbought
+
+
+def _extreme_banner(snapshots: dict, meta: dict) -> str:
+    """顶部横幅：当前处于偏离度极端区(≤5% / ≥95%)的 ETF。超卖绿/超买红（A 股：红=涨/超买、绿=跌/超卖）。
+    纯观察（非买卖建议）；每条 ETF 名可点跳转到该 ETF 明细。"""
+    oversold, overbought = _partition_extremes(snapshots)
+    none_s = '<span style="color:#64748b">无</span>'
+
+    def _items(rows, side):
+        parts = []
+        for sym, snap in rows:
+            nm = meta.get(sym, {}).get("name", sym)
+            cur, p = snap.get("nav_dev_cur"), snap.get("nav_dev_pct")
+            rank = _extreme_rank(snap)
+            rk = f" · 第{rank}{'低' if side == 'low' else '高'}" if rank else ""
+            parts.append(
+                f'<span class="extreme-item"><a href="#{sym}" '
+                f'style="color:#1e293b;font-weight:600;text-decoration:none">{nm}</a> '
+                f'<b>{cur:+.1%}</b> <span style="color:#64748b;font-size:12px">分位 {p:.0%}{rk}</span></span>')
+        return "".join(parts)
+
+    if not oversold and not overbought:
+        return ('<div class="extreme-banner"><b>🎯 偏离度极端区</b> '
+                '<span style="color:#64748b">当前无 ETF 处于净值-MA60 偏离度的历史极端分位（≤5% / ≥95%）</span></div>')
+    ov_items = _items(oversold, "low") or none_s
+    ob_items = _items(overbought, "high") or none_s
+    return (
+        '<div class="extreme-banner">'
+        '<div class="extreme-title">🎯 偏离度极端区 · 净值-MA60 偏离进入自身历史 5%/95% 极端分位 '
+        '<span style="color:#94a3b8;font-size:11px;font-weight:400">观察 · 非买卖建议</span></div>'
+        '<div class="extreme-grid">'
+        f'<div class="extreme-col oversold"><div class="extreme-head">超卖区（分位≤5%，{len(oversold)}）</div>{ov_items}</div>'
+        f'<div class="extreme-col overbought"><div class="extreme-head">超买区（分位≥95%，{len(overbought)}）</div>{ob_items}</div>'
+        '</div></div>'
+    )
+
+
 def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) -> str:
     rows = sorted(snapshots.items(), key=lambda kv: _extremeness(kv[1]), reverse=True)
     out = ""
@@ -408,6 +483,8 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     summary_html = (f'<h3>🔍 全池格局</h3><div class="summary-box">{pool_summary}</div>'
                     if pool_summary else "")
 
+    extreme_banner_html = _extreme_banner(snapshots, meta)
+
     return f"""<html><head><meta charset="utf-8"><title>ETF 行业研究 · {as_of}</title>
 <style>
 body {{ font-family: 'Microsoft YaHei', sans-serif; margin: 20px; background: #f8fafc; color: #1e293b; }}
@@ -424,6 +501,14 @@ tr:hover {{ background: #f8fafc; }}
 .chart-block > div {{ width: 100% !important; max-width: 100% !important; }}
 .lazy-chart {{ width: 100%; }}
 .flag {{ background: #fef3c7; padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #92400e; }}
+.extreme-banner {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }}
+.extreme-title {{ font-size: 14px; font-weight: 600; color: #334155; margin-bottom: 8px; }}
+.extreme-grid {{ display: flex; gap: 12px; }}
+.extreme-col {{ flex: 1; min-width: 0; padding: 8px 12px; border-radius: 6px; }}
+.extreme-col.oversold {{ background: #dcfce7; border-left: 4px solid #16a34a; }}
+.extreme-col.overbought {{ background: #fee2e2; border-left: 4px solid #dc2626; }}
+.extreme-head {{ font-weight: 600; color: #1e293b; margin-bottom: 6px; }}
+.extreme-item {{ display: inline-block; margin: 3px 12px 3px 0; font-size: 13px; white-space: nowrap; }}
 .summary-box {{ background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 16px; border-radius: 6px;
                 font-size: 14px; line-height: 1.7; color: #1e3a8a; margin: 14px 0; }}
 html {{ scroll-behavior: smooth; }}
@@ -436,6 +521,7 @@ html {{ scroll-behavior: smooth; }}
 <div class="flag">读图：本看板跟踪两件事——① <b>净值-MA{ma_period}偏离度</b>：净值相对自身均线的偏离 + 历史百分位分位（0=最负/超卖…1=最正/超买），副图标历史极值「第几低/高」（1=史上最极端，纯观察）。
 ② <b>份额-净值剪刀差</b>：份额与净值走向分化（一升一降）时置灰标注漂移幅度与窗口天数；检不出干净分化则只画原始双线。两者均为跟踪/观察信号，不构成买卖建议。</div>
 {summary_html}
+{extreme_banner_html}
 <h3>📊 择时跟踪排名 · 三类分页（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只 NAV 历史不足未参与" or ""}）</h3>
 {excluded_note}
 <h3 style="color:#16a34a">💰 价值型</h3>

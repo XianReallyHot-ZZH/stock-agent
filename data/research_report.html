@@ -14,6 +14,14 @@ tr:hover { background: #f8fafc; }
 .chart-block > div { width: 100% !important; max-width: 100% !important; }
 .lazy-chart { width: 100%; }
 .flag { background: #fef3c7; padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #92400e; }
+.extreme-banner { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+.extreme-title { font-size: 14px; font-weight: 600; color: #334155; margin-bottom: 8px; }
+.extreme-grid { display: flex; gap: 12px; }
+.extreme-col { flex: 1; min-width: 0; padding: 8px 12px; border-radius: 6px; }
+.extreme-col.oversold { background: #dcfce7; border-left: 4px solid #16a34a; }
+.extreme-col.overbought { background: #fee2e2; border-left: 4px solid #dc2626; }
+.extreme-head { font-weight: 600; color: #1e293b; margin-bottom: 6px; }
+.extreme-item { display: inline-block; margin: 3px 12px 3px 0; font-size: 13px; white-space: nowrap; }
 .summary-box { background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 16px; border-radius: 6px;
                 font-size: 14px; line-height: 1.7; color: #1e3a8a; margin: 14px 0; }
 html { scroll-behavior: smooth; }
@@ -26,6 +34,7 @@ html { scroll-behavior: smooth; }
 <div class="flag">读图：本看板跟踪两件事——① <b>净值-MA60偏离度</b>：净值相对自身均线的偏离 + 历史百分位分位（0=最负/超卖…1=最正/超买），副图标历史极值「第几低/高」（1=史上最极端，纯观察）。
 ② <b>份额-净值剪刀差</b>：份额与净值走向分化（一升一降）时置灰标注漂移幅度与窗口天数；检不出干净分化则只画原始双线。两者均为跟踪/观察信号，不构成买卖建议。</div>
 
+<div class="extreme-banner"><div class="extreme-title">🎯 偏离度极端区 · 净值-MA60 偏离进入自身历史 5%/95% 极端分位 <span style="color:#94a3b8;font-size:11px;font-weight:400">观察 · 非买卖建议</span></div><div class="extreme-grid"><div class="extreme-col oversold"><div class="extreme-head">超卖区（分位≤5%，1）</div><span class="extreme-item"><a href="#515880" style="color:#1e293b;font-weight:600;text-decoration:none">通信ETF</a> <b>-15.2%</b> <span style="color:#64748b;font-size:12px">分位 2% · 第5低</span></span></div><div class="extreme-col overbought"><div class="extreme-head">超买区（分位≥95%，2）</div><span class="extreme-item"><a href="#159992" style="color:#1e293b;font-weight:600;text-decoration:none">创新药ETF</a> <b>+14.5%</b> <span style="color:#64748b;font-size:12px">分位 97%</span></span><span class="extreme-item"><a href="#512010" style="color:#1e293b;font-weight:600;text-decoration:none">医药ETF</a> <b>+14.0%</b> <span style="color:#64748b;font-size:12px">分位 96%</span></span></div></div></div>
 <h3>📊 择时跟踪排名 · 三类分页（33 只参与）</h3>
 
 <h3 style="color:#16a34a">💰 价值型</h3>
