@@ -18,15 +18,14 @@ python scripts/backfill_scale.py --start 2021-01-01  # 回填 ETF 份额历史�
 python scripts/fix_splits.py                   # 修拆分（运行一次）
 python scripts/plot_shares.py                  # 画份额+净值交互图（注意：净值轴=close价，旧bug保留）
 
-# 行业研究（V3.1，只读·不碰引擎）
-# 新机器/fresh clone 冷启动（DB 被 gitignore，需从零回填全部数据，~1hr；详见 .claude/skills/research-dashboard-setup/SKILL.md）
-python scripts/setup_research_dashboard.py     # 一键：依赖检查+.env+价格+份额+净值+PE+渲染（幂等）
-python scripts/setup_research_dashboard.py --skip-pe  # 快速预览：跳过~30min的PE回填（双因子排名照跑）
+# 行业研究（只读·不碰引擎；择时跟踪看板）
+# 新机器/fresh clone 冷启动（DB 被 gitignore，需从零回填；PE 已不用故 ~30min；详见 .claude/skills/research-dashboard-setup/SKILL.md）
+python scripts/setup_research_dashboard.py --skip-pe  # 一键：依赖+.env+价格+份额+净值+渲染（PE 已不用，跳过省~30min；幂等）
 # 日常维护（数据已存在后；详见 .claude/skills/research-dashboard/SKILL.md）
-python scripts/dashboard_data_check.py         # 查数据新鲜度（每只ETF的份额/净值/PE是否到最新交易日）
-python scripts/dashboard_data_check.py --fix   # 自动补齐缺口到最新交易日（价格/份额/净值/PE）
-python scripts/research_report.py              # 生成 ETF 三类分类看板（价值/成长/周期 + 信号提醒 + 锚点导航）
-python scripts/research_report.py --push-alerts  # 生成看板 + 推送信号提醒到微信（十类触发时，含周期反转 R1）
+python scripts/dashboard_data_check.py         # 查数据新鲜度（每只ETF的份额/净值是否到最新交易日；PE 行可忽略）
+python scripts/dashboard_data_check.py --fix   # 自动补齐缺口到最新交易日（价格/份额/净值；PE 不必补）
+python scripts/research_report.py              # 生成 ETF 择时跟踪看板（偏离度+剪刀差，价值/成长/周期 三类分页；置顶 research.pinned_etfs）
+# --push-alerts / --no-llm 已退役（仅可视化），保留 flag 向后兼容；改置顶 ETF 在 config/params.yaml 的 research.pinned_etfs
 
 # 指数择时层（tracker，Phase 1-B · 只读诊断，基于课程 S12-13）
 python scripts/backfill_index.py            # 回填 6 宽基日线(含上证综指000001) + 沪深300 PE/PB + 全市场 PB + 两市成交额（幂等）
@@ -67,7 +66,7 @@ python scripts/transcribe_video.py --url "<链接>" --no-subtitle --device cpu #
 - **决策归规则引擎，解释归大模型**：模型不发明数字，只解释引擎已算出的结果
 - 信号可插拔（`engine/signals/`），通过 `rotation.signal.name` 切换
 - 大盘择时层（RegimeFilter A+B）是最高优先级
-- **行业研究模块（`research/`）是只读旁路**：算 ETF 性价比（三类分类 Phase 1-A：价值=股息率+PE分位 / 成长=业绩+PE / 周期=筹码+趋势,板块PB无源→不估值待P2）。`scoring.py` 按 `etf_pool.yaml` 的 style 标签分流；三类分页看板 + 锚点导航。信号提醒（`tracker/alerts.py`）十类（D筹码×估值交叉/E1E2趋势/B1股息/A1A2业绩/F1大盘/R1周期反转），双通道（看板告警区+微信 `--push-alerts`）。筹码相位用非单调 6 相位表（文章「末期见底」逻辑：兑现中段最空、深回撤+卖盘枯竭=见底最看多）。**周期反转筛子**（`research/cyclical.py`，只读）：cyclic ETF 的「业绩同比×前期回撤×财报时效」综合分(0-100)，周期页「🔁反转候选」表 + R1 提醒（≥60 触发；案例=锂矿深跌+业绩爆发，时效=下个业绩窗口前须兑现）；**不喂引擎**（etf_earnings 无时点历史→回测前视偏差）
+- **行业研究模块（`research/`）是只读旁路**：已从「性价比评估」转定位为 **ETF 择时跟踪**——纯跟踪、不标买卖点、人决策综合多看板。每只 ETF 跟踪 ① 净值-MA60 偏离度（`research/timing.py`：当前偏离 + 历史百分位分位 + 第几极值；偏离度纯函数复制自 `tracker/indicators.py` 做隔离，NAV 用 acc_nav 复权连续）② 份额-净值剪刀差分化（`scissor_divergence`：returns 口径、自适应窗口 20-120、双向、±5% 地板）。`report.py` 渲染 `data/research_report.html`：顶部「偏离度极端区」横幅（超卖绿/超买红，A 股红=涨/超买·绿=跌/超卖）+ 价值/成长/周期 三类分页排名表（按 `|偏离分位−0.5|` 排）+ 逐标的明细（份额净值图叠加剪刀差窗口 + 偏离度图带 ▲▼ 第几极值标记，IntersectionObserver 懒渲染、rangeslider + 1月/6月/1年/3年/全部 快捷按钮、悬停年月日）。置顶 ETF 在 `config/params.yaml` 的 `research.pinned_etfs`（默认 创业板159915/科创50 588000，逐标的明细最前并标 ⭐）。**已退役**：PE/三因子综合分（`scoring.py` 删）、周期反转筛子（`cyclical.py` 删）、LLM 解读（`commentary.py` 留盘休眠）、告警推送（`--push-alerts` no-op、不发微信）。**不喂交易引擎**；**隔离要点**：删 scoring 必须同步清 `research/__init__.py` 的 re-export，否则 `DataManager→research.earnings` 连锁崩掉其他三看板
 - **指数择时层（`tracker/`）是只读诊断旁路**：基于课程 S12-13 + 周期律/量价实证，算大盘估值开关（沪深300 同口径 PE+PB → 四档 zone，③带 PE/PB 时序图）·大小盘温差·蓝筹vs成长·60日线趋势/突破跌破/偏离极值·**⑦相对周期律**（创业板 vs 上证 点差在 5 年包络的位置 → 极点/中枢）·**⑧成交量地量监测**（两市成交额/MA250 → 地量 + 量底→价底 event-study，实证：仅时效成立、胜率无 edge），出本地交互式看板（`data/index_timing.html`，八 section，深浅色可切），**不喂交易引擎**
   - **突破/跌破 = 真穿越**：`last_ma_cross`(严格变号)+`fresh_cross_direction`(≤5 日内) + 偏离≥2%(grade≥2) 才算「有效突破/跌破」；仅在线上/下但无近期穿越 = 中性。`breakout_grade` 只给位置强度，**不是**突破事件。指数看板趋势表/信号区 + alerts E1/E2 + 个股卡 E3 三处一致
 - **个股层（`tracker/stock_diagnose.py` + `stock_report.py` + `stock_commentary.py`，Phase 2）是只读诊断旁路**：个股级三类自动判定（增速→成长 / 高股息低PE→价值 / 利润波动→周期）+ 利润来源归因 S07（业绩/分红/估值三段，EPS 由 P/PE 反推）+ 戴维斯双击/双杀 S10（业绩方向×估值方向六档）+ 业绩含金量（归母 vs 扣非背离 → 一次性利润/纸面富贵识别，挂戴维斯 `quality_warning`；Tier-1：扣非按定义已剔除投资收益/公允价值，**险企投资收益进扣非→漏判**，待 Tier-2 投资收益占比）+ 提前埋伏筛选器（`positioning_score`：深跌×业绩拐头×含金量×未兑现×企稳 → 0-100 埋伏分,看板「🎯提前埋伏候选」表 + P1 提醒；策略=领先基本面(深跌+最新已报期业绩拐头)提前埋伏、财报兑现即离场；**不要求站上60日线**(那是滞后已兑现),改用企稳因子(近60日走平/回升=满分、急跌飞刀=重罚0.25不归零)防飞刀；预告=兑现出场,非入场)。**A 类领先信号**（`tracker/leading.py`,非价格·预判下期业绩):强形式周期=上游商品价(`commodity_price` 表,futures_zh_daily_sina 13种·碳酸锂/铜/铝/锌/螺纹钢/铁矿石/焦煤/黄金/白银/原油/玻璃/纯碱/生猪,日频)→ `commodity_map` 映射;集成进 `earnings_outlook=commodity_alignment`(商品健康度×股价落后度=错杀度;替代旧 max(拐头,商品价))。看板「🧲商品A类面板」(13商品×同比/近60日/判定 向上·背离·向下 + 板块指引)+ M1 背离告警(商品同比涨但近期回落→减仓/卖出)+ M2 向下告警(同比转负→周期确认向下,卖出)。日频聪明钱(北上/主力资金)akshare 端点停滞/被拦,弱形式退到待补+ 避坑 S08（公告时间差 G2·两年复合增速·异常高增速最小值分母·预告链 G1）。数据栈 C0/C0.5/C0.6（价格/百度 PE·PB/sina 财报17指标/分红/eastmoney 业绩预告）。`alerts.evaluate_stocks` 十一条个股提醒（A1/A2/A3/G1/G2/E3/E4/Q1业绩含金量/P1提前埋伏/M1商品背离/M2商品向下）双通道（看板告警区+微信）。出 `data/stock_diagnose.html`（**按类型分 tab:周期/价值/成长**(默认周期;周期 tab 含🧲商品A类面板+📈商品价时序图+🎯埋伏表,价值/成长 tab 本期只卡片、后续各自扩展);告警**按 tab 拆**(个股级→各 tab 顶部,市场级→tab 栏上方全局条)+个股卡片+点📊弹模态看时序图[**周期股首图=映射商品价**+价格+偏离/PE/PB/业绩同比/S07归因/分红]，深浅色可切），**不喂交易引擎**。时序图 Plotly 懒渲染（图数据 JSON 嵌入、点开才 newPlot，可扩展多股票）。**🤖 AI 评估按钮**（`tracker/stock_commentary.py` + `scripts/ai_eval_server.py`）：点卡片 🤖 时前端 fetch 本地服务 `ai_eval_server.py`（首个长驻进程·http.server 绑 127.0.0.1:8765、持 .env key）实时调 LLM 生成五段评估（估值/业绩与归因/择时位置/风险与避坑/行动建议+条件化买卖标签）——基于全量诊断 + 投资心法三类打法（value/growth/cyclic 分流，多类注入全部命中打法；**周期打法已更新为商品驱动**:商品价因果领先/alignment=错杀度/背离=减仓/预告=兑现；facts 注入商品A类信号——品种/同比/近60日/健康度/alignment/背离预警）；守门只禁纯涨跌预测，无 key/失败/含禁词走规则模板兜底，服务未开则 🤖 报错提示。**纯服务、无预计算嵌入**（看板生成不调 LLM，点击时按需单股调）
@@ -91,7 +90,7 @@ python scripts/transcribe_video.py --url "<链接>" --no-subtitle --device cpu #
 - **行业研究数据**：单位净值 `fund_etf_fund_info_em`（真NAV，天然正确无需复权）；行业PE `stock_industry_pe_ratio_cninfo`（证监会行业，按日快照，历史~2023起约3年，cninfo 限流需重试）
 - **不复权数据**：sina 原始价格，需 `fix_splits.py` 修拆分后使用（仅影响价格序列；真NAV不受影响）
 - **指数择时数据**：6 宽基日线 `stock_zh_index_daily`（sina，含上证综指 000001=⑦基准）；沪深300 PE/PB `stock_index_pe/pb_lg`（legulegu，仅沪深300/上证50/中证500，**不支持**创业板指/科创50/上证综指）；全市场 PB `stock_a_all_pb`；两市成交额 baostock（sh.000001+sz.399001 的 amount 求和=两市，历史到 1991，**仅 ⑧ 用**）。存 `index_daily`/`index_pe`/`index_pb`/`market_pb`/`market_turnover` 表（指数日线独立于 `daily_prices`，不复用 ETF 复权族）
-- **ETF 三类分类**（Phase 1-A）：`etf_pool.yaml` 的 `style`/`style_alt` 标签（人工标 value/growth/cyclic，主+次）；ETF 分红 `fund_etf_dividend_sina`（覆盖稀疏，容忍缺失）。周期型板块 PB 无数据源→不估值（待 Phase 2 个股 PB 加权补真值）
+- **ETF 三类标签**：`etf_pool.yaml` 的 `style`/`style_alt`（人工标 value/growth/cyclic，主+次）仅作择时跟踪看板的分页分组（不再用于估值）；偏离度/剪刀差与类别无关。PE/PB/分红/筹码 已不在本看板使用
 - **决策门**：walk-forward 样本外 PASS（更低回撤 + 不输基准）才能用
 - **A股交易日**：9:30-11:30 / 13:00-15:00；报告 8:30 前基于前日收盘
 

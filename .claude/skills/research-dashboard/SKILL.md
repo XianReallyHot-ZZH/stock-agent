@@ -1,11 +1,11 @@
 ---
 name: research-dashboard
-description: Refresh, backfill, and generate the ETF 行业研究·性价比看板 (research_report.html). Use when the user wants to update/refresh the research dashboard, suspects its data is stale or incomplete, wants a current report (e.g. before a Friday review), or asks to "生成/刷新看板". Checks data freshness vs the latest trading day and auto-backfills gaps.
+description: Refresh, backfill, and generate the ETF 行业研究·择时跟踪看板 (research_report.html). Use when the user wants to update/refresh the research dashboard, suspects its data is stale or incomplete, wants a current report (e.g. before a Friday review), or asks to "生成/刷新看板". Tracks 净值-MA60 偏离度 + 份额-净值剪刀差; checks data freshness vs the latest trading day and auto-backfills gaps.
 ---
 
-# ETF 行业研究·性价比看板 — 维护与生成
+# ETF 行业研究·择时跟踪看板 — 维护与生成
 
-纯研究报告模块（只读，不碰交易引擎）。Phase 1-A 起按**三类分类**（价值/成长/周期）分流估值，输出 `data/research_report.html`：三类分页排名表（锚点跳转）+ 信号提醒告警区（九条规则，看板+微信双通道）。
+纯研究模块（只读，不碰交易引擎）。**择时跟踪**定位（已从「性价比评估」转定位）：每只 ETF 跟踪 ① 净值-MA60 偏离度（当前偏离 + 历史百分位分位 + 第几极值）② 份额-净值剪刀差分化。输出 `data/research_report.html`：顶部「偏离度极端区」横幅（超卖绿/超买红）+ 价值/成长/周期 三类分页排名表（按偏离极值排）+ 逐标的明细（份额净值图 + 偏离度图，懒渲染）。**纯跟踪、不标买卖点、人决策**；LLM 解读与告警推送均已退役（仅可视化）。
 
 ## 触发场景
 - "刷新看板 / 数据旧了 / 生成看板 / 这周五要看报表 / research dashboard"
@@ -20,53 +20,48 @@ PYTHONIOENCODING=utf-8 python scripts/dashboard_data_check.py
 读输出：
 - 基准(510300)最新交易日 = 系统知道的最新交易日（今天若是周末/节假日，会是上一个交易日）
 - 每只 ETF 的 price/shares/nav 最新日期 vs 基准日；`[份额旧]/[净值旧]`=落后，`[无份额]/[无净值]`=完全缺失
-- PE 最新日期；`PE旧` = 落后 >14 天
+- PE 行可忽略：本看板已不用 PE（偏离度/剪刀差只需 NAV+份额）
 
-### 2. 若有落后/缺失 → 自动补齐到最新交易日
+### 2. 若份额/净值落后或缺失 → 自动补齐到最新交易日
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/dashboard_data_check.py --fix
 ```
-这会按缺口补：价格(update_all)→份额(backfill 缺口 SSE+SZSE)→净值(增量 per-symbol)→PE(仅 >14天旧才补，cninfo限流)。补完自动复查。
+补：价格(update_all) → 份额(缺口 SSE+SZSE) → 净值(增量 per-symbol)。补完自动复查。**PE 不必补**（看板不用）。
 > 用户明确要"当前报表"时，**默认就跑 --fix**，不必逐项问。
 
 ### 3. 生成看板
 ```bash
-PYTHONIOENCODING=utf-8 python scripts/research_report.py            # 三类分类排名 + 全池格局LLM综合(1次调用，默认)
-PYTHONIOENCODING=utf-8 python scripts/research_report.py --no-llm   # 全规则模板，最快
-PYTHONIOENCODING=utf-8 python scripts/research_report.py --push-alerts  # 生成看板 + 推送信号提醒到微信（九条触发时）
+PYTHONIOENCODING=utf-8 python scripts/research_report.py   # 生成择时跟踪看板（无 LLM、无告警推送，纯可视化）
 ```
-LLM 用法：**默认只做 1 次全池格局综合**（顶部蓝框，跨标的归纳——这才是 LLM 相对规则的增量价值）。逐只解读默认走规则模板（表里已有相位标签够了）。零预测硬护栏：含禁词(预计/有望/看好/后市/将会/看涨/看跌)自动回退规则模板。
+历史 flag `--push-alerts` / `--no-llm` / `--llm-per-etf` 仍可传（向后兼容）但已是 no-op（告警推送与 LLM 解读已退役）。置顶 ETF 改 `config/params.yaml` 的 `research.pinned_etfs`（默认 创业板159915 / 科创50 588000）。
 
 ### 4. 汇报（给用户）
-- 参与排名 N/27（数据不足的被排除，单列）
-- 性价比 top 3 / bottom 3 + 各自相位标签
-- 任何本轮新发现的数据问题（如某 ETF 新增缺失、PE 掉到很稀疏等）
+- 参与排名 N/总数（NAV 历史不足算偏离度的被排除，单列）
+- 顶部「偏离度极端区」：超卖区(绿)/超买区(红) 各哪些 ETF + 偏离% + 分位 + 第几低/高
+- 有剪刀差分化的 ETF（份↑净↓ / 份↓净↑）
+- 任何本轮新发现的数据问题（如某 ETF 新增缺失）
 
-## 已知坑（不必"修"，是数据源限制，看板已优雅处理）
-- **515880 通信 无份额历史**：`fund_etf_scale_sse` 的 869 只里不含它 → 看板自动画当日份额虚线参考。无法补历史（免费源没有）。
-- **cninfo 行业PE**：限流，需 `--sleep 8 --step≥7`；历史仅 ~2023 起（约3年）。要加密：`python scripts/research_report.py --backfill pe --step 7 --sleep 8`（后台~30min）。
-- **NAV 拆分断崖**：画的是 acc_nav(累计净值，拆分连续)，不是 unit_nav(原始，有断崖)。`fetch_etf_nav` 主接口失败会自动回退 `fund_open_fund_info_em`。
-- **份额历史深市**：`fund_etf_scale_szse()` 是 spot 无历史，真正历史在 `fund_scale_daily_szse`（按月增量回填，已在 backfill_etf_scale source=szse 里）。
+## 已知坑（数据源限制，看板已优雅处理）
+- **515880 通信 无份额历史**：`fund_etf_scale_sse` 的 869 只里不含它 → 看板自动画当日份额虚线参考；剪刀差对该 ETF 退化（份额端无历史）。免费源没有，无法补。
+- **NAV 拆分断崖**：偏离度算在 **acc_nav（累计净值，拆分/分红连续）** 上，不是 unit_nav（原始，有断崖会伪造偏离极值）。`fetch_etf_nav` 主接口失败自动回退 `fund_open_fund_info_em`。
+- **份额历史深市**：`fund_etf_scale_szse()` 是 spot 无历史，真正历史在 `fund_scale_daily_szse`（按月增量回填，在 backfill_etf_scale source=szse 里）。
+- **偏离度需 NAV 历史 ≥ ma_period+20（≈80 日）**：不够的 ETF 不进排名（明细图仍画）。
 
 ## 排名规则提醒
-`data_sufficient` 标志：缺"应有"的因子（如份额历史不足→chip算不出）→ 排除出排名；"不适用"的因子（宽基/QDII/商品无PE）→ 保留(双因子)。所以排名是同类相比。
+`data_sufficient` = 偏离度可算（NAV 历史 ≥ ma_period+20 根 acc_nav）。不足者保留明细图、不进排名。三类（价值/成长/周期）仅作分页分组；排序统一按偏离极值 `|分位−0.5|`。置顶 ETF（`research.pinned_etfs`）排在逐标的明细最前并标 ⭐。
 
 ## 数据回填（一次性历史，非日常）
 ```bash
-# 一次性补全部历史（新环境/重置后）
+# 新环境/重置后补全部历史（本看板只需 nav + scale；pe 已不用但脚本仍支持，可跳过省 ~30min）
 python scripts/research_report.py --backfill nav --start 2021-01-01
-python scripts/research_report.py --backfill pe --start 2023-01-01 --step 7 --sleep 8   # cninfo从2023起
-python scripts/research_report.py --backfill scale --source szse --start 2021-01-01      # 深市份额
-python scripts/research_report.py --backfill scale --source sse --start 2021-01-01       # 沪市份额
-# Phase 1-A: ETF 分红（价值型股息率需要，覆盖稀疏属正常）
-from stockagent.data.manager import DataManager; DataManager(config=get_config()).update_etf_dividend()
+python scripts/research_report.py --backfill scale --source szse --start 2021-01-01   # 深市份额
+python scripts/research_report.py --backfill scale --source sse --start 2021-01-01    # 沪市份额
 ```
 
 ## 端点真相（探针确认，akshare 1.18.64）
 | 数据 | 可用端点 | 备注 |
 |---|---|---|
-| ETF NAV | `fund_etf_fund_info_em(fund,start,end)` → 失败回退 `fund_open_fund_info_em` | 单位+累计净值 |
-| SSE 份额 | `fund_etf_scale_sse(date)` | 按日，不含515880 |
+| ETF NAV | `fund_etf_fund_info_em(fund,start,end)` → 失败回退 `fund_open_fund_info_em` | 单位+累计净值（偏离度用 acc_nav） |
+| SSE 份额 | `fund_etf_scale_sse(date)` | 按日，不含 515880 |
 | SZSE 份额 | `fund_scale_daily_szse(start,end,symbol="ETF")` | 按区间，按月分块 |
-| 行业PE | `stock_industry_pe_ratio_cninfo(symbol="证监会行业分类",date)` | 按日全行业快照，限流 |
-| 死路 | ~~stock_index_pe_lg~~(只宽基)、~~stock_zh_index_value_csindex~~(仅25天)、~~fund_etf_scale_szse()~~(spot无历史) | |
+| （已不用）行业PE | `stock_industry_pe_ratio_cninfo` | 本看板已不渲染 PE，回填可跳过 |
