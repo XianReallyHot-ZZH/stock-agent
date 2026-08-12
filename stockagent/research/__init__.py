@@ -1,24 +1,11 @@
-"""Research module (V3.1): read-only ETF 行业研究 — valuation + chip + trend 性价比.
+"""Research module: read-only ETF 择时跟踪看板（timing tracking）.
 
-Does NOT feed the trading engine. Produces a per-ETF research snapshot consumed by the
-HTML dashboard (scripts/research_report.py). See plans/breezy-jumping-pond.md.
+转定位（原 性价比评估）：净值-MA 偏离度（分位 + 第几极值）+ 份额-净值剪刀差分化跟踪。
+纯跟踪、不标买卖点。不喂交易引擎；产每-ETF 择时快照供 HTML 看板（scripts/research_report.py）消费。
+
+子模块直接 import（不在 __init__ re-export），避免删除旧 scoring 模块时遗留导入链：
+  - timing    纯函数：偏离度（复制自 tracker，隔离）+ 剪刀差检测 + timing_snapshot
+  - earnings  业绩预告评分（信息列；data/manager.py 依赖此模块）
+  - report    HTML 渲染
+  - commentary  (休眠) 旧 LLM 解读，随性价比模型退役，留盘不调即无害
 """
-from .scoring import (
-    valuation_score,
-    chip_score,
-    trend_score,
-    composite,
-    analyze_etf,
-    pe_percentile,
-    reduction_from_peak,
-)
-
-__all__ = [
-    "valuation_score",
-    "chip_score",
-    "trend_score",
-    "composite",
-    "analyze_etf",
-    "pe_percentile",
-    "reduction_from_peak",
-]
