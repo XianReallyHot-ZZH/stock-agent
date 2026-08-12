@@ -38,7 +38,7 @@ _RANGE_BUTTONS = dict(
         dict(count=3, label="3年", step="year", stepmode="backward"),
         dict(step="all", label="全部"),
     ],
-    bgcolor="#f1f5f9", activecolor="#fcd34d", font=dict(color="#1e293b", size=11),
+    bgcolor="white", activecolor="#fcd34d", font=dict(color="#1e293b", size=11),
 )
 
 
@@ -133,7 +133,7 @@ def shares_nav_figure(name: str, shares_df, nav_df, ma_period: int = 60,
     fig.update_yaxes(title_text="累计净值", secondary_y=False, gridcolor=C_GRID)
     fig.update_yaxes(title_text="份额（亿份）", secondary_y=False, gridcolor=C_GRID)
     fig.update_xaxes(type="date", rangeselector=_RANGE_BUTTONS,
-                     rangeslider=dict(visible=True, thickness=0.04))
+                     rangeslider=dict(visible=True, thickness=0.02))
     return fig
 
 
@@ -158,7 +158,7 @@ def nav_deviation_figure(name: str, nav_df, snap: dict, ma_period: int = 60) -> 
     cur_pct = snap.get("nav_dev_pct")
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.6, 0.4],
-                        vertical_spacing=0.12,
+                        vertical_spacing=0.05,
                         subplot_titles=(f"{nav_label} vs MA{ma_period}", "偏离度 (净值−均线)÷均线"))
     fig.add_trace(go.Scatter(x=idx, y=nav_y.values, name=nav_label,
                              line=dict(color=C_NAV, width=1.6)), row=1, col=1)
@@ -217,7 +217,7 @@ def nav_deviation_figure(name: str, nav_df, snap: dict, ma_period: int = 60) -> 
     fig.update_xaxes(type="date", rangeselector=_RANGE_BUTTONS, row=1, col=1)
     # 底部子图（row=2）挂 rangeslider —— 与 shares_nav_figure 一致，拖拽滑块切观察窗口；
     # shared_xaxes=True 故上下两图联动。写法参照 tracker/dashboard.py 的 2-row 子图。
-    fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.04), row=2, col=1)
+    fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.02), row=2, col=1)
     return fig
 
 
@@ -419,14 +419,15 @@ th {{ background: #f1f5f9; padding: 10px; text-align: center; border-bottom: 2px
 td {{ padding: 8px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
 td:first-child {{ text-align: left; }}
 tr:hover {{ background: #f8fafc; }}
-.chart-block {{ width: 100%; margin: 0 0 4px 0; }}
+.chart-block {{ width: 100%; margin: 0 0 2px 0; }}
+.etf-detail > .chart-block:last-child {{ margin-bottom: 0; }}
 .chart-block > div {{ width: 100% !important; max-width: 100% !important; }}
 .lazy-chart {{ width: 100%; }}
 .flag {{ background: #fef3c7; padding: 8px 12px; border-radius: 6px; font-size: 12px; color: #92400e; }}
 .summary-box {{ background: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 16px; border-radius: 6px;
                 font-size: 14px; line-height: 1.7; color: #1e3a8a; margin: 14px 0; }}
 html {{ scroll-behavior: smooth; }}
-.etf-detail {{ margin: 12px 0 4px; padding: 8px 0 0; border-top: 2px solid #cbd5e1; }}
+.etf-detail {{ margin: 0; padding: 6px 0 0; border-top: 2px solid #cbd5e1; }}
 .etf-detail:target {{ background: #eff6ff; transition: background 0.6s; }}
 .etf-detail h4 {{ margin: 0 0 10px; color: #334155; }}
 </style></head><body>
