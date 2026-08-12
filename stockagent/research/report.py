@@ -132,7 +132,7 @@ def shares_nav_figure(name: str, shares_df, nav_df, ma_period: int = 60,
     fig.update_layout(**_base_layout(f"{name} — 份额 vs 累计净值（复权，拆分/分红已平滑）"))
     fig.update_yaxes(title_text="累计净值", secondary_y=False, gridcolor=C_GRID)
     fig.update_yaxes(title_text="份额（亿份）", secondary_y=False, gridcolor=C_GRID)
-    fig.update_xaxes(type="date", rangeselector=_RANGE_BUTTONS,
+    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d", rangeselector=_RANGE_BUTTONS,
                      rangeslider=dict(visible=True, thickness=0.02))
     return fig
 
@@ -214,7 +214,7 @@ def nav_deviation_figure(name: str, nav_df, snap: dict, ma_period: int = 60) -> 
     fig.update_layout(**_base_layout(title, height=520))
     fig.update_yaxes(title_text="净值", row=1, col=1, gridcolor=C_GRID)
     fig.update_yaxes(title_text="偏离度", row=2, col=1, gridcolor=C_GRID, tickformat=".0%")
-    fig.update_xaxes(type="date", rangeselector=_RANGE_BUTTONS, row=1, col=1)
+    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d", rangeselector=_RANGE_BUTTONS, row=1, col=1)
     # 底部子图（row=2）挂 rangeslider —— 与 shares_nav_figure 一致，拖拽滑块切观察窗口；
     # shared_xaxes=True 故上下两图联动。写法参照 tracker/dashboard.py 的 2-row 子图。
     fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.02), row=2, col=1)
@@ -349,7 +349,7 @@ _LAZY_CHART_JS = r"""
   if(!('IntersectionObserver' in window)){ nodes.forEach(render); return; }   // 老浏览器兜底
   var io = new IntersectionObserver(function(entries){
     entries.forEach(function(e){ if(e.isIntersecting) render(e.target); else purge(e.target); });
-  }, {rootMargin: '300px 0px'});
+  }, {rootMargin: '1500px 0px'});
   nodes.forEach(function(el){ io.observe(el); });
 })();
 """
