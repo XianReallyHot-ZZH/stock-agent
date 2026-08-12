@@ -188,7 +188,8 @@ def main():
 
     html = rep.render(snapshots, series_map, meta, as_of=as_of,
                       signal_note="纯跟踪·无LLM解读",
-                      ma_period=int(cfg.params["research"]["ma_period"]))
+                      ma_period=int(cfg.params["research"]["ma_period"]),
+                      pinned=list(cfg.params["research"].get("pinned_etfs", [])))
     out = rep.write_html(html, args.output)
 
     if args.push_alerts:

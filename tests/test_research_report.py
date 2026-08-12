@@ -80,3 +80,42 @@ def test_extreme_rank_high_side():
 def test_extreme_rank_nan_and_empty():
     assert rep._extreme_rank(_snap(NaN, NaN)) is None
     assert rep._extreme_rank(_snap(0.02, -0.15, events=[])) is None   # 无事件
+
+
+# ---------------- _order_detail (逐标的明细顺序：置顶优先) ----------------
+
+def _rsnap(pct, sufficient=True):
+    return {"nav_dev_pct": pct, "data_sufficient": sufficient}
+
+
+def test_order_detail_pins_first_in_given_order():
+    ranked = {
+        "159915": _rsnap(0.12),   # 创业板（较不极端）
+        "588000": _rsnap(0.17),   # 科创50（较不极端）
+        "512010": _rsnap(0.96),   # 本该排前（最极端之一）
+        "515880": _rsnap(0.02),   # 另一侧最极端
+    }
+    meta = {s: {"name": s} for s in ranked}
+    syms = [s for s, _ in rep._order_detail(ranked, {}, ["159915", "588000"], meta)]
+    assert syms[:2] == ["159915", "588000"]               # 置顶最前、保持给定顺序
+    assert syms.index("159915") < syms.index("512010")    # 置顶先于非置顶
+    # 余下按 |pct−0.5| 降序：515880(0.48) > 512010(0.46)
+    assert syms[2:] == ["515880", "512010"]
+
+
+def test_order_detail_no_pin_falls_back_to_extremeness():
+    ranked = {"A": _rsnap(0.96), "B": _rsnap(0.10), "C": _rsnap(0.50)}
+    meta = {s: {"name": s} for s in ranked}
+    assert [s for s, _ in rep._order_detail(ranked, {}, None, meta)] == ["A", "B", "C"]
+
+
+def test_order_detail_unknown_pin_skipped():
+    ranked = {"A": _rsnap(0.96)}
+    assert [s for s, _ in rep._order_detail(ranked, {}, ["ZZZ", "A"], {"A": {"name": "A"}})] == ["A"]
+
+
+def test_order_detail_pinned_in_excluded_still_first():
+    ranked = {"A": _rsnap(0.96)}
+    excluded = {"B": _rsnap(0.10, sufficient=False)}
+    meta = {"A": {"name": "A"}, "B": {"name": "B"}}
+    assert [s for s, _ in rep._order_detail(ranked, excluded, ["B"], meta)] == ["B", "A"]

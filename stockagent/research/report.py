@@ -262,6 +262,18 @@ def _extremeness(sn: dict) -> float:
     return abs(p - 0.5) if not _nan(p) else -1.0
 
 
+def _order_detail(ranked: dict, excluded: dict, pinned, meta: dict) -> list:
+    """逐标的明细顺序：置顶 ETF(pinned，按给定顺序) 最前 → 其余按偏离度极值 → excluded 随后按名。"""
+    all_snaps = {**ranked, **excluded}
+    pin = [s for s in (pinned or []) if s in all_snaps]
+    pin_set = set(pin)
+    ranked_sorted = sorted(ranked.items(), key=lambda kv: _extremeness(kv[1]), reverse=True)
+    excluded_sorted = sorted(excluded.items(), key=lambda kv: meta.get(kv[0], {}).get("name", kv[0]))
+    return ([(s, all_snaps[s]) for s in pin]
+            + [kv for kv in ranked_sorted if kv[0] not in pin_set]
+            + [kv for kv in excluded_sorted if kv[0] not in pin_set])
+
+
 # 偏离度极端区阈值（与 deviation_extreme_events 的 lo_pct/hi_pct、图里 chip 同口径）
 _OVERSOLD_PCT = 0.05      # 超卖：净值大幅低于均线，分位 ≤5%
 _OVERBOUGHT_PCT = 0.95    # 超买：净值大幅高于均线，分位 ≥95%
@@ -431,15 +443,16 @@ _LAZY_CHART_JS = r"""
 
 
 def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
-           signal_note: str = "", ma_period: int = 60, pool_summary: str = "") -> str:
+           signal_note: str = "", ma_period: int = 60, pool_summary: str = "",
+           pinned: list[str] | None = None) -> str:
     """Build the full HTML. series_map[symbol] = {close, shares, nav}."""
     # data_sufficient ETFs 参与排名；不足者（NAV 历史不够算偏离度）保留明细图、不进排名。
     ranked = {s: sn for s, sn in snapshots.items() if sn.get("data_sufficient", True)}
     excluded = {s: sn for s, sn in snapshots.items() if not sn.get("data_sufficient", True)}
 
-    # 逐标的明细：按偏离度极值排（ranked 在前，excluded 随后按名）
-    ordered = (list(sorted(ranked.items(), key=lambda kv: _extremeness(kv[1]), reverse=True))
-               + list(sorted(excluded.items(), key=lambda kv: meta.get(kv[0], {}).get("name", kv[0]))))
+    # 逐标的明细：置顶 ETF 最前，其余按偏离度极值排，excluded 随后按名
+    ordered = _order_detail(ranked, excluded, pinned, meta)
+    pin_set = {s for s in (pinned or []) if s in snapshots}
     # 懒渲染：图数据 to_json 嵌入 CHARTS dict，页内只放占位 div；IntersectionObserver
     # 滚入视口才 Plotly.newPlot、离开 purge 释放——把同时在画的图从 66 张压到 ~3-5 张，
     # 消除整页卡顿（参照 stock_report.py 懒渲染模式，适配为内联滚动版）。
@@ -451,7 +464,8 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
         nm = meta.get(sym, {}).get("name", sym)
         figs = _etf_figs(sym, snap, meta, series_map, ma_period)
         charts_json[sym] = [f.to_json() for f in figs]
-        block = f'<div id="{sym}" class="etf-detail"><h4>📌 {nm}（{sym}）</h4>'
+        star = "⭐ " if sym in pin_set else ""
+        block = f'<div id="{sym}" class="etf-detail"><h4>📌 {star}{nm}（{sym}）</h4>'
         for i, fig in enumerate(figs):
             h = int(fig.layout.height or 460)   # 占位高度匹配图高，避免渲染后跳屏/留白
             block += (f'<div class="chart-block">'
