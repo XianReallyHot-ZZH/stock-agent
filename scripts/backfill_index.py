@@ -8,6 +8,7 @@ Usage:
   python scripts/backfill_index.py --daily    # only the 5 broad-index daily OHLCV
   python scripts/backfill_index.py --pe       # only the 3 PE series
   python scripts/backfill_index.py --pb       # only whole-market PB
+  python scripts/backfill_index.py --margin   # only 上交所融资融券(⑨恐惧贪婪·杠杆成分)
 """
 from __future__ import annotations
 
@@ -59,6 +60,12 @@ def _summary(dm: DataManager):
               f"最新={float(df['total'].iloc[-1]) / 1e8:.0f}亿")
     else:
         print("  两市成交额: (无)")
+    df = store.get_market_margin_series()
+    if len(df):
+        print(f"  融资融券(沪): {len(df)} 行, {df.index.min()}..{df.index.max()} | "
+              f"最新融资余额={float(df['financing_sse'].iloc[-1]) / 1e8:.0f}亿")
+    else:
+        print("  融资融券(沪): (无)")
 
 
 def main():
@@ -67,12 +74,13 @@ def main():
     ap.add_argument("--pe", action="store_true", help="指数 PE+PB (沪深300/上证50/中证500)")
     ap.add_argument("--pb", action="store_true", help="only whole-market PB")
     ap.add_argument("--turnover", action="store_true", help="only 两市日成交额(⑧地量监测,baostock)")
+    ap.add_argument("--margin", action="store_true", help="only 上交所融资融券(⑨恐惧贪婪·杠杆成分,sse)")
     args = ap.parse_args()
     setup_logging()
     cfg = get_config()
     dm = DataManager(config=cfg)
 
-    selective = args.daily or args.pe or args.pb or args.turnover
+    selective = args.daily or args.pe or args.pb or args.turnover or args.margin
     if args.daily or not selective:
         dm.update_index_daily()
     if args.pe or not selective:
@@ -82,6 +90,8 @@ def main():
         dm.update_market_pb()
     if args.turnover or not selective:
         dm.update_market_turnover()
+    if args.margin or not selective:
+        dm.update_market_margin()
 
     _summary(dm)
 

@@ -10,7 +10,7 @@ description: One-click refresh + generate + open all four read-only diagnostic d
 | 看板 | 产物 | 单看板 skill |
 |---|---|---|
 | ETF 行业研究（择时跟踪·偏离度+剪刀差） | `data/research_report.html` | `research-dashboard` |
-| 指数择时（估值开关·趋势·相对周期·地量·偏离） | `data/index_timing.html` | `tracker-dashboard` |
+| 指数择时（估值开关·趋势·相对周期·地量·偏离·恐贪） | `data/index_timing.html` | `tracker-dashboard` |
 | 个股诊断（三类·S07 归因·S10 戴维斯·S08 避坑·时序图·🤖AI评估） | `data/stock_diagnose.html` | （无，本 skill 覆盖） |
 | 宏观框架（因果链 利率→曲线→美元→金属→能源→权益 · 🥇黄金阶段定位器 · 微观紧缺） | `data/macro_framework.html` | （无，本 skill 覆盖） |
 
@@ -81,7 +81,7 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_economic_calendar.py
 ### 2. 生成四个 HTML
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/research_report.py        # 冷启动时已由 setup 渲染过,这里重跑无妨(秒级);纯可视化(无 LLM/无告警)
-PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（8 section，深浅色可切）
+PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（9 section，深浅色可切）
 PYTHONIOENCODING=utf-8 python scripts/stock_report.py           # 个股诊断（卡片+弹窗时序图+🤖按钮，深浅色可切；生成不调LLM，🤖点击时实时生成）
 PYTHONIOENCODING=utf-8 python scripts/macro_framework_report.py # 宏观框架（总览表+🥇黄金阶段定位器+微观紧缺+因果链分节点图，纯数据无LLM）
 ```
@@ -97,7 +97,7 @@ Win/mac/linux 通用。失败就手动双击 `data/*.html`，或 Win 用 `start 
 - 走的是 **COLD 还是 WARM**（让用户知道这次是不是首次大回填）
 - 三个 HTML 路径 + 各自一行关键结论：
   - 研究：参与排名 N/总数、顶部「偏离度极端区」（超买/超卖各哪些）+ 剪刀差分化 ETF
-  - 指数：估值 zone + 大小盘温差 + ⑦相对周期位置 + ⑧地量状态 + 是否有有效突破/跌破信号
+  - 指数：估值 zone + 大小盘温差 + ⑦相对周期位置 + ⑧地量状态 + ⑨恐惧贪婪读数(0-100/五档) + 是否有有效突破/跌破信号
   - 个股：观察池触发提醒数 + 周期 tab 商品面板（哪些商品向上/背离/向下）+ 埋伏候选（门槛线≥30 上下）+ 任何异常（避坑/戴维斯/预告拐点/M1-M2 商品背离）
   - 宏观框架：🥇黄金阶段定位器（阶段 + bull_intact 底层 + 置信度 + 操作建议）+ 利率节点（实际利率/期限溢价方向）+ 微观（COMEX库存/CFTC投机是否泡沫·商业是否逼空/央行购金节奏）+ 📰经济日历（近7天美国高重要性数据公布vs预期surprise + 未来FOMC/CPI/非农催化剂时点）
 - 本轮数据问题（某 ETF 缺失、某股 PE 稀疏、legulegu 限流需重跑等）

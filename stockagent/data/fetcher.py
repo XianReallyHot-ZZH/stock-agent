@@ -219,6 +219,63 @@ def fetch_market_turnover(start=None, end=None, timeout=60.0):
     return pd.DataFrame(rows, columns=["date", "sse", "sz", "total"]).set_index("date")
 
 
+def fetch_market_margin(start: str = "2010-03-01", end: Optional[str] = None,
+                        timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """上交所融资融券日级总量(stock_margin_sse,信用交易汇总)。两融 2010-03-31 启动 → 历史自彼起。
+    单次返回封顶 ~2000 行 → 按**年**分段拉再拼接。返回 DataFrame indexed by date(str):
+      financing_sse(融资余额,元) / total_margin_sse(融资融券余额,元)。
+
+    深市总量历史 akshare 不可得(stock_margin_szse 仅当日 1 行快照、stock_margin_detail_szse 逐券明细无法
+    拼总量)→ v1 杠杆成分仅沪市口径;沪市占两融大头,作杠杆情绪代理足够(只读诊断,非精确水平)。"""
+    from datetime import datetime, timedelta
+    end = end or today_str()
+    s_dt = datetime.strptime(str(start)[:10], "%Y-%m-%d")
+    e_dt = datetime.strptime(str(end)[:10], "%Y-%m-%d")
+    frames = []
+    last_err = None
+    cur_year = s_dt.year
+    while cur_year <= e_dt.year:
+        ys = max(s_dt, datetime(cur_year, 1, 1))
+        ye = min(e_dt, datetime(cur_year, 12, 31))
+        s_arg, e_arg = ys.strftime("%Y%m%d"), ye.strftime("%Y%m%d")
+        for attempt in range(retries):
+            if attempt > 0:
+                time.sleep(1.5 * attempt)
+            try:
+                df = _run_with_timeout(ak.stock_margin_sse, timeout,
+                                       start_date=s_arg, end_date=e_arg)
+                if df is None or len(df) == 0:
+                    raise FetchError("empty")
+                cols = list(df.columns)
+                date_col = next((c for c in cols if "日期" in str(c)), cols[0])
+                fin_col = next((c for c in cols if "融资余额" in str(c)), None)
+                tot_col = next((c for c in cols if "融资融券余额" in str(c)), None)
+                if fin_col is None:
+                    raise FetchError(f"market_margin: no 融资余额 col in {cols}")
+                out = pd.DataFrame({
+                    "date": pd.to_datetime(df[date_col].astype(str), format="%Y%m%d",
+                                           errors="coerce").dt.strftime("%Y-%m-%d"),
+                    "financing_sse": pd.to_numeric(df[fin_col], errors="coerce"),
+                })
+                if tot_col is not None:
+                    out["total_margin_sse"] = pd.to_numeric(df[tot_col], errors="coerce")
+                out = out.dropna(subset=["date", "financing_sse"]).drop_duplicates("date")
+                frames.append(out)
+                last_err = None
+                break
+            except FetchError as e:
+                last_err = e
+            except Exception as e:  # noqa: BLE001
+                last_err = FetchError(str(e)[:160])
+        cur_year += 1
+        if cur_year <= e_dt.year:
+            time.sleep(0.25)   # 按年分段间小睡,对 sse 友好
+    if not frames:
+        raise FetchError(f"market_margin failed ({last_err})")
+    return (pd.concat(frames, ignore_index=True)
+              .drop_duplicates("date").sort_values("date").set_index("date"))
+
+
 _SOURCES = [_fetch_eastmoney, _fetch_sina, _fetch_baostock]
 
 

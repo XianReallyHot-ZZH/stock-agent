@@ -139,6 +139,12 @@ CREATE TABLE IF NOT EXISTS market_turnover (
     total  REAL,
     source TEXT
 );
+CREATE TABLE IF NOT EXISTS market_margin (   -- ⑨ 恐惧贪婪·杠杆成分:上交所信用交易日级汇总
+    date             TEXT PRIMARY KEY,
+    financing_sse    REAL,   -- 上交所融资余额(元)。深市总量历史 akshare 不可得 → v1 仅沪市(_sz 列待扩)
+    total_margin_sse REAL,   -- 上交所融资融券余额(元)
+    source           TEXT
+);
 CREATE TABLE IF NOT EXISTS etf_dividend (
     symbol              TEXT NOT NULL,
     date                TEXT NOT NULL,
@@ -900,6 +906,55 @@ class Store:
     def last_market_turnover_date(self) -> Optional[str]:
         with self._conn() as c:
             row = c.execute("SELECT MAX(date) FROM market_turnover").fetchone()
+            return row[0] if row and row[0] else None
+
+    # ---- 融资融券余额(⑨ 恐惧贪婪·杠杆成分 · 上交所信用交易日级汇总 stock_margin_sse)----
+    def upsert_market_margin(self, df: pd.DataFrame, source: str = "") -> int:
+        """df indexed by date(str) with financing_sse/total_margin_sse (yuan)。
+        v1 仅沪市(stock_margin_sse 日级总量);深市总量历史 akshare 不可得。"""
+        if df is None or len(df) == 0:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        rows = [
+            (str(d), _f(r.get("financing_sse")), _f(r.get("total_margin_sse")), source)
+            for d, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO market_margin(date,financing_sse,total_margin_sse,source) "
+                "VALUES(?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
+                "financing_sse=excluded.financing_sse,"
+                "total_margin_sse=excluded.total_margin_sse,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def get_market_margin_series(self, start: Optional[str] = None,
+                                 end: Optional[str] = None) -> pd.DataFrame:
+        q = "SELECT date,financing_sse,total_margin_sse FROM market_margin"
+        params: list = []
+        clauses = []
+        if start:
+            clauses.append("date>=?")
+            params.append(start)
+        if end:
+            clauses.append("date<=?")
+            params.append(end)
+        if clauses:
+            q += " WHERE " + " AND ".join(clauses)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_market_margin_date(self) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(date) FROM market_margin").fetchone()
             return row[0] if row and row[0] else None
 
     # ---- ETF dividend (V4 tracker · 价值型股息率) ----

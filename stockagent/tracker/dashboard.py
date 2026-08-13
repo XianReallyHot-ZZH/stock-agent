@@ -1,4 +1,4 @@
-"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 八件套(V4 tracker)。
+"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 九件套(V4 tracker)。
 
 ① 偏离极值曲线(close+MA60 主图 / 偏离度副图+历史极值线+历史极值事件标注「第k」)
 ② 6宽基趋势状态表(60日线上下/均线趋势/突破跌破档位/震荡市)
@@ -8,6 +8,7 @@
 ⑥ 市场温度·大小盘温差(全市场 PB 分位 vs 沪深300 PB 分位)
 ⑦ 相对周期律·沪深成长温差(创业板 vs 上证 点差:5年包络位置 → 极点/中枢 + 历史稀有度 + 漂移)
 ⑧ 成交量地量监测(两市成交额/MA250 → 地量 flag + 量价 event-study 时效/胜率)
+⑨ 恐惧贪婪指数(动量/流动性/波动/估值/杠杆 5成分 → 0-100 复合;市场情绪温度计,只读不喂引擎)
 
 配色遵循 dataviz skill 中性参考调色板:文字用 ink token 不穿 series 色;状态用 status
 chip(icon+label,不单靠色);A股语义下正偏离(超买)暖红、负偏离(超卖)冷蓝。
@@ -23,6 +24,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from . import diagnose as dz
+from . import fear_greed as fg
 from . import indicators as ti
 
 # ---- palette (dataviz reference, light mode) ----
@@ -684,6 +686,92 @@ def _turnover_html(t: dict, fig_html: str = "") -> str:
     return out
 
 
+# ---- ⑨ 恐惧贪婪指数(5成分 0-100 复合 · 市场情绪温度计)----
+_FG_COMPONENT_LABELS = [
+    ("momentum", "动量", "上证综指 close/MA60 偏离分位"),
+    ("turnover", "流动性", "两市成交额/MA250 分位"),
+    ("volatility", "波动率", "20日实现波动率分位(反转)"),
+    ("valuation", "估值", "全市场 PB 中位分位"),
+    ("leverage", "杠杆", "融资余额20日变化率分位(仅沪市)"),
+]
+
+
+def _fear_greed_figure(score_series) -> go.Figure:
+    """恐惧贪婪复合分(0-100)历史:恐惧区(绿)/贪婪区(红)底色 + 极端档线 + 当前点。
+    底色语义与偏离度横幅一致(A股 红=超买/贪婪 · 绿=超卖/恐惧)。"""
+    s = pd.Series(score_series, dtype=float).dropna()
+    fig = go.Figure()
+    fig.add_hrect(y0=0, y1=45, fillcolor=_PAL["good"], opacity=0.07, line_width=0)
+    fig.add_hrect(y0=55, y1=100, fillcolor=_PAL["critical"], opacity=0.07, line_width=0)
+    fig.add_hline(y=50, line=dict(color=_PAL["muted"], width=1, dash="dash"))
+    fig.add_hline(y=25, line=dict(color=_PAL["good"], width=1, dash="dot"),
+                  annotation_text="极度恐惧", annotation_position="left")
+    fig.add_hline(y=75, line=dict(color=_PAL["critical"], width=1, dash="dot"),
+                  annotation_text="极度贪婪", annotation_position="left")
+    if len(s):
+        idx = pd.to_datetime(s.index)
+        fig.add_trace(go.Scatter(x=idx, y=s.to_numpy(), name="恐惧贪婪分",
+                                 line=dict(color=_PAL["ink_sec"], width=2)))
+        cur = float(s.iloc[-1])
+        zc = _PAL["good"] if cur < 25 else _PAL["critical"] if cur > 75 else _PAL["ink_sec"]
+        fig.add_trace(go.Scatter(x=[idx[-1]], y=[cur], mode="markers+text",
+                                 marker=dict(size=12, color=zc,
+                                             line=dict(color=_PAL["surface"], width=1.5)),
+                                 text=[f"现在 {cur:.0f} {fg.classify(cur)}"],
+                                 textposition="top center", showlegend=False))
+    fig.update_layout(
+        height=380, margin=dict(l=44, r=20, t=20, b=30),
+        paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+        font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=False)
+    fig.update_yaxes(range=[0, 100], dtick=25, gridcolor=_PAL["grid"], zeroline=False,
+                     title_text="0 极度恐惧 · 100 极度贪婪")
+    # x 轴用 autorange(默认)→ plotly 自动把「全部」按钮置为 active 高亮
+    # (byt: step==='all' → active ⟺ axis.autorange===true);代价是右侧 autorange 外扩空白,
+    # 这是「全部」态的固有表现。rangeslider 同口径 → 拖拽按钮默认满窗。
+    xax = dict(gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"], type="date",
+               hoverformat="%Y-%m-%d", rangeslider_visible=True,
+               rangeselector=dict(buttons=[
+                   dict(count=1, label="1年", step="year", stepmode="backward"),
+                   dict(count=3, label="3年", step="year", stepmode="backward"),
+                   dict(label="全部", step="all"),
+               ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
+    fig.update_xaxes(**xax)
+    return fig
+
+
+def _fear_greed_html(fg_diag: dict, fig_html: str = "") -> str:
+    if not fg_diag.get("valid"):
+        return ("<p class='hint'>恐惧贪婪指数数据不足"
+                "(需 上证综指/成交额/全市场PB/融资余额 各 ≥ 5 年滚动样本)</p>")
+    score = fg_diag["score"]
+    label = fg_diag["label"]
+    zc = _PAL["good"] if score < 25 else _PAL["critical"] if score > 75 else _PAL["ink_sec"]
+    comps = fg_diag["components"]
+    comp_tiles = "".join(
+        _meter(cn, comps.get(key, float("nan")) / 100.0, desc)
+        for key, cn, desc in _FG_COMPONENT_LABELS)
+    hint = ("恐惧贪婪 = 动量/流动性/波动率/估值/杠杆 五成分等权复合(每类一票),各做 5 年滚动百分位 → "
+            "<b>0-100,高分=贪婪、低分=恐惧</b>。<b>温度计不是开关</b>:和 ⑧地量一样实证无择时 edge,"
+            "只给市场情绪的快速读数,供与 ③估值/⑦周期/⑧地量 叠加综合判断,不喂交易引擎。"
+            "注:杠杆成分仅沪市(深市总量历史 akshare 不可得);窗口成分不足 5 年的早期段会缺值。")
+    out = (
+        f"<div class='tiles-row'>"
+        f"<div class='tile' style='min-width:200px'><div class='tile-label'>恐惧贪婪复合分</div>"
+        f"<div class='tile-value' style='color:{zc};font-size:34px'>{score:.0f}</div>"
+        f"<div class='tile-sub'>{_chip(label, zc)}</div></div>"
+        f"<div class='tile'><div class='tile-label'>读数口径</div>"
+        f"<div class='tile-value' style='font-size:17px;color:{_PAL['ink_sec']}'>5成分 · 5y滚动分位</div>"
+        f"<div class='tile-sub'>截至 {fg_diag['date']}</div></div></div>"
+        f"<div class='hint' style='margin:12px 0 6px'>五成分(各 0-100,高分=贪婪):</div>"
+        f"<div class='tiles-row'>{comp_tiles}</div>"
+        f"<div class='hint' style='margin-top:10px'>{hint}</div>")
+    if fig_html:
+        out += (f"<div class='hint' style='margin:12px 0 4px'>复合分历史:绿区=恐惧/超卖、红区=贪婪/超买"
+                f"(A股红=涨·超买 / 绿=跌·超卖,与偏离度横幅一致);虚线=极度恐惧(25)/中性(50)/极度贪婪(75)。</div>"
+                f"<div>{fig_html}</div>")
+    return out
+
+
 _CSS = """
 :root{--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink-sec:#52514e;--muted:#898781;--grid:#e1e0d9;--hover:#f4f3ef}
 [data-theme="dark"]{--surface:#1a1a19;--plane:#0d0d0d;--ink:#ffffff;--ink-sec:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--hover:#262624}
@@ -772,6 +860,15 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                     full_html=False, include_plotlyjs=False)
         except Exception:  # noqa: BLE001
             tv_fig_html = ""
+    # ⑨ 恐惧贪婪指数 figure (plotly.js 已由 ③/① 首图加载 → include=False)
+    fg_diag = diag.get("fear_greed") or {}
+    fg_fig_html = ""
+    if fg_diag.get("valid"):
+        try:
+            fg_fig_html = _fear_greed_figure(fg_diag.get("score_series")).to_html(
+                full_html=False, include_plotlyjs=False)
+        except Exception:  # noqa: BLE001
+            fg_fig_html = ""
     figs_html, first = [], (val_fig_html == "" and price_fig_html == "" and rc_fig_html == "")   # ③/⑦ 已加载 plotly.js → ① 首图不再重复
     for sym, nm in dz.BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -793,6 +890,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<h2>⑥ 市场温度·大小盘温差</h2><section>{_market_temp_html(diag['market_temp'])}</section>"
         f"<h2>⑦ 相对周期律·沪深成长温差</h2><section>{_relative_cycle_html(rc, rc_fig_html)}</section>"
         f"<h2>⑧ 成交量地量监测</h2><section>{_turnover_html(tv, tv_fig_html)}</section>"
+        f"<h2>⑨ 恐惧贪婪指数</h2><section>{_fear_greed_html(fg_diag, fg_fig_html)}</section>"
         f"<h2>④ 蓝筹 vs 成长 仓位倾向</h2><section>{_style_card_html(diag['style'])}</section>"
         f"<h2>② 趋势状态</h2><section>{_trend_table_html(diag)}</section>"
         f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}"

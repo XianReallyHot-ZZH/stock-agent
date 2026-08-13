@@ -516,6 +516,21 @@ class DataManager:
         log.info("market_turnover: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
         return n
 
+    def update_market_margin(self) -> int:
+        """Fetch + store 上交所融资融券日级总量(stock_margin_sse,按年分段拉)。⑨恐惧贪婪·杠杆成分数据源。
+        冷启动(空表)从 2010-03 全量回填;否则从上次末日增量(通常只当年一段)。深市历史不可得,v1 仅沪市。"""
+        last = self.store.last_market_margin_date()
+        start = "2010-03-01" if not last else last
+        try:
+            df = fetcher.fetch_market_margin(start=start, end=fetcher.today_str())
+        except Exception as e:  # noqa: BLE001
+            log.warning("market_margin failed: %s", str(e)[:120])
+            return 0
+        n = self.store.upsert_market_margin(df, source="sse")
+        self.store.set_meta("last_market_margin_update", fetcher.today_str())
+        log.info("market_margin: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
+        return n
+
     def update_index_all(self) -> None:
         """Convenience: refresh all index-layer data (daily + PE + PB + market PB + turnover)."""
         self.update_index_daily()

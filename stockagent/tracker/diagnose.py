@@ -5,7 +5,8 @@
   diagnose_valuation(store)   — 估值开关(④):沪深300 PE 分位 + 全市场 PB 分位 → 敏感度建议
   diagnose_style(store)       — 蓝筹 vs 成长 → 仓位倾向(S13)
   diagnose_relative_cycle(store) — ⑦相对周期律: 创业板 vs 上证 点差在包络内的位置 → 极点/中枢
-  diagnose_layer(store)       — 顶层:遍历6宽基 + 估值 + 风格 + 相对周期,返回完整指数择时诊断
+  diagnose_fear_greed(store)  — ⑨恐惧贪婪指数: 5成分(动量/流动性/波动/估值/杠杆) → 0-100 复合(只读温度计)
+  diagnose_layer(store)       — 顶层:遍历6宽基 + 估值 + 风格 + 相对周期 + 恐贪,返回完整指数择时诊断
 """
 from __future__ import annotations
 
@@ -244,12 +245,53 @@ def diagnose_turnover(store, index_sym: str = "000001", ma: int = ti.TURNOVER_MA
     }
 
 
+def diagnose_fear_greed(store, index_sym: str = "000001") -> dict:
+    """⑨ 恐惧贪婪指数(只读诊断旁路):5 成分 → 0-100 复合 + 五档标签 + 各成分末值 + 复合历史。
+
+    温度计不是开关(同 ⑧ 实证无择时 edge);永不喂引擎。index_sym 默认上证综指(动量/波动成分基准,
+    与 ⑦ 相对周期律同)。估值成分用全市场 PB 中位(market_pb.pb,与 ⑥ 市场温度同口径);杠杆成分仅沪市
+    (深市总量历史 akshare 不可得,见 fetcher.fetch_market_margin)。
+    返回 {score, label, date, score_series, components, valid}。"""
+    from . import fear_greed as fg
+    close_df = store.get_index_daily_series(index_sym)
+    close = close_df["close"] if len(close_df) else pd.Series(dtype=float)
+    turn_df = store.get_market_turnover_series()
+    turnover = turn_df["total"] if len(turn_df) else pd.Series(dtype=float)
+    pb_df = store.get_market_pb_series()
+    pb = pb_df["pb"] if len(pb_df) and "pb" in pb_df.columns else pd.Series(dtype=float)
+    marg_df = store.get_market_margin_series()
+    financing = marg_df["financing_sse"] if len(marg_df) else pd.Series(dtype=float)
+
+    comp_series = {
+        "momentum": fg.momentum_component(close),
+        "turnover": fg.turnover_component(turnover),
+        "volatility": fg.volatility_component(close),
+        "valuation": fg.valuation_component(pb),
+        "leverage": fg.leverage_component(financing),
+    }
+    score_series = fg.fear_greed_series(comp_series)
+    last = (float(score_series.iloc[-1]) if len(score_series)
+            and not np.isnan(score_series.iloc[-1]) else float("nan"))
+    last_date = str(score_series.index[-1]) if len(score_series) else None
+    comps = {k: (float(v.iloc[-1]) if len(v) and not np.isnan(v.iloc[-1]) else float("nan"))
+             for k, v in comp_series.items()}
+    return {
+        "index": index_sym,
+        "score": last,
+        "label": fg.classify(last),
+        "date": last_date,
+        "score_series": score_series,     # 完整历史(看板时序图)
+        "components": comps,
+        "valid": not np.isnan(last),
+    }
+
+
 def diagnose_layer(store, period: int = ti.MA_PERIOD,
                    lookback: int | None = None) -> dict:
     """顶层:整个指数择时层诊断(给 dashboard)。
 
     返回 {indices: {symbol: {name, close_last, date_last, diagnosis, valid}},
-          valuation, market_temp, style, relative_cycle, turnover, period}."""
+          valuation, market_temp, style, relative_cycle, turnover, fear_greed, period}."""
     indices = {}
     for sym, nm in BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -271,5 +313,6 @@ def diagnose_layer(store, period: int = ti.MA_PERIOD,
         "style": diagnose_style(store, period),
         "relative_cycle": diagnose_relative_cycle(store),
         "turnover": diagnose_turnover(store),
+        "fear_greed": diagnose_fear_greed(store),
         "period": period,
     }
