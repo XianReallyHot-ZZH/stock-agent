@@ -18,6 +18,9 @@ python scripts/backfill_scale.py --start 2021-01-01  # 回填 ETF 份额历史�
 python scripts/fix_splits.py                   # 修拆分（运行一次）
 python scripts/plot_shares.py                  # 画份额+净值交互图（注意：净值轴=close价，旧bug保留）
 
+# 四看板总入口壳页（左侧导航 iframe 装载四看板 · data/index.html · 无数据依赖秒级）
+python scripts/dashboard_home.py               # 生成 + 打开（四看板 HTML 各自生成后刷新即见；记住上次选择；绿点=今日/黄点=过期/灰点=未生成给命令）
+
 # 行业研究（只读·不碰引擎；择时跟踪看板）
 # 新机器/fresh clone 冷启动（DB 被 gitignore，需从零回填；PE 已不用故 ~30min；详见 .claude/skills/research-dashboard-setup/SKILL.md）
 python scripts/setup_research_dashboard.py --skip-pe  # 一键：依赖+.env+价格+份额+净值+渲染（PE 已不用，跳过省~30min；幂等）

@@ -1,6 +1,6 @@
 ---
 name: dashboards
-description: One-click refresh + generate + open all four read-only diagnostic dashboards (ETF 行业研究 research_report.html / 指数择时 index_timing.html / 个股诊断 stock_diagnose.html / 宏观框架 macro_framework.html). Auto-detects COLD-START (empty/thin DB → full backfill ~1hr, works on a fresh clone) vs WARM daily incremental refresh. Use when the user wants to update/refresh ALL dashboards at once, do a 盘前/周五全套看板 review, just cloned the repo and wants the dashboards running ("一键起看板 / fresh start"), or asks to "一键看板 / 刷新所有看板 / 把看板都更新一下并打开". Refreshes data, regenerates the 4 HTMLs, opens them in the default browser.
+description: One-click refresh + generate + open all four read-only diagnostic dashboards (ETF 行业研究 research_report.html / 指数择时 index_timing.html / 个股诊断 stock_diagnose.html / 宏观框架 macro_framework.html), then serve them from one combined shell page data/index.html (left-nav iframe switcher from scripts/dashboard_home.py). Auto-detects COLD-START (empty/thin DB → full backfill ~1hr, works on a fresh clone) vs WARM daily incremental refresh. Use when the user wants to update/refresh ALL dashboards at once, do a 盘前/周五全套看板 review, just cloned the repo and wants the dashboards running ("一键起看板 / fresh start"), or asks to "一键看板 / 刷新所有看板 / 把看板都更新一下并打开". Refreshes data, regenerates the 4 HTMLs, opens the combined shell page in the default browser.
 ---
 
 # 四看板一键刷新 + 打开（统一入口 · 冷启动感知）
@@ -13,6 +13,8 @@ description: One-click refresh + generate + open all four read-only diagnostic d
 | 指数择时（估值开关·趋势·相对周期·地量·偏离·恐贪） | `data/index_timing.html` | `tracker-dashboard` |
 | 个股诊断（三类·S07 归因·S10 戴维斯·S08 避坑·时序图·🤖AI评估） | `data/stock_diagnose.html` | （无，本 skill 覆盖） |
 | 宏观框架（因果链 利率→曲线→美元→金属→能源→权益 · 🥇黄金阶段定位器 · 微观紧缺） | `data/macro_framework.html` | （无，本 skill 覆盖） |
+
+四看板还有一个**总入口壳页** `data/index.html`（`scripts/dashboard_home.py` 生成，左侧导航 + iframe 装载四看板，切换不重载/记住上次选择/as_of 新鲜度标注；无数据依赖，重跑秒级）。
 
 ## 触发场景
 - 日常：「刷新所有看板 / 盘前看板 / 周五全套报表 / dashboards」
@@ -87,15 +89,15 @@ PYTHONIOENCODING=utf-8 python scripts/macro_framework_report.py --no-open # 宏�
 ```
 要推送信号提醒：指数/个股看板加 `--push-alerts`（触发时推微信/飞书）；研究看板的 `--push-alerts` 已退役（仅可视化），传了也是 no-op。
 
-### 3. 打开四个看板（跨平台，file:// 绝对路径，默认浏览器新标签）
+### 3. 生成并打开总入口壳页（四看板合一个页面 · 左侧导航 iframe · `data/index.html`）
 ```bash
-python -c "import webbrowser,pathlib; [webbrowser.open(pathlib.Path(f'data/{n}').resolve().as_uri()) for n in ['research_report.html','index_timing.html','stock_diagnose.html','macro_framework.html']]"
+PYTHONIOENCODING=utf-8 python scripts/dashboard_home.py   # 生成壳页 + 打开（无数据依赖·秒级；只读四个 HTML 的 mtime 标 as_of/新鲜度）
 ```
-Win/mac/linux 通用。失败就手动双击 `data/*.html`，或 Win 用 `start data/xxx.html`、mac 用 `open data/xxx.html`。
+壳页内点左侧导航切四看板（iframe 切回不重载，保留滚动/交互状态；记住上次选择；绿点=今日已生成/黄点=过期/灰点=未生成并给生成命令）。仍可单独开某看板：双击 `data/xxx.html`。
 
 ### 4. 汇报（给用户）
 - 走的是 **COLD 还是 WARM**（让用户知道这次是不是首次大回填）
-- 三个 HTML 路径 + 各自一行关键结论：
+- 总入口壳页路径（`data/index.html`）+ 四个看板各自一行关键结论：
   - 研究：参与排名 N/总数、顶部「偏离度极端区」（超买/超卖各哪些）+ 剪刀差分化 ETF
   - 指数：估值 zone + 大小盘温差 + ⑦相对周期位置 + ⑧地量状态 + ⑨恐惧贪婪读数(0-100/五档) + 是否有有效突破/跌破信号
   - 个股：观察池触发提醒数 + 周期 tab 商品面板（哪些商品向上/背离/向下）+ 埋伏候选（门槛线≥30 上下）+ 任何异常（避坑/戴维斯/预告拐点/M1-M2 商品背离）
