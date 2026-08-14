@@ -11,6 +11,7 @@ history but only recent (~6mo) ETF history.
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime
@@ -23,6 +24,8 @@ import requests
 import akshare as ak
 import numpy as np
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 _ETF_COL_MAP = {
     "日期": "date", "开盘": "open", "收盘": "close",

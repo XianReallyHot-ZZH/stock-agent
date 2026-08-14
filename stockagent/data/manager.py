@@ -903,6 +903,8 @@ class DataManager:
         except Exception as e:  # noqa: BLE001
             log.warning("gold-micro acm failed: %s", str(e)[:100])
 
+        if any(out.values()):
+            self.store.set_meta("last_gold_micro_update", fetcher.today_str())
         return out
 
     def update_economic_calendar(self, days_back: int = 7, days_forward: int = 45) -> dict:
@@ -916,9 +918,6 @@ class DataManager:
             log.warning("economic_calendar failed: %s", str(e)[:120])
         if out["calendar"]:
             self.store.set_meta("last_economic_calendar_update", fetcher.today_str())
-        return out
-        if any(out.values()):
-            self.store.set_meta("last_gold_micro_update", fetcher.today_str())
         return out
 
 
