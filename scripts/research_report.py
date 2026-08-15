@@ -172,11 +172,8 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
         gross_floor_yi=float(fp.get("gross_floor_yi", 15.0)),
         breadth_floor_yi=float(fp.get("breadth_floor_yi", 1.0)),
         breadth_min=float(fp.get("breadth_min", 0.5)))
-    monthly = rfl.group_monthly_matrix(panel, groups,
-                                       start_month=str(fp.get("month_start", "2021-01")))
     return {
         "window": window, "state": state, "group_roll": roll, "rolls": rolls,
-        "monthly": monthly,
         "aum": rfl.group_aum_yi(panel, groups),
         "aum_series": rfl.group_aum_series(panel, groups),   # % 态逐日分母
         "groups": list(groups),

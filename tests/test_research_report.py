@@ -228,15 +228,13 @@ def _flow_mini():
     idx = pd.date_range("2026-01-01", periods=40, freq="D")
     roll = pd.DataFrame({"大金融": np.linspace(-2, 8, 40), "科技": np.linspace(3, -6, 40)},
                         index=idx)
-    monthly = pd.DataFrame({"2026-01": [0.05, -0.02], "2026-02": [-0.03, 0.08],
-                            "2026-03": [0.01, 0.04]}, index=["大金融", "科技"])
     state = {"label": "存量轮动", "label_key": "rotation", "window": 20,
              "pool_net_yi": 2.0, "pool_gross_yi": 14.0, "intensity": 0.14,
              "breadth": 0.22, "concentration": 0.6,
              "group_flows": [{"group": "大金融", "flow_yi": 8.0},
                              {"group": "科技", "flow_yi": -6.0}],
              "n_groups": 2}
-    return {"window": 20, "state": state, "group_roll": roll, "monthly": monthly,
+    return {"window": 20, "state": state, "group_roll": roll,
             "aum": {"大金融": 400.0, "科技": 1200.0},
             "aum_series": pd.DataFrame(                       # 逐日分母（变化，证明非常数）
                 {"大金融": np.linspace(900.0, 400.0, 40), "科技": np.linspace(1500.0, 1200.0, 40)},
@@ -256,8 +254,8 @@ def test_render_flow_section_present():
                       {"159915": {"name": "创业板ETF", "group": "成长宽基"}},
                       as_of="2026-08-14", flow=_flow_mini())
     assert "💰 板块资金流向（份额视角）" in html
-    # 量级线图 + 热力图两个懒渲染占位（_PAGE_JS 选择器里另有 data-sym 字样，只数占位 div）
-    assert html.count('class="lazy-chart" data-sym="__flow"') == 2
+    # 量级线图一个懒渲染占位（_PAGE_JS 选择器里另有 data-sym 字样，只数占位 div）
+    assert html.count('class="lazy-chart" data-sym="__flow"') == 1
     assert '"__flow":[' in html                          # 图 JSON 挂 CHARTS 伪 key
     assert "存量轮动" in html and "轮动强度" in html      # tile 标签 + 指标
     assert "大金融 +8.0亿" in html and "科技 -6.0亿" in html  # 组 chips
@@ -315,11 +313,6 @@ def test_flow_figures_structure():
                and "%{fullData.name}" in (t.hovertemplate or "")  # 重复写会行高翻倍被裁）
                and "<br>" not in (t.hovertemplate or "")   # 组名+数值同行一行高
                for t in lines.data)
-    heat = rep.flow_heatmap_figure(fl)
-    hm = heat.data[0]
-    assert hm.zmid == 0
-    assert hm.colorscale[-1][1] == "#dc2626"               # 红=正=流入（A股惯例）
-    assert heat.layout.yaxis.autorange == "reversed"       # 组自上而下规范序
 
 
 def test_flow_lines_window_unit_buttons():

@@ -467,11 +467,6 @@ _FLOW_COLORS = ["#2563eb", "#ea580c", "#16a34a", "#9333ea", "#0891b2", "#dc2626"
 _FLOW_HEIGHT_LINES = 600
 
 
-def _flow_heat_height(n_groups: int) -> int:
-    """热力图高度按组数自适应（21 行业组 ≈ 580px，9 组 ≈ 360px）。"""
-    return max(300, 140 + 21 * max(1, n_groups))
-
-
 def flow_lines_figure(flow: dict) -> go.Figure:
     """组级 W 日滚动净流入时序（亿元 = Δ份额×当日净值）。
 
@@ -544,30 +539,6 @@ def flow_lines_figure(flow: dict) -> go.Figure:
     return fig
 
 
-def flow_heatmap_figure(flow: dict) -> go.Figure:
-    """组×月 份额净申赎 ROC 热力图。红=正=流入/绿=负=流出（A股惯例；本节局部语义，
-    与排名表筹码列相反——节首副行有图例）。NaN 格透明=无数据；末列=月内至今。
-
-    单元格色不随主题切换（显式 colorscale），_applyPlotlyTheme 只动纸底/轴/字色。"""
-    m = flow["monthly"]
-    z = m.values.astype(float) * 100.0
-    text = [["" if pd.isna(v) else f"{v:+.0f}" for v in row] for row in z]
-    fig = go.Figure(go.Heatmap(
-        z=z, x=[str(c) for c in m.columns], y=[str(i) for i in m.index],
-        zmid=0, colorscale=[[0.0, "#16a34a"], [0.5, "#e8e7e1"], [1.0, "#dc2626"]],
-        colorbar=dict(title="月度ROC%", thickness=10, tickfont=dict(size=9)),
-        text=text, texttemplate="%{text}", textfont=dict(size=9, color="#1e293b"),
-        hovertemplate="%{y} · %{x}<br>份额ROC %{z:+.1f}%<extra></extra>"))
-    fig.update_layout(**_base_layout(
-        "组×月 份额净申赎 ROC（月末/上月末−1 · 红=流入 绿=流出 · 空白=无数据 · 末列=月内至今）",
-        _flow_heat_height(len(m.index))))
-    fig.update_yaxes(autorange="reversed", showgrid=False)     # 组自上而下（yaml 规范序）
-    ticks = [str(c) for c in m.columns]
-    fig.update_xaxes(tickmode="array", tickvals=ticks[::3], tickangle=-45,
-                     tickfont=dict(size=10), showgrid=False)
-    return fig
-
-
 def _flow_section(flow: dict) -> str:
     """板块资金流向 section HTML：增量vs存量 tile + 两个 lazy-chart 占位（CHARTS['__flow']）。"""
     st = flow.get("state") or {}
@@ -636,9 +607,7 @@ def _flow_section(flow: dict) -> str:
         '规模小的时期同额流入占比更大；大小组可横向比），不带 = 绝对亿元。'
         '切换只换窗口/口径不改数据；滚动值对拐点的反应约滞后半个窗口。<br>'
         '🎛 组筛选：<b>单击</b>上方组 chip = 该组线开/关（灰=已隐藏）· <b>双击</b> = 仅看该组'
-        '（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。</p>'
-        '<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
-        f'style="min-height:{_flow_heat_height(len(members) or 1)}px"></div></div>')
+        '（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。</p>')
 
 
 def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) -> str:
@@ -1143,7 +1112,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
            pinned: list[str] | None = None, flow: dict | None = None) -> str:
     """Build the full HTML. series_map[symbol] = {close, shares, nav}。
 
-    flow: research/flow.py 的 payload（{window, state, group_roll, monthly, aum,
+    flow: research/flow.py 的 payload（{window, state, group_roll, rolls, aum, aum_series,
     groups, excluded, as_of}），由 scripts/research_report.py 组装；None/数据不足 →
     section 整体省略（优雅降级）。"""
     # data_sufficient ETFs 参与排名；不足者（NAV 历史不够算偏离度）保留明细图、不进排名。
@@ -1182,8 +1151,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     # 板块资金流向：图表挂 CHARTS['__flow'] 伪 key（JS 纯 dict 查找，与 ETF 图同一懒渲染管线）
     flow_html = ""
     if flow and (flow.get("state") or {}).get("label_key") not in (None, "insufficient"):
-        flow_figs = [flow_lines_figure(flow), flow_heatmap_figure(flow)]
-        charts_json["__flow"] = [f.to_json() for f in flow_figs]
+        charts_json["__flow"] = [flow_lines_figure(flow).to_json()]
         flow_html = _flow_section(flow)
     _esc = lambda s: re.sub(r"</script", r"<\\/script", s, flags=re.I)
     entries = _esc(",\n".join(f'"{sym}":[{",".join(charts_json[sym])}]' for sym in charts_json))

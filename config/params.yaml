@@ -98,7 +98,6 @@ research:
     gross_floor_yi: 15.0     # 组间毛额 ≥ 此值(亿) 才算「存量轮动」（否则 缩量观望）
     breadth_floor_yi: 1.0    # 单组净流入 ≥ 此值(亿) 计入流入广度分子
     breadth_min: 0.4         # 广度 ≥ 此值 → 增量普涨（否则 增量聚焦）；25 组下 0.4≈10 组同流入
-    month_start: "2021-01"   # 月度热力图起始月
   weights:                  # 三因子复合权重（权益类）
     valuation: 0.40
     chip: 0.30

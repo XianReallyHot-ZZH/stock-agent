@@ -249,7 +249,11 @@ def pool_flow_state(group_roll: pd.DataFrame, *, window: int | None = None,
 def group_monthly_matrix(panel: dict, groups: dict[str, list[str]],
                          start_month: str = "2021-01",
                          end_month: str | None = None) -> pd.DataFrame:
-    """组×月 份额净申赎 ROC（小数；热力图格式化为 %）。
+    """组×月 份额净申赎 ROC（小数）。
+
+    （2026-08 休眠：看板月度热力图已移除——ROC 方差与组规模成反比，共享色标被
+    小组高波动吃满、大组有意义的变化显色苍白；长历史月度视角由线图 % 态+「全部」
+    覆盖。纯函数+测试保留备用。）
 
     行=组名（groups 插入序）、列='YYYY-MM' 升序。
     每组每月：roc = Σ_{valid} 月末份额 / Σ_{valid} 上月末份额 − 1
