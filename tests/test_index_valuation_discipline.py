@@ -92,6 +92,38 @@ def test_valuation_figure_current_pct_uses_val():
     assert any("33%" in t for t in txts), f"当前点未用 val 的 10 年分位: {txts}"
 
 
+def test_valuation_figure_default_10y_window_with_history_buttons():
+    """默认窗口=近10年(对齐分位口径);全历史留给 rangeslider + 5年/10年/全部 按钮。"""
+    pe_df, _ = _pe_df_split_history()
+    fig = d._valuation_figure({"pe_pct": 0.33, "valid": True}, pe_df, pd.DataFrame())
+    last = pe_df.index[-1]
+    start10 = (pd.Timestamp(last) - pd.DateOffset(years=10)).to_pydatetime()
+    x0 = pd.Timestamp(fig.layout.xaxis.range[0]).to_pydatetime()
+    assert abs((x0 - start10).days) <= 3                      # 初始 x 范围 ≈ 10 年前
+    labels = [b.label for b in fig.layout.xaxis.rangeselector.buttons]
+    assert labels == ["5年", "10年", "全部"]
+    assert fig.layout.xaxis2.rangeslider.visible is True      # 底部 slider 保留全历史
+    # 便宜/贵阴影边界用 10 年口径(不被 2005-2010 泡沫段拉伸)
+    s10 = pe_df["pe_ttm"].iloc[-252 * 10:]
+    hrects = [sh for sh in fig.layout.shapes if sh.type == "rect" and sh.y0 is not None]
+    assert hrects and all(sh.y0 >= float(s10.min()) - 1e-9 for sh in hrects)
+    assert all(sh.y1 <= float(s10.max()) + 1e-9 for sh in hrects)
+
+
+def test_valuation_figure_yrange_fits_10y_not_full_history():
+    """plotly autorange 对全量数据算、不随 x 窗口收缩 → y 轴须显式设 10 年口径范围
+    (合成:旧段 50-55、近10年 10-15,若未显式设 y 会被拉到 55,10年曲线压成细条;
+    切「全部」后的动态重算由页面 _yfit relayout 监听负责,此处只测服务端默认范围)。"""
+    pe_df, _ = _pe_df_split_history()
+    fig = d._valuation_figure({"pe_pct": 0.33, "valid": True}, pe_df, pd.DataFrame())
+    s10 = pe_df["pe_ttm"].iloc[-252 * 10:]
+    lo_, hi_ = float(s10.min()), float(s10.max())
+    pad = (hi_ - lo_) * 0.08
+    yr = fig.layout.yaxis.range
+    assert yr is not None and yr[0] >= lo_ - pad - 1e-6 and yr[1] <= hi_ + pad + 1e-6
+    assert yr[1] < float(pe_df["pe_ttm"].max()) * 0.5        # 显著低于全历史峰值(~55)
+
+
 # ---------- A4 _valuation_price_figure: 收盘 + 顶/底/中位趋势线 ----------
 def _daily_df(n=252 * 8):
     idx = pd.date_range("2025-12-31", periods=n, freq="B")

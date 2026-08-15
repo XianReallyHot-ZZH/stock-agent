@@ -173,11 +173,16 @@ def _trend_table_html(diag: dict) -> str:
 
 # ---- ③ 估值开关 stat tile ----
 def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go.Figure:
-    """沪深300 PE-TTM(上行) / PB(下行) 全历史 + 20%/50%/80% 分位线 + 便宜/贵区阴影 + 当前点。
-    分位线/阴影统一近 10 年口径(与 zone 标签一致;短历史自动取全部),消除旧版「图用全历史、
-    tile 用10年」的分歧。当前点分位直接用 val 里 diagnose_valuation 算好的 10 年口径值。"""
+    """沪深300 PE-TTM(上行) / PB(下行) + 20%/50%/80% 分位线 + 便宜/贵区阴影 + 当前点。
+    分位线/阴影/默认显示窗口统一近 10 年口径(与 zone 标签一致;短历史自动取全部),消除
+    「图全历史、tile 10年」的分歧;2005-2010 泡沫时代的 PE/PB 与现体制不可比,若全历史
+    展示会把 y 轴拉到 50+,近 10 年估值带被压成细条 → 默认窗口 10 年,全历史留给
+    rangeslider + 5年/10年/全部 快捷按钮(泡沫史一键可达,不删数据)。当前点分位直接用
+    val 里 diagnose_valuation 算好的 10 年口径值。"""
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.55, 0.45],
                         vertical_spacing=0.12, subplot_titles=("沪深300 PE-TTM", "沪深300 PB"))
+    last_dt = None
+    y10_rng: dict[int, tuple[float, float]] = {}   # 每行 10 年口径 y 范围(默认视图用)
     for row, df, col, color, label, pkey in [(1, pe_df, "pe_ttm", _PAL["series_1"], "PE", "pe_pct"),
                                              (2, pb_df, "pb", _PAL["series_2"], "PB", "pb_pct")]:
         if df is None or len(df) == 0 or col not in df.columns:
@@ -186,9 +191,12 @@ def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go
         if len(s) < 20:
             continue
         idx = pd.to_datetime(s.index)
+        if last_dt is None or idx[-1] > last_dt:
+            last_dt = idx[-1]
         fig.add_trace(go.Scatter(x=idx, y=s.to_numpy(), name=label,
                                  line=dict(color=color, width=1.6)), row=row, col=1)
         s10 = s.iloc[-252 * 10:]                      # 近 10 年口径(对齐 zone;越界自动取全部)
+        y10_rng[row] = (float(s10.min()), float(s10.max()))
         lo = float(s10.quantile(0.20))
         hi = float(s10.quantile(0.80))
         mid = float(s10.quantile(0.50))
@@ -196,9 +204,9 @@ def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go
         pct = val.get(pkey)                           # diagnose_valuation 的 10 年分位,缺失才回退现算
         if pd.isna(pct):
             pct = float((s10 < cur).sum()) / len(s10)
-        fig.add_hrect(y0=float(s.min()), y1=lo, row=row, col=1,
+        fig.add_hrect(y0=float(s10.min()), y1=lo, row=row, col=1,
                       fillcolor=_PAL["good"], opacity=0.08, line_width=0)
-        fig.add_hrect(y0=hi, y1=float(s.max()), row=row, col=1,
+        fig.add_hrect(y0=hi, y1=float(s10.max()), row=row, col=1,
                       fillcolor=_PAL["critical"], opacity=0.08, line_width=0)
         fig.add_hline(y=lo, row=row, col=1, line=dict(color=_PAL["good"], width=1, dash="dot"),
                       annotation_text=f"20% {lo:.1f}", annotation_position="bottom left")
@@ -214,8 +222,24 @@ def _valuation_figure(val: dict, pe_df: pd.DataFrame, pb_df: pd.DataFrame) -> go
     fig.update_layout(height=480, margin=dict(l=50, r=20, t=50, b=30),
                       paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
                       font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=False)
+    # 默认窗口=近10年(对齐分位口径);全历史交 rangeslider(下)+快捷按钮(上);y 轴按可见段自适应
+    if last_dt is not None:
+        start10 = last_dt - pd.DateOffset(years=10)
+        fig.update_xaxes(range=[start10, last_dt])
+    fig.update_xaxes(gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"], type="date",
+                     hoverformat="%Y-%m-%d", row=1, col=1,
+                     rangeselector=dict(buttons=[
+                         dict(count=5, label="5年", step="year", stepmode="backward"),
+                         dict(count=10, label="10年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
     fig.update_xaxes(gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"], type="date",
                      hoverformat="%Y-%m-%d", rangeslider_visible=True, row=2, col=1)
+    # y 轴显式设 10 年口径范围:plotly 的 autorange 对全量数据算、不随 x 窗口收缩
+    # (切「全部」/拖滑块后由页面 _yfit 监听按可见段动态重算)
+    for row, (lo_, hi_) in y10_rng.items():
+        pad = (hi_ - lo_) * 0.08 or hi_ * 0.05 or 1.0
+        fig.update_yaxes(range=[lo_ - pad, hi_ + pad], row=row, col=1)
     fig.update_yaxes(gridcolor=_PAL["grid"])
     return fig
 
@@ -904,6 +928,40 @@ function _isDark(){return document.documentElement.getAttribute('data-theme')===
 function _applyPlotly(dark){if(!window.Plotly)return;var u={'paper_bgcolor':dark?'#1a1a19':'#fcfcfb','plot_bgcolor':dark?'#1a1a19':'#fcfcfb','font.color':dark?'#ffffff':'#0b0b0b'};['xaxis','xaxis2','yaxis','yaxis2'].forEach(function(a){u[a+'.gridcolor']=dark?'#2c2c2a':'#e1e0d9';u[a+'.zerolinecolor']=dark?'#383835':'#c3c2b7';});document.querySelectorAll('.plotly-graph-div').forEach(function(gd){try{Plotly.relayout(gd,u);}catch(e){}});}
 function toggleTheme(){var cur=document.documentElement.getAttribute('data-theme');var isDark=(cur==='dark');var next=isDark?'light':'dark';document.documentElement.setAttribute('data-theme',next);var b=document.getElementById('theme-btn');if(b)b.textContent=next==='dark'?'☀️':'🌙';_applyPlotly(next==='dark');}
 window.addEventListener('DOMContentLoaded',function(){var b=document.getElementById('theme-btn');if(b)b.textContent=_isDark()?'☀️':'🌙';_applyPlotly(_isDark());});
+/* ③ 估值图 y 轴随 x 窗口自适应:plotly autorange 对全量数据算,切「全部」/拖滑块后
+   x 变而 y 不动 → 监听 relayout(只响应含 x range 的事件,防与自身 relayout 成环),
+   按可见段逐 y 轴(traces 按 yaxis 分组)重算 min/max±8% 后 relayout。 */
+(function(){
+  function _yfit(gd){
+    if(!gd.data||!gd.layout||!window.Plotly)return;
+    var xr=(gd.layout.xaxis&&gd.layout.xaxis.range)||(gd.layout.xaxis2&&gd.layout.xaxis2.range);
+    if(!xr)return;
+    var x0=new Date(xr[0]).getTime(),x1=new Date(xr[1]).getTime(),g={};
+    gd.data.forEach(function(t){
+      if(!t.x||!t.y)return;
+      var ax=t.yaxis||'y',lo=Infinity,hi=-Infinity;
+      for(var i=0;i<t.x.length;i++){
+        var tm=new Date(t.x[i]).getTime();
+        if(tm>=x0-1&&tm<=x1+1){var v=t.y[i];if(v==null||isNaN(v))continue;if(v<lo)lo=v;if(v>hi)hi=v;}
+      }
+      if(lo===Infinity)return;
+      if(!g[ax])g[ax]=[Infinity,-Infinity];
+      g[ax]=[Math.min(g[ax][0],lo),Math.max(g[ax][1],hi)];
+    });
+    var upd={};
+    Object.keys(g).forEach(function(ax){
+      var k=ax==='y'?'yaxis':'yaxis'+ax.slice(1),r=g[ax],pad=(r[1]-r[0])*0.08||1;
+      upd[k+'.range']=[r[0]-pad,r[1]+pad];
+    });
+    if(Object.keys(upd).length){try{Plotly.relayout(gd,upd);}catch(e){}}
+  }
+  document.addEventListener('plotly_relayout',function(e){
+    var hasX=Object.keys(e).some(function(k){return /^xaxis\\d*\\.range/.test(k);});
+    if(!hasX)return;
+    var gd=document.getElementById('val-fig');
+    if(gd&&e.target===gd)_yfit(gd);
+  },false);
+})();
 """
 
 
@@ -920,7 +978,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
             _pb = store.get_index_pb_series("沪深300")
             if len(_pe) or len(_pb):
                 val_fig_html = _valuation_figure(val, _pe, _pb).to_html(
-                    full_html=False, include_plotlyjs=True)
+                    full_html=False, include_plotlyjs=True, div_id="val-fig")
         except Exception:  # noqa: BLE001
             val_fig_html = ""
     # ③ 沪深300 价格趋势线图(顶/底/中位;plotly.js 由 ③ PE/PB 图承载,缺则由本图承载)

@@ -70,7 +70,7 @@ python scripts/validate_support_break.py       # → data/support_break_study.ht
 - **⑩ 破位量比用 `index_daily.volume`**（sina 股数口径、非金额——见上面⑧段的坑）→ 只作 同序列/自身MA20 的相对比较，不跨指数比、不当金额用。
 - **baostock 偶发 login 失败 → 重跑**（幂等 upsert）；首次拉历史（到 1991）稍慢。
 - **plotly.js 首加载由 ③ 承载**（HTML 最前的图）→ ⑦/⑧/① 都 `include_plotlyjs=False` 避免重复 ~3MB。
-- **图分位口径**：③/⑦/⑧ 图用**全历史**口径；tile 的分位仍用**近 10 年**（diagnose 默认）——两者互补，caption 已写明。
+- **③ 图口径（2026-08-15 起）**：分位线/阴影/默认显示窗口统一**近 10 年**（对齐 tile 的 zone 分位）；全历史（含 2005-2010 泡沫段，PE 曾 50+/PB 7+，与现体制不可比）留给 rangeslider + 5年/10年/全部 按钮。**坑：plotly autorange 对全量数据算、不随 x 窗口收缩**（切窗口后 y 仍 0-50）→ 服务端显式设 10 年口径 y 范围，页面 `_JS._yfit` 监听 plotly_relayout（只响应含 x-range 的事件防成环）在切「全部」/拖滑块后按可见段动态重算 y。⑦/⑧ 图仍全历史口径。
 
 ## 📋 可选增强（讨论过、未做，按价值排序）
 1. **⑧ 情绪反向指标**：融资余额 / 搜索指数等 → 缺数据源，暂缓。
