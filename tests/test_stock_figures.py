@@ -23,6 +23,14 @@ def test_price_deviation_valid():
     assert all(isinstance(t, go.Scatter) for t in fig.data)
 
 
+def test_price_deviation_range_controls():
+    """底部子图(row=2 → xaxis2)挂 rangeslider + 1月/6月/1年/3年/全部 快捷按钮。"""
+    fig = sf.price_deviation_figure("600519", "茅台", _price_df(n=150), period=60)
+    assert fig.layout.xaxis2.rangeslider.visible is True
+    assert [b.label for b in fig.layout.xaxis2.rangeselector.buttons] == \
+        ["1月", "6月", "1年", "3年", "全部"]
+
+
 def test_price_deviation_empty():
     fig = sf.price_deviation_figure("600519", "茅台", pd.DataFrame(), period=60)
     assert isinstance(fig, go.Figure)

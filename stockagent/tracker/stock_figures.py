@@ -26,9 +26,22 @@ _PAL = {
     "val": "#7c3aed", "val_now": "#dc2626",
     "pos_extreme": "#d03b3b", "neg_extreme": "#1c5cab", "div": "#16a34a",
     "comm": "#d97706",
+    "qline_year": "#94a3b8",   # 季度分界线·年份线(1月)略加重,深浅两态下均可见
 }
 
 _METRIC_LABEL = {"pe_ttm": "PE(TTM)", "pb": "PB"}
+
+# 时序图 x 轴快捷窗口按钮(配合底部 rangeslider:按钮一键切档、滑块精细拖拽;价格偏离图/商品叠加图共用)
+_RANGE_BUTTONS = dict(
+    buttons=[
+        dict(count=1, label="1月", step="month", stepmode="backward"),
+        dict(count=6, label="6月", step="month", stepmode="backward"),
+        dict(count=1, label="1年", step="year", stepmode="backward"),
+        dict(count=3, label="3年", step="year", stepmode="backward"),
+        dict(label="全部", step="all"),
+    ],
+    bgcolor=_PAL["surface"], activecolor=_PAL["grid"],
+)
 
 
 def _layout(title: str, height: int = 320, showlegend: bool = True, **extra) -> dict:
@@ -105,13 +118,7 @@ def price_deviation_figure(sym: str, name: str, price_df: pd.DataFrame,
     fig.update_xaxes(type="date", hoverformat="%Y-%m-%d")
     fig.update_xaxes(
         rangeslider_visible=True, row=2, col=1,
-        rangeselector=dict(buttons=[
-            dict(count=1, label="1月", step="month", stepmode="backward"),
-            dict(count=6, label="6月", step="month", stepmode="backward"),
-            dict(count=1, label="1年", step="year", stepmode="backward"),
-            dict(count=3, label="3年", step="year", stepmode="backward"),
-            dict(label="全部", step="all"),
-        ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
+        rangeselector=_RANGE_BUTTONS)
     return fig
 
 
@@ -298,12 +305,28 @@ def commodity_price_figure(variety: str, series: pd.Series) -> go.Figure:
     return fig
 
 
+def _add_quarter_lines(fig: go.Figure, lo: pd.Timestamp, hi: pd.Timestamp) -> None:
+    """季度分界竖线(每年 1/4/7/10 月首日,置于曲线下层):按季度读曲线段;
+    1 月线=年份线、色略加重,形成 年|季|季|季 层级。淡灰点线不随主题重涂
+    (同极值线先例),深浅两态下均可见;不打标签(全量视图 ~20 条会挤,悬停自带年月日)。"""
+    for year in range(lo.year, hi.year + 1):
+        for month in (1, 4, 7, 10):
+            q = pd.Timestamp(year=year, month=month, day=1)
+            if not (lo < q <= hi):
+                continue
+            fig.add_vline(x=q, layer="below",
+                          line=dict(color=_PAL["qline_year"] if month == 1 else _PAL["baseline"],
+                                    width=1, dash="dot"))
+
+
 # ---- ⑦b 股价 vs 上游商品价(双 Y 轴叠加;周期股模态首图)----
 def commodity_stock_overlay_figure(sym: str, name: str, variety: str,
                                    stock_df: pd.DataFrame, comm_series: pd.Series) -> go.Figure:
     """股价 + 上游商品价 双 Y 轴叠加(绝对价位,直观比对商品→股价的传导/背离)。
     左轴=股价(元),右轴=商品价;两条线同图,hovermode=x unified 同日双值。
     双轴默认按各自数据 min-max 自适应(不人工设范围,避免操纵相关性)。
+    带 rangeslider(横轴窗口拖拽)+ 1月/6月/1年/3年/全部 快捷按钮,切窗口后双轴自适应重定标;
+    带季度分界竖线(1/4/7/10 月首日,年份线略加重),方便按季度读曲线段。
     数据缺一股:只有商品→退独立商品图;都缺→占位。"""
     has_stock = stock_df is not None and len(stock_df) > 0 and "close" in stock_df.columns
     has_comm = comm_series is not None and len(comm_series) >= 2
@@ -340,8 +363,15 @@ def commodity_stock_overlay_figure(sym: str, name: str, variety: str,
                                  line=dict(color=_PAL["muted"], width=1.4, dash="dash"),
                                  hovertemplate="%{x|%Y-%m-%d}<br>" + variety + " MA60 %{y:.0f}<extra></extra>"),
                       secondary_y=True)
-    fig.update_layout(**_layout(f"{title_core} · 双轴(左股价/右商品)", height=320, showlegend=True))
+    idx_lo, idx_hi = six[0], six[-1]          # 季度线取股价/商品两序列的并集范围
+    if has_comm:
+        idx_lo, idx_hi = min(idx_lo, cix[0]), max(idx_hi, cix[-1])
+    _add_quarter_lines(fig, idx_lo, idx_hi)
+    fig.update_layout(**_layout(f"{title_core} · 双轴(左股价/右商品)", height=360, showlegend=True))
     _style_axes(fig)
     fig.update_yaxes(title_text="股价(元)", secondary_y=False)
     fig.update_yaxes(title_text=f"{variety}价", secondary_y=True, gridcolor=None)  # 右轴不画第二层网格
+    # 横轴窗口拖拽 + 快捷按钮(显式 date 轴,step=month/year 的按钮才有意义)
+    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d",
+                     rangeselector=_RANGE_BUTTONS, rangeslider=dict(visible=True))
     return fig

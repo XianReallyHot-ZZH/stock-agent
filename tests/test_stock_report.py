@@ -179,6 +179,16 @@ def test_commodity_stock_overlay_figure():
     assert len(fig.data) == 4                                          # 4 线
     assert any(getattr(t, "yaxis", "") == "y2" for t in fig.data)     # 双轴(右轴 y2)
     assert "双轴" in fig.layout.title.text and "江西铜业" in fig.layout.title.text
+    # 横轴窗口拖拽 + 快捷按钮(切窗口观察商品→股价传导)
+    assert fig.layout.xaxis.type == "date"
+    assert fig.layout.xaxis.rangeslider.visible is True
+    assert [b.label for b in fig.layout.xaxis.rangeselector.buttons] == ["1月", "6月", "1年", "3年", "全部"]
+    # 季度分界竖线:2024-01-01 起 300 交易日(约至 2025-02)→ 4 条(4/1、7/1、10/1、次年1/1)
+    # 其中 1 月线=年份线略加重(#94a3b8),其余季度线淡灰(#cbd5e1);全部置于曲线下层
+    vls = fig.layout.shapes
+    assert len(vls) == 4 and all(s.x0 == s.x1 and s.layer == "below" for s in vls)
+    assert sum(1 for s in vls if s.line.color == "#94a3b8") == 1        # 恰 1 条年份线
+    assert sum(1 for s in vls if s.line.color == "#cbd5e1") == 3        # 3 条季度线
     # 缺股价 → 退独立商品图(标题无"双轴")
     fig2 = sf.commodity_stock_overlay_figure("600362", "江西铜业", "铜", pd.DataFrame(), comm)
     assert "双轴" not in (fig2.layout.title.text or "")
