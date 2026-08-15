@@ -261,6 +261,7 @@ def test_render_flow_section_present():
     assert "配置盘的脚印" in html                        # 读图说明 ④ 方法论注记
     assert "两图同色同序" in html and "60日≈季度趋势" in html  # 两图下方说明常驻
     assert "对上下两图同时生效" in html                     # 组筛选覆盖量级+强度两图
+    assert "独显单组时强度图与量级图同形" in html          # 独显退化情形说明（防误读为故障）
     # 组筛选：chips=图例开关（图内 legend 已移除）
     assert html.count('data-flow-group="') >= 2            # 每组 chip 带筛选属性
     assert 'onclick="flowChipClick(' in html and 'ondblclick="flowChipSolo(' in html
