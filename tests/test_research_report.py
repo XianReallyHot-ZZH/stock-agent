@@ -333,6 +333,7 @@ def test_flow_lines_window_unit_buttons():
     assert [b.label for b in menu.buttons] == ["5日", "5日%", "20日", "20日%", "60日", "60日%"]
     assert menu.active == 2                                # 默认态 = 20日·亿元
     assert menu.buttons[2].args[1]["title.text"].startswith("组级净流入 · 20日滚动")
+    assert menu.buttons[1].args[1]["title.text"].startswith("组级净流入强度 · 5日")  # % 态=强度
     assert menu.buttons[1].args[1]["yaxis.title.text"] == "净流入(% 当日组规模)"
     assert menu.buttons[1].args[1]["yaxis.ticksuffix"] == "%"   # % 态刻度带 % 后缀
     assert menu.buttons[0].args[1]["yaxis.ticksuffix"] == ""    # 亿 态清除后缀

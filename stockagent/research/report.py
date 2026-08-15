@@ -511,7 +511,7 @@ def flow_lines_figure(flow: dict) -> go.Figure:
         combos.append((f"{w}日", abs_ys, "净流入(亿)", "",
                        f"组级净流入 · {w}日滚动（亿元 = Δ份额×当日净值 · 份额=净申赎）"))
         combos.append((f"{w}日%", pct_ys, "净流入(% 当日组规模)", "%",
-                       f"组级净流入 · {w}日滚动（% 当日组规模·逐日分母）"))
+                       f"组级净流入强度 · {w}日（占当日组规模% · 逐日分母）"))
     active = 2 * windows.index(default_w)      # 默认态 = 主窗口 × 绝对亿元
 
     fig.update_layout(**_base_layout(
