@@ -252,14 +252,15 @@ def test_render_flow_section_present():
                       {"159915": {"name": "创业板ETF", "group": "成长宽基"}},
                       as_of="2026-08-14", flow=_flow_mini())
     assert "💰 板块资金流向（份额视角）" in html
-    # 线图 + 热力图两个懒渲染占位（_PAGE_JS 选择器里另有 data-sym 字样，只数占位 div）
-    assert html.count('class="lazy-chart" data-sym="__flow"') == 2
+    # 量级 + 强度 + 热力图三个懒渲染占位（_PAGE_JS 选择器里另有 data-sym 字样，只数占位 div）
+    assert html.count('class="lazy-chart" data-sym="__flow"') == 3
     assert '"__flow":[' in html                          # 图 JSON 挂 CHARTS 伪 key
     assert "存量轮动" in html and "轮动强度" in html      # tile 标签 + 指标
     assert "大金融 +8.0亿" in html and "科技 -6.0亿" in html  # 组 chips
     assert "无份额ETF" in html                           # 未计入注记
     assert "配置盘的脚印" in html                        # 读图说明 ④ 方法论注记
-    assert "图上按钮" in html and "60日≈季度趋势" in html  # 线图下方按钮说明常驻
+    assert "两图同色同序" in html and "60日≈季度趋势" in html  # 两图下方说明常驻
+    assert "对上下两图同时生效" in html                     # 组筛选覆盖量级+强度两图
     # 组筛选：chips=图例开关（图内 legend 已移除）
     assert html.count('data-flow-group="') >= 2            # 每组 chip 带筛选属性
     assert 'onclick="flowChipClick(' in html and 'ondblclick="flowChipSolo(' in html
@@ -315,6 +316,22 @@ def test_flow_figures_structure():
     assert hm.zmid == 0
     assert hm.colorscale[-1][1] == "#dc2626"               # 红=正=流入（A股惯例）
     assert heat.layout.yaxis.autorange == "reversed"       # 组自上而下规范序
+
+
+def test_flow_intensity_figure_structure():
+    import pytest
+    fl = _flow_mini()
+    fl["rolls"] = {20: fl["group_roll"]}
+    fig = rep.flow_intensity_figure(fl)
+    assert len(fig.data) == 2                                   # 与量级图同组同序
+    assert fig.layout.showlegend is False
+    assert fig.layout.yaxis.zeroline is True                    # 增减分界零轴
+    assert fig.layout.yaxis.title.text == "净流入(% 组规模)"
+    # 无 rolls 的默认窗口：按钮 = 各窗口；每按钮 y = 滚动值/组规模×100
+    menu = fig.layout.updatemenus[0]
+    assert [b.label for b in menu.buttons] == ["20日"]
+    y0 = fig.data[0].y[0]
+    assert y0 == pytest.approx(float(fl["group_roll"]["大金融"].iloc[0]) / 900.0 * 100.0)
 
 
 def test_flow_lines_window_unit_buttons():
