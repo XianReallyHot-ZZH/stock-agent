@@ -1,11 +1,16 @@
-"""Tests for stockagent.research.report extreme-banner helpers (pure logic).
+"""Tests for stockagent.research.report helpers (pure logic + render structure).
 
-Covers _partition_extremes (threshold / sort / NaN & insufficient exclusion) and
-_extreme_rank (events-based 第N低/高, None cases). HTML rendering itself is not tested.
+Covers _partition_extremes (threshold / sort / NaN & insufficient exclusion),
+_extreme_rank (events-based 第N低/高, None cases), _order_detail (置顶优先), the
+dual-axis y-title wiring in shares_nav_figure, and the rendered HTML structure
+(theme toggle / rank tabs / collapsible details / quick-jump / back-to-top).
 """
 from __future__ import annotations
 
 import math
+
+import numpy as np
+import pandas as pd
 
 from stockagent.research import report as rep
 
@@ -119,3 +124,65 @@ def test_order_detail_pinned_in_excluded_still_first():
     excluded = {"B": _rsnap(0.10, sufficient=False)}
     meta = {"A": {"name": "A"}, "B": {"name": "B"}}
     assert [s for s, _ in rep._order_detail(ranked, excluded, ["B"], meta)] == ["B", "A"]
+
+
+# ---------------- shares_nav_figure 双轴标题（回归：左=净值/右=份额，勿装反） ----------------
+
+def _mini_dfs(n=80):
+    idx = pd.date_range("2026-01-01", periods=n, freq="D")
+    nav = pd.DataFrame({"acc_nav": np.linspace(1.0, 1.2, n)}, index=idx)
+    shares = pd.DataFrame({"shares": np.linspace(1e9, 1.5e9, n)}, index=idx)
+    return shares, nav
+
+
+def test_shares_nav_figure_yaxis_titles():
+    shares, nav = _mini_dfs()
+    fig = rep.shares_nav_figure("测试ETF", shares, nav)
+    assert fig.layout.yaxis.title.text == "累计净值"        # 左轴（净值）
+    assert fig.layout.yaxis2.title.text == "份额（亿份）"   # 右轴（份额）
+
+
+# ---------------- render 结构（主题/tab/折叠明细/快速跳转/回顶部/排序） ----------------
+
+def _render_mini():
+    snaps = {
+        "159915": {"nav_dev_pct": 0.02, "nav_dev_cur": -0.15, "nav_extreme_events": [],
+                   "data_sufficient": True, "style": "growth", "aum_yi": 500.0,
+                   "turnover_5d_yi": 12.3},
+        "512880": {"nav_dev_pct": 0.97, "nav_dev_cur": 0.10, "nav_extreme_events": [],
+                   "data_sufficient": True, "style": "value", "aum_yi": 300.0,
+                   "turnover_5d_yi": 8.1},
+    }
+    meta = {"159915": {"name": "创业板ETF"}, "512880": {"name": "证券ETF"}}
+    sm = {"159915": {"shares": None, "nav": None}, "512880": {"shares": None, "nav": None}}
+    return rep.render(snaps, sm, meta, as_of="2026-08-14", pinned=["159915"])
+
+
+def test_render_page_scaffold():
+    html = _render_mini()
+    assert '<meta name="viewport"' in html                     # 移动端 viewport
+    assert 'id="theme-btn"' in html and "toggleTheme" in html  # 深浅色切换
+    assert "localStorage.getItem('research-dark')" in html     # 主题记忆
+    assert 'id="back-top"' in html                             # 回顶部
+    assert 'id="etf-jump"' in html and "jumpToEtf" in html     # 快速跳转下拉
+    assert 'class="rank-tabs"' in html                         # 排名真 tab
+    assert 'id="tab-value"' in html and 'id="tab-growth"' in html and 'id="tab-cyclic"' in html
+    assert "localStorage.getItem('research-rank-tab')" in html  # tab 记忆
+    assert 'class="sortable"' in html and 'data-key="dev"' in html  # 表头排序
+    assert "body.dark" in html                                 # 暗色 CSS 覆盖存在
+    assert "flex-wrap:wrap" in html                            # 极端区横幅窄屏换行
+    # 懒渲染 v2 调度：滚动停稳后分帧渲染 + render/purge 滞回双窗口 + 占位提示
+    assert "requestAnimationFrame" in html
+    assert "'800px 0px'" in html and "'3000px 0px'" in html
+    assert "图表渲染中" in html
+
+
+def test_render_details_collapsed_pinned_open():
+    html = _render_mini()
+    # 明细为折叠面板；置顶默认展开、非置顶默认收起
+    assert '<details id="159915" class="etf-detail" open>' in html
+    assert '<details id="512880" class="etf-detail">' in html
+    # summary 带摘要 chips（类型/偏离），收起即可扫读
+    assert '<span class="etf-chips">' in html and "偏离 -15.0%" in html
+    # 置顶标 ⭐、不再全员 📌
+    assert "⭐" in html and "📌" not in html
