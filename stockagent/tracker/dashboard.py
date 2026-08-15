@@ -1,7 +1,7 @@
-"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 九件套(V4 tracker)。
+"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 十件套(V4 tracker)。
 
 ① 偏离极值曲线(close+MA60 主图 / 偏离度副图+历史极值线+历史极值事件标注「第k」)
-② 6宽基趋势状态表(60日线上下/均线趋势/突破跌破档位/震荡市)
+② 7宽基趋势状态表(60日线上下/均线趋势/突破跌破档位/震荡市)
 ③ 估值开关 stat tile(沪深300 PE 分位 + 全市场 PB 分位 + zone)
 ④ 蓝筹 vs 成长 仓位倾向 lean 指标卡
 ⑤ 当前有效突破/跌破信号列表
@@ -9,6 +9,8 @@
 ⑦ 相对周期律·沪深成长温差(创业板 vs 上证 点差:5年包络位置 → 极点/中枢 + 历史稀有度 + 漂移)
 ⑧ 成交量地量监测(两市成交额/MA250 → 地量 flag + 量价 event-study 时效/胜率)
 ⑨ 恐惧贪婪指数(动量/流动性/波动/估值/杠杆 5成分 → 0-100 复合;市场情绪温度计,只读不喂引擎)
+⑩ 关键位监测(平台顶+前低规则选位 → 支撑测试状态机 + 下/上第一档;实证:破位后20日波动抬升,
+   回撤中位/胜率无 edge —— 温度计不是开关,永不喂引擎)
 
 配色遵循 dataviz skill 中性参考调色板:文字用 ink token 不穿 series 色;状态用 status
 chip(icon+label,不单靠色);A股语义下正偏离(超买)暖红、负偏离(超卖)冷蓝。
@@ -26,6 +28,7 @@ from plotly.subplots import make_subplots
 from . import diagnose as dz
 from . import fear_greed as fg
 from . import indicators as ti
+from . import support_levels as slv
 
 # ---- palette (dataviz reference, light mode) ----
 _PAL = {
@@ -772,6 +775,101 @@ def _fear_greed_html(fg_diag: dict, fig_html: str = "") -> str:
     return out
 
 
+# ---- ⑩ 关键位监测 ----
+_KL_OC_COLOR = {"hold": _PAL["good"], "break_reclaim": _PAL["warning"],
+                "break_down": _PAL["critical"]}
+
+
+def _key_levels_figure(close: pd.Series, levels: list[dict], years: int = 2) -> go.Figure:
+    """近 ~years 年收盘 + 关键位横线(线=trace 可悬停/点图例隔离,色=结局) + 回踩标记。"""
+    s = close.astype(float)
+    s = s.iloc[-252 * years:]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=pd.to_datetime(s.index), y=s.to_numpy(), name="上证综指",
+                             line=dict(color=_PAL["series_1"], width=1.6),
+                             hovertemplate="%{x|%Y-%m-%d}<br>%{y:.0f}<extra></extra>"))
+    px_map = close.to_dict()
+    for lv in levels:
+        c = _KL_OC_COLOR.get(lv["outcome"], _PAL["ink_sec"])
+        dash = "dot" if lv["pending"] else ("dash" if lv["outcome"] == "break_down" else "solid")
+        kind = "平台顶" if lv["kind"] == "platform" else "前低"
+        fig.add_trace(go.Scatter(
+            x=[pd.to_datetime(s.index[0]), pd.to_datetime(s.index[-1])], y=[lv["level"]] * 2,
+            mode="lines", name=f"{kind} {lv['level']:.0f} · {slv.OUTCOME_LABEL[lv['outcome']]}",
+            line=dict(color=c, width=1.4, dash=dash),
+            hovertemplate=f"{kind} 位 {lv['level']:.0f} · {lv['state']}<extra></extra>"))
+        if lv["touch"] in px_map:
+            fig.add_trace(go.Scatter(x=[pd.to_datetime([lv["touch"]])[0]], y=[lv["level"]],
+                                     mode="markers", showlegend=False,
+                                     marker=dict(symbol="triangle-down", size=9, color=c),
+                                     hovertemplate=f"回踩 {lv['touch']}<extra>{kind} {lv['level']:.0f}</extra>"))
+    fig.update_layout(height=340, margin=dict(l=55, r=20, t=20, b=30),
+                      paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+                      font=dict(color=_PAL["ink"]), showlegend=True,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    fig.update_yaxes(gridcolor=_PAL["grid"])
+    fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m-%d")
+    return fig
+
+
+def _key_levels_html(snap: dict | None, fig_html: str = "") -> str:
+    """⑩ 关键位监测:下/上第一档 tile + 关键位状态表 + 三幕剧本提示。只读温度计,不喂引擎。"""
+    if not snap or not snap.get("levels"):
+        return ("<p class='hint'>关键位监测数据不足(需 上证综指 ≥500 日 + 可检出平台/前低事件;"
+                "详见 scripts/validate_support_break.py 深度报告)</p>")
+    close, nb, na = snap["close"], snap.get("next_below"), snap.get("next_above")
+
+    def _tile(label: str, val: str, sub: str, color: str = _PAL["ink_sec"]) -> str:
+        return (f"<div class='tile'><div class='tile-label'>{label}</div>"
+                f"<div class='tile-value' style='color:{color};font-size:20px'>{val}</div>"
+                f"<div class='tile-sub'>{sub}</div></div>")
+
+    t_px = _tile("上证综指现价", f"{close:.0f}",
+                 f"截至 {snap['date']} · 事件总数 {snap['n_events']}", _PAL["ink"])
+    if nb:
+        t_nb = _tile("下方第一支撑", f"{nb['level']:.0f}",
+                     f"{nb['state']} · 距 {nb['dist']:+.1%}",
+                     _KL_OC_COLOR.get(nb["outcome"], _PAL["ink_sec"]))
+    else:
+        t_nb = _tile("下方第一支撑", "—", "近端无未破位事件位")
+    if na:
+        t_na = _tile("上方第一压力", f"{na['level']:.0f}",
+                     f"{na['state']} · 距 {na['dist']:+.1%}", _PAL["critical"])
+    else:
+        t_na = _tile("上方第一压力", "—", "近端无已破位事件位")
+    tiles = f"<div class='tiles-row'>{t_px}{t_nb}{t_na}</div>"
+
+    def _dist_cell(r: dict) -> str:
+        style = "font-variant-numeric:tabular-nums"
+        if r["in_zone"]:
+            style += f";font-weight:700;color:{_PAL['warning']}"
+        mark = " ←在带内" if r["in_zone"] else ""
+        return f"<td style='{style}'>{r['dist']:+.1%}{mark}</td>"
+
+    rows = "".join(
+        f"<tr><td>{'平台顶' if r['kind'] == 'platform' else '前低'}</td>"
+        f"<td style='font-variant-numeric:tabular-nums'>{r['level']:.0f}</td>"
+        f"<td>{r['touch']}</td>"
+        f"<td style='color:{_KL_OC_COLOR.get(r['outcome'], _PAL['ink_sec'])}'>{r['state']}</td>"
+        f"<td>{r['confirm']}</td>{_dist_cell(r)}</tr>"
+        for r in snap["levels"])
+    table = ("<table class='stat'><tr><th>类型</th><th>位</th><th>回踩日</th><th>状态</th>"
+             "<th>确认日</th><th>现价距离</th></tr>" + rows + "</table>")
+    hint = ("<b>规则选位,无手画线</b>:平台顶(40日窗振幅≤8%·有效突破后≥5日在带上)+ 前低枢轴(两侧各10日更低·"
+            "反弹≥5%)。状态机:回踩带=位±1% · 破位=收盘破 位−1% · 收回=3日内回带 · 守住=15日无破位。"
+            "<b>实证(event-study 58例)</b>:破位·未收确认后 <b>20日实现波动显著抬升</b>(19.9% vs 守住14.5%),"
+            "回撤中位数与方向胜率不分离 → <b>温度计不是开关,永不喂交易引擎</b>。<br>"
+            "<b>三幕剧本(幕0预承诺)</b>:① 缩量止跌+放量反包 → 引擎信号正常执行,不加戏;"
+            "② 收盘破位−1% 且 3日不收 → 波动应对:仓位上限降一档、只等右侧、警惕持仓 ETF 相关性→1 的假分散"
+            "(理由是波动分布变了,不是看空方向);③ 旧位破位后剧本重写,不沿用旧位。"
+            "当前进行中的测试与主流 claim 见 docs/CLAIMS_LEDGER.md。")
+    out = tiles + ("<div class='hint' style='margin:10px 0 6px'>关键位状态(新→旧):</div>" + table
+                   + f"<div class='hint' style='margin-top:10px'>{hint}</div>")
+    if fig_html:
+        out += f"<div style='margin-top:12px'>{fig_html}</div>"
+    return out
+
+
 _CSS = """
 :root{--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink-sec:#52514e;--muted:#898781;--grid:#e1e0d9;--hover:#f4f3ef}
 [data-theme="dark"]{--surface:#1a1a19;--plane:#0d0d0d;--ink:#ffffff;--ink-sec:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--hover:#262624}
@@ -869,6 +967,17 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                 full_html=False, include_plotlyjs=False)
         except Exception:  # noqa: BLE001
             fg_fig_html = ""
+    # ⑩ 关键位监测: 上证综指 平台顶/前低 事件位状态机(plotly.js 已由前面图承载)
+    kl_snap, kl_fig_html = None, ""
+    try:
+        _sse = store.get_index_daily_series("000001")
+        if len(_sse) >= 500:
+            kl_snap = slv.monitor_snapshot(_sse["close"], _sse.get("volume"))
+            if kl_snap.get("levels"):
+                kl_fig_html = _key_levels_figure(_sse["close"], kl_snap["levels"]).to_html(
+                    full_html=False, include_plotlyjs=False)
+    except Exception:  # noqa: BLE001
+        kl_snap, kl_fig_html = None, ""
     figs_html, first = [], (val_fig_html == "" and price_fig_html == "" and rc_fig_html == "")   # ③/⑦ 已加载 plotly.js → ① 首图不再重复
     for sym, nm in dz.BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -891,6 +1000,7 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<h2>⑦ 相对周期律·沪深成长温差</h2><section>{_relative_cycle_html(rc, rc_fig_html)}</section>"
         f"<h2>⑧ 成交量地量监测</h2><section>{_turnover_html(tv, tv_fig_html)}</section>"
         f"<h2>⑨ 恐惧贪婪指数</h2><section>{_fear_greed_html(fg_diag, fg_fig_html)}</section>"
+        f"<h2>⑩ 关键位监测</h2><section>{_key_levels_html(kl_snap, kl_fig_html)}</section>"
         f"<h2>④ 蓝筹 vs 成长 仓位倾向</h2><section>{_style_card_html(diag['style'])}</section>"
         f"<h2>② 趋势状态</h2><section>{_trend_table_html(diag)}</section>"
         f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}"

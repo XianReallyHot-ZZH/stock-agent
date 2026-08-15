@@ -190,3 +190,36 @@ def test_valuation_price_figure_empty():
     fig = d._valuation_price_figure(pd.DataFrame({"close": []}), years=5)
     assert isinstance(fig, go.Figure)
     assert len(fig.data) == 0                   # 不足不抛
+
+
+# ---------- ⑩ 关键位监测 ----------
+def _kl_snap():
+    lv = {"kind": "low", "level": 3766.0, "touch": "2026-07-17", "confirm": "2026-08-05",
+          "outcome": "hold", "state": "已守住", "dist": 0.0428, "in_zone": False,
+          "pending": False, "break_date": None, "platform_start": "", "platform_end": "",
+          "breakout": "", "vol_ratio": float("nan"), "high_vol_break": False}
+    return {"date": "2026-08-14", "close": 3927.0, "n_events": 59,
+            "levels": [lv], "next_below": lv, "next_above": None}
+
+
+def test_key_levels_html_renders():
+    html = d._key_levels_html(_kl_snap(), "")
+    assert "下方第一支撑" in html and "3766" in html            # 第一档 tile
+    assert "上方第一压力" in html and "—" in html                # 无压力 → 占位
+    assert "已守住" in html and "回测" not in html               # 状态表
+    assert "三幕剧本" in html and "永不喂交易引擎" in html        # 剧本提示 + 只读声明
+
+
+def test_key_levels_html_insufficient():
+    assert "数据不足" in d._key_levels_html(None)
+    assert "数据不足" in d._key_levels_html({"levels": []})
+
+
+def test_key_levels_figure_traces():
+    idx = pd.date_range("2025-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    close = pd.Series(np.linspace(3400.0, 3900.0, 300), index=idx)
+    fig = d._key_levels_figure(close, _kl_snap()["levels"])
+    assert isinstance(fig, go.Figure)
+    names = [t.name or "" for t in fig.data]
+    assert any("上证综指" in n for n in names)                   # 价格线
+    assert any("前低 3766" in n for n in names)                  # 位横线(trace 化,可点图例)

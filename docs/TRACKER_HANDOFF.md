@@ -2,27 +2,30 @@
 
 ## ⚡ 快速恢复（先读这段，30 秒定位）
 
-**状态（2026-07-25）**：指数择时看板 `data/index_timing.html` 已扩到 **8 节**（新增 ③PE/PB时序图 / ⑦相对周期律 / ⑧成交量地量监测）。全部 commit & push 到 `origin/master`：⑦`5ff9087` / ⑧`78d4f14` / ③图`e01b3de` / docs`14ece78`。全量测试绿。
+**状态（2026-08-15）**：指数择时看板 `data/index_timing.html` 已扩到 **10 节**（③PE/PB图/⑦周期律/⑧地量 为 2026-07 批次：⑦`5ff9087`/⑧`78d4f14`/③图`e01b3de`；⑨恐惧贪婪 `9f9b6ae`；**2026-08-15 新增 ⑩关键位监测 + 支撑位实证 + A股观点台账**，宽基 6→7 只·增中证1000 `1879979`）。全量测试绿（613）。
 
-**4 条命令验证一切在跑**：
+**5 条命令验证一切在跑**：
 ```bash
-python -m pytest tests/ -q                     # 全绿(数量随新增测试增长)
-python scripts/backfill_index.py               # 6宽基(含000001)+沪深300PE/PB+全市场PB+两市成交额(幂等)
-python scripts/index_timing_report.py          # → data/index_timing.html(8节,~10MB)
+python -m pytest tests/ -q                     # 全绿(613)
+python scripts/backfill_index.py               # 7宽基(含000001·000852)+沪深300PE/PB+全市场PB+两市成交额(幂等)
+python scripts/index_timing_report.py          # → data/index_timing.html(10节,~10MB)
 python scripts/validate_volume_bottom.py       # → data/volume_bottom_study.html(⑧地量 event-study 深度报告)
+python scripts/validate_support_break.py       # → data/support_break_study.html(⑩关键位 event-study 深度报告)
 ```
 
 **文件地图**：
 | 角色 | 文件 |
 |---|---|
 | 指标(纯函数) | `stockagent/tracker/indicators.py`：⑦`relative_spread_series/cycle_extremes/classify_cycle/relative_momentum/consecutive_run/linear_fit_line`；⑧`turnover_percentile/turnover_dry_events/volume_bottom_stats/turnover_new_low_years` |
-| 诊断组装 | `stockagent/tracker/diagnose.py`：`diagnose_relative_cycle` / `diagnose_turnover` / 挂 `diagnose_layer`；`_binom_p_one_sided` |
-| 看板渲染 | `stockagent/tracker/dashboard.py`：`_valuation_figure`(③) / `_relative_cycle_figure`(⑦) / `_turnover_figure`(⑧) + 各 `_section_html` + `render_index_timing` 接线 |
+| ⑩关键位原语 | `stockagent/tracker/support_levels.py`：`detect_platforms`(平台顶) / `pivot_lows+low_retest_events`(前低) / `breakout_retest_events` / `merged_events`(合并去重) / `_resolve_outcome`(三结局判定) / `forward_risk_rows+group_summary+bootstrap_median_diff`(event-study) / `monitor_snapshot`(⑩看板数据·状态机) |
+| 诊断组装 | `stockagent/tracker/diagnose.py`：`diagnose_relative_cycle` / `diagnose_turnover` / 挂 `diagnose_layer`；`_binom_p_one_sided`；`BROAD_INDICES`(7只·顺序=看板展示序) |
+| 看板渲染 | `stockagent/tracker/dashboard.py`：`_valuation_figure`(③) / `_relative_cycle_figure`(⑦) / `_turnover_figure`(⑧) / `_key_levels_figure+_key_levels_html`(⑩) + 各 `_section_html` + `render_index_timing` 接线 |
 | 提醒 | `stockagent/tracker/alerts.py`：E5(⑦周期极点) / V1(⑧地量) —— **仅经 research/stock 推送通路触发**(index_timing_report.py 无 `--push-alerts`) |
-| 数据 | `data/store.py`(`market_turnover` 表 + `index_daily` 加 000001) / `fetcher.py::fetch_market_turnover`(baostock) / `manager.py::update_market_turnover` |
-| 脚本 | `scripts/backfill_index.py`(`--turnover` flag) / `scripts/validate_volume_bottom.py`(新) |
-| 测试 | `tests/test_tracker_indicators.py` / `tests/test_alerts.py` |
-| skill | `.claude/skills/tracker-dashboard` / `dashboards`（已同步到 8 节） |
+| 数据 | `data/store.py`(`market_turnover` 表 + `index_daily` 含 000001/000852) / `fetcher.py::fetch_market_turnover`(baostock) / `manager.py::update_market_turnover` |
+| 脚本 | `scripts/backfill_index.py` / `scripts/validate_volume_bottom.py` / `scripts/validate_support_break.py`(新) |
+| 台账 | `docs/CLAIMS_LEDGER.md`：A股观点预登记(claim→可证伪定义→到期结算;Claim 001=3700~3800强支撑,窗至2026-10-31) |
+| 测试 | `tests/test_tracker_indicators.py` / `tests/test_alerts.py` / `tests/test_support_levels.py`(新·16个) / `tests/test_index_valuation_discipline.py`(⑩渲染) |
+| skill | `.claude/skills/tracker-dashboard` / `dashboards`（已同步到 10 节） |
 
 **恢复后第一步**：继续开发 → 挑下面「可选增强」；验证 → 跑上面 4 条命令；懂某块 → 读对应 docstring（中文注释详尽）+ 本文件「关键实证/决策弯路」段。
 
@@ -43,6 +46,15 @@ python scripts/validate_volume_bottom.py       # → data/volume_bottom_study.ht
 - **极端子集**（近 >0.5 年最低）：60 日 ~67-75%，但样本 ~15、p≈0.09-0.15 **未显著** → callout 标「暗示非定律、不据此加仓」。lookback 分桶有梯度（42%→75%）但极端桶 N=4 噪声；ratio（干涸比）无梯度。
 - 图双色：普通地量(琥珀小) / 极端地量(红大)；悬停显「近X年最低」。
 
+### ⑩ 关键位监测 + 支撑位实证（2026-08-15）
+- **规则选位（无手画线，防事后拟合）**：平台顶（40日窗振幅≤8% 的箱体上沿；突破=收盘>顶×1.005；突破后 ≥5 日收盘在带上方才算站稳，立即跌回=突破失败弃）+ 前低枢轴（两侧各10日严格更低；反弹 ≥5% 后才算支撑候选）。合并后全局 cooldown=20 去重。带=位±1%（带状非线状），破位=收盘<位−1%，收回=3日内收盘回带，守住=回踩后15日无破位。
+- **实证（上证综指 2000~，事件59/可用58：真破32/守住22/假破4）**：✅ 真破确认后 **20日实现波动显著抬升**（19.9% vs 守住14.5%，bootstrap 90%CI 不含0，对比无条件基准13.9%）；❌ 60日波动/回撤中位/收益胜率均不分离 → 支撑位=**波动观察坐标**，非买卖信号（与⑧同构）。前向指标从**确认日**起算（决策一致），基准=全样本 stride=5 抽样。
+- **弯路1**：初版只做平台顶 → 样本仅~15 且漏掉「双底/前低」类（当前 3760~3766 正是前低带）→ 补 `pivot_lows` 第二类（样本→59）。
+- **弯路2**：枢轴「严格最低」条件初写反（`(w<v[i]).sum()==side*2` 恒 False→0事件），应为 `w>v[i]`；另：测试合成序列 V 底必须放在 index≥side，否则检测不到。
+- **弯路3**：`pending`（前向数据不足）≠ 结局未定——状态机区分「回踩测试中(15日窗未走完)」「破位观察中(收回窗3日未走完)」与已定结局，防把刚破1~2天的事标成真破。
+- **⑩ 看板**：`monitor_snapshot` 状态机 + 下方第一支撑（未破位·现价下最近）/ 上方第一压力（已破位·现价上最近·翻空为压）+ 近2年价格图（位横线做成 trace，可点图例隔离）+ 三幕剧本提示（幕0预承诺）。
+- **⑩ 与台账口径不同、各司其职**：看板状态机破位阈值=位−1%（研究口径）；Claim 001 失效=收盘<3760 且3日不收（更严，叙事口径）。
+
 ### 数据源死胡同（探针确认，别再踩）
 - ❌ `stock_market_activity_legu` = **当日快照**（12 行），非历史序列。
 - ❌ sina `stock_zh_index_daily` 只 `volume`（成分股数）**无 amount**；即现有 `index_daily.volume` 不是金额、不是两市。
@@ -54,7 +66,8 @@ python scripts/validate_volume_bottom.py       # → data/volume_bottom_study.ht
 ## ⚠️ 数据约定 & 已知 wart
 - **⑦ 点差符号**：spread=上证−创业板，某日创业板点位 > 上证时为**负**（tile 显负数）——框架（去漂移残差分位）符号无关、照常工作，但与评论员「上证跑赢 350 点」的措辞可能对不上，`.hint` 已说明。
 - **⑧ 样本稀疏**（~84 次/20 年）→ 胜率统计 CI 宽，UI 一律标「经验参考非定律」+ 露样本数 + p 值，**绝不写成确定信号**。
-- **000001 无 PE/PB**（同创业板/科创50）→ ⑦ 只用其日线算点差。
+- **000001 无 PE/PB**（同创业板/科创50/中证1000）→ ⑦ 只用其日线算点差；⑩ 也只用其日线+volume。
+- **⑩ 破位量比用 `index_daily.volume`**（sina 股数口径、非金额——见上面⑧段的坑）→ 只作 同序列/自身MA20 的相对比较，不跨指数比、不当金额用。
 - **baostock 偶发 login 失败 → 重跑**（幂等 upsert）；首次拉历史（到 1991）稍慢。
 - **plotly.js 首加载由 ③ 承载**（HTML 最前的图）→ ⑦/⑧/① 都 `include_plotlyjs=False` 避免重复 ~3MB。
 - **图分位口径**：③/⑦/⑧ 图用**全历史**口径；tile 的分位仍用**近 10 年**（diagnose 默认）——两者互补，caption 已写明。
@@ -66,5 +79,9 @@ python scripts/validate_volume_bottom.py       # → data/volume_bottom_study.ht
 4. **⑧ 极端子集样本积累后重测显著性**：现 p≈0.09-0.15 未显著，几年后再看是否→显著。
 5. **⑦ 短期风格轮动持续性展开**：现仅 mom(20日) + consecutive_run，可加「主导方向持续多久」(容忍 1 日反向)。
 6. **⑧ 复查 2017-2018 地量**：是否被 2015 泡余的 rolling-min 压掉没触发（MA250 比值口径下应已捕获，可验证）。
+7. **⑩ 台账结算自动化**：到期 claim 自动结算脚本（现手动填 docs/CLAIMS_LEDGER.md；Claim 001 观察窗至 2026-10-31）。
+8. **⑩ 多指数关键位**：现仅上证综指；可扩沪深300/中证1000（样本×3，跨市场重复计数需留意）。
+9. **⑩ 样本积累后重测**：60日波动/回撤的 CI 现跨0，几年后样本翻倍再看是否分离。
 
 > 验证范式：`python scripts/validate_volume_bottom.py` 的「按极端度分桶」表 + dashboard ⑧ callout 双向对照，最快确认 ⑧ 逻辑没回归。
+> ⑩ 验证范式：`python scripts/validate_support_break.py` 的 bootstrap 表（20日波动应分离✔）+ dashboard ⑩ 状态表/pending 双向对照。

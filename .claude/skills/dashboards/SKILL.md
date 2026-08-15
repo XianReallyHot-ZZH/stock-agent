@@ -83,7 +83,7 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_economic_calendar.py
 ### 2. 生成四个 HTML
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/research_report.py        # 冷启动时已由 setup 渲染过,这里重跑无妨(秒级);纯可视化(无 LLM/无告警)
-PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（9 section，深浅色可切）
+PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（10 section，深浅色可切）
 PYTHONIOENCODING=utf-8 python scripts/stock_report.py           # 个股诊断（卡片+弹窗时序图+🤖按钮，深浅色可切；生成不调LLM，🤖点击时实时生成）
 PYTHONIOENCODING=utf-8 python scripts/macro_framework_report.py --no-open # 宏观框架（总览表+🥇黄金阶段定位器+微观紧缺+因果链分节点图，纯数据无LLM）；--no-open 必须：脚本默认会自动开浏览器，不加会与第3步重复弹两次
 ```
