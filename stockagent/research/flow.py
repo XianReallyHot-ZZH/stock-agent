@@ -320,9 +320,9 @@ def group_monthly_matrix(panel: dict, groups: dict[str, list[str]],
 # ---------------------------------------------------------------------------
 
 def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.0,
-                      scan_days: int = 250, top: int = 8, min_history: int = 250) -> list[dict]:
-    """最近申赎异动事件台账（回检用）：近 scan_days 个交易日内全部命中里，取
-    最新 top 条——新事件把旧事件顶下去，横幅常驻有数据。
+                      scan_days: int = 22, min_history: int = 250) -> list[dict]:
+    """最近申赎异动事件（近 scan_days≈1 个月）：全部命中按日期降序返回，
+    截断/展示由 report 层做（条带图全画、文字台账取前 N）。
 
     判定（自适应每只 ETF 自身波动性 + 金额地板滤小钱噪声）：
       |日增减%|（Δ份额/前日份额·拆分前复权口径）≥ 自身历史 pctile 分位
@@ -330,8 +330,7 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
     分位为**全历史**口径（含事件当日自身；纯观察·与偏离度分位同哲学·不防前视）。
     有效观测 < min_history 的 ETF 跳过（历史太短分位不可靠）。
 
-    Returns: [{symbol, date, flow_yi, pct, pctile, side('in'/'out')}, ...]
-             按日期降序、同日按金额降序。"""
+    Returns: [{symbol, date, flow_yi, pct, pctile, side('in'/'out')}, ...]"""
     events: list[dict] = []
     for sym, p in panel.items():
         pct = p["shares"].pct_change().dropna()
@@ -348,4 +347,4 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
                                "pct": float(pct.loc[d]), "pctile": float(ranks.loc[d]),
                                "side": "in" if float(pct.loc[d]) > 0 else "out"})
     events.sort(key=lambda e: (e["date"], abs(e["flow_yi"])), reverse=True)
-    return events[:top]
+    return events

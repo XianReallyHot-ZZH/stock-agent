@@ -553,6 +553,54 @@ def flow_lines_figure(flow: dict) -> go.Figure:
     return fig
 
 
+def flow_events_strip_figure(flow: dict) -> go.Figure:
+    """申赎异动时间条带（近1月）：x=日期，申购/赎回分上下双轨，点大小∝金额，
+    同日多事件在轨内堆叠。悬停=全信息；点击点跳该 ETF（_PAGE_JS plotly_click）。
+    事件的时间聚集（如某周连环申购潮）在此一目了然——文字台账看不到这层。"""
+    events = flow.get("events") or []
+    last = pd.to_datetime(flow.get("last_date") or events[0]["date"])
+    x0 = last - pd.Timedelta(days=32)
+    mx = max([abs(e["flow_yi"]) for e in events] + [1.0])
+
+    def lane(evs, base):
+        xs, ys, sizes, cds = [], [], [], []
+        per_day: dict[str, int] = {}
+        for e in evs:
+            k = per_day.get(e["date"], 0)
+            per_day[e["date"]] = k + 1
+            xs.append(e["date"])
+            ys.append(base * (1.0 + 0.28 * k))          # 同日堆叠
+            sizes.append(max(abs(e["flow_yi"]), 0.3))
+            cds.append([e.get("name", e["symbol"]), e["symbol"],
+                        e["flow_yi"], e["pct"], e["pctile"]])
+        return xs, ys, sizes, cds
+
+    fig = go.Figure()
+    for evs, base, name, color in (([e for e in events if e["side"] == "in"], 1, "净申购", "#dc2626"),
+                                   ([e for e in events if e["side"] == "out"], -1, "净赎回", "#16a34a")):
+        xs, ys, sizes, cds = lane(evs, base)
+        fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode="markers", name=name,
+            marker=dict(color=color, size=sizes, sizemode="area",
+                        sizeref=mx / (22 ** 2), sizemin=6,
+                        line=dict(color="white", width=1)),
+            customdata=cds,
+            hovertemplate=("%{customdata[0]}<br>%{x|%Y-%m-%d} · %{customdata[2]:+.1f}亿"
+                           "<br>日增减 %{customdata[3]:+.1%} · 历史分位 %{customdata[4]:.1%}"
+                           "<extra></extra>")))
+    fig.update_layout(height=230, template=_TEMPLATE, hovermode="closest",
+                      showlegend=True, legend=dict(orientation="h", yanchor="bottom",
+                                                   y=1.02, xanchor="right", x=1,
+                                                   font=dict(size=10)),
+                      margin=dict(l=10, r=10, t=26, b=10))
+    fig.update_xaxes(type="date", range=[x0, last + pd.Timedelta(days=1)],
+                     tickformat="%m-%d", nticks=8, gridcolor=C_GRID,
+                     rangeselector=None, rangeslider=dict(visible=False))
+    fig.update_yaxes(visible=False, zeroline=True, zerolinewidth=1,
+                     zerolinecolor=C_GRID)               # 零线=时间轴基线
+    return fig
+
+
 def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
     """📡 申赎异动横幅：最近大额申赎事件台账（|日增减%|≥自身历史分位 且 ≥金额
     地板），点条目跳该 ETF 日度净申赎图。近1年扫描、最新在前（新事件顶旧事件），
@@ -560,9 +608,9 @@ def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
     events = flow.get("events") or []
     last_date = flow.get("last_date")
     if not events:
-        body = ('<span class="xb-sub muted">近一年扫描无大额申赎命中 —— 安静窗口属正常。'
+        body = ('<span class="xb-sub muted">近一个月无大额申赎命中 —— 安静窗口属正常。'
                 '判定：|日增减%| ≥ 自身历史99%分位 <b>且</b> |净申赎额| ≥ 1亿'
-                '（阈值可调 params research.flow.alert）</span>')
+                '（阈值可调 params.research.flow.alert）</span>')
     else:
         shown = events[:top_n]
         items = []
@@ -581,10 +629,12 @@ def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
         body = "".join(items) + more
     return (
         '<div class="extreme-banner">'
-        '<div class="extreme-title">📡 申赎异动 · 最近大额申赎事件台账 '
-        '<span class="xb-note">近1年扫描·最新在前（新事件顶旧事件） · |日增减%|≥自身历史99%分位 且 ≥1亿 · '
-        '流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议 · 点击跳该ETF日度申赎图</span></div>'
-        f'<div class="xb-list">{body}</div></div>')
+        '<div class="extreme-title">📡 申赎异动 · 最近大额申赎事件（近1月） '
+        '<span class="xb-note">时间条带：上轨=净申购(红)/下轨=净赎回(绿)·点大小∝金额·点悬停看详情·**点击点跳该ETF** · '
+        '|日增减%|≥自身历史99%分位 且 ≥1亿 · 流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议</span></div>'
+        + ('<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
+           'style="min-height:230px"></div></div>' if events else "")
+        + f'<div class="xb-list">{body}</div></div>')
 
 
 def _flow_section(flow: dict) -> str:
@@ -1050,6 +1100,13 @@ function _renderChart(el){
   Plotly.newPlot(el, list[i], {responsive:true, displaylogo:false}).then(function(){
     if(el.dataset.rendered === '1') _applyPlotlyTheme(el, _isDark());
     if(sym === '__flow' && i === 0) _applyFlowFilter();   // 组chips过滤态在(重)渲染后恢复
+    if(sym === '__flow' && i === 1){                      // 异动条带：点击点跳该ETF明细
+      el.removeAllListeners && el.removeAllListeners('plotly_click');
+      el.on('plotly_click', function(data){
+        try { var cd = data.points[0].customdata;
+              if(cd && cd[1]) jumpToEtf(String(cd[1])); } catch(e) {}
+      });
+    }
   }).catch(function(){});
 }
 // —— 板块资金流向：组 chips = 线图图例开关（图内 legend 已移除，chips 即图例）——
@@ -1243,7 +1300,10 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     flow_html = ""
     flow_events_html = ""
     if flow and (flow.get("state") or {}).get("label_key") not in (None, "insufficient"):
-        charts_json["__flow"] = [flow_lines_figure(flow).to_json()]
+        flow_figs_json = [flow_lines_figure(flow).to_json()]
+        if flow.get("events"):      # 申赎异动时间条带 = __flow 图组第 2 张（idx1）
+            flow_figs_json.append(flow_events_strip_figure(flow).to_json())
+        charts_json["__flow"] = flow_figs_json
         flow_html = _flow_section(flow)
         flow_events_html = _flow_events_banner(flow, meta)
     _esc = lambda s: re.sub(r"</script", r"<\\/script", s, flags=re.I)

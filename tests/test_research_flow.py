@@ -163,25 +163,25 @@ def test_daily_flow_events_thresholds():
     o = _series_map(n, sh_o, nav_val=2.0)
     panel, _ = fl.flow_panel({"A": a, "S": s, "Y": y, "O": o})
     evs = fl.daily_flow_events(panel, pctile=0.99, floor_yi=1.0,
-                               scan_days=250, top=8, min_history=250)
+                               scan_days=250, min_history=250)
     assert [e["symbol"] for e in evs] == ["A", "O"]   # 日期降序（A 最近）
     assert evs[0]["side"] == "in"
     assert evs[0]["pctile"] >= 0.99
     assert evs[0]["flow_yi"] == pytest.approx(6.0, abs=1e-9)   # 3e8份×2.0/1e8
 
 
-def test_daily_flow_events_top_cap():
-    # top 上限：两条命中、top=1 → 只留最新那条（新事件顶旧事件）
+def test_daily_flow_events_scan_window():
+    # 扫描窗口（交易日）：-20日与-5日两事件，scan_days=10 → 只剩 -5日；250 → 两条
     n = 300
     sh = np.full(n, 1e9); sh[-20:-5] = 1.4e9; sh[-5:] = 1.8e9   # -20日+40%、-5日+28.6%
     m = _series_map(n, sh, nav_val=2.0)
     panel, _ = fl.flow_panel({"A": m})
-    all_evs = fl.daily_flow_events(panel, scan_days=250, top=8)
-    assert len(all_evs) == 2
     newest = str(_idx(n)[-5])[:10]
-    assert str(all_evs[0]["date"])[:10] == newest               # 最新在前
-    top1 = fl.daily_flow_events(panel, scan_days=250, top=1)
-    assert len(top1) == 1 and str(top1[0]["date"])[:10] == newest
+    evs10 = fl.daily_flow_events(panel, scan_days=10)
+    assert len(evs10) == 1 and str(evs10[0]["date"])[:10] == newest
+    evs250 = fl.daily_flow_events(panel, scan_days=250)
+    assert len(evs250) == 2
+    assert str(evs250[0]["date"])[:10] == newest                 # 最新在前
 
 
 def test_daily_flow_events_empty():

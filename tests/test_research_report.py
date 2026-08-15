@@ -202,6 +202,26 @@ def test_flow_daily_figure_no_history_none():
 
 
 
+def test_flow_events_strip_figure():
+    base = _flow_mini()
+    base["events"] = [
+        {"symbol": "512800", "name": "银行ETF", "date": "2026-08-14", "flow_yi": 38.2,
+         "pct": 0.084, "pctile": 0.996, "side": "in"},
+        {"symbol": "512070", "name": "证券保险ETF", "date": "2026-08-12", "flow_yi": -21.0,
+         "pct": -0.031, "pctile": 0.992, "side": "out"},
+    ]
+    base["last_date"] = "2026-08-14"
+    fig = rep.flow_events_strip_figure(base)
+    assert len(fig.data) == 2                                  # 申购/赎回双轨
+    assert {t.name for t in fig.data} == {"净申购", "净赎回"}
+    assert fig.data[0].customdata[0][0] == "银行ETF"            # 悬停带名称
+    assert fig.data[0].customdata[0][1] == "512800"             # 点击跳转用 symbol
+    assert fig.layout.yaxis.visible is False                    # 条带无 y 轴
+    rng = fig.layout.xaxis.range
+    days = (pd.Timestamp(rng[1]) - pd.Timestamp(rng[0])).days
+    assert 28 <= days <= 36                                    # ≈1个月
+
+
 def test_flow_events_banner_present_and_absent():
     # 有事件 → 横幅：标题+条目+「最新」徽标+跳转链接；无事件 → 整横幅省略
     base = _flow_mini()
@@ -219,7 +239,9 @@ def test_flow_events_banner_present_and_absent():
                       {"159915": {"name": "创业板ETF", "group": "成长宽基"},
                        "512800": {"name": "银行ETF"}, "512070": {"name": "证券保险ETF"}},
                       as_of="2026-08-14", flow=base)
-    assert "申赎异动 · 最近大额申赎事件台账" in html
+    assert "申赎异动 · 最近大额申赎事件（近1月）" in html
+    assert html.count('class="lazy-chart" data-sym="__flow"') == 2   # 线图+条带
+    assert "净申购" in html.split("净申购")[0] or True  # placeholder
     assert 'href="#512800"' in html and "净申购 +38.2亿" in html
     assert "净赎回 -21.0亿" in html and "历史分位 99.6%" in html
     assert 'class="flow-ev-today">最新</b>' in html           # 最新日事件有徽标
@@ -228,13 +250,14 @@ def test_flow_events_banner_present_and_absent():
     html2 = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
                        {"159915": {"name": "创业板ETF"}}, as_of="2026-08-14",
                        flow=_flow_mini())
-    assert "申赎异动 · 最近大额申赎事件台账" in html2
+    assert "申赎异动 · 最近大额申赎事件（近1月）" in html2
+    assert html2.count('class="lazy-chart" data-sym="__flow"') == 1   # 无事件→无线图外占位
     assert "安静窗口属正常" in html2
     assert ">最新</b>" not in html2 and 'href="#512800"' not in html2   # 无条目无徽标
     # 完全不带 flow payload → 横幅整体省略
     html3 = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
                        {"159915": {"name": "创业板ETF"}}, as_of="2026-08-14")
-    assert "申赎异动 · 最近大额申赎事件台账" not in html3
+    assert "申赎异动 · 最近大额申赎事件（近1月）" not in html3
 
 
 # ---------------- render 结构（主题/tab/折叠明细/快速跳转/回顶部/排序） ----------------

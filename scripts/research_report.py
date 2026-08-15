@@ -175,8 +175,9 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
     ap = fp.get("alert", {}) or {}
     events = rfl.daily_flow_events(
         panel, pctile=float(ap.get("pctile", 0.99)), floor_yi=float(ap.get("floor_yi", 1.0)),
-        scan_days=int(ap.get("scan_days", 250)), top=int(ap.get("top", 8)),
-        min_history=int(ap.get("min_history", 250)))
+        scan_days=int(ap.get("scan_days", 22)), min_history=int(ap.get("min_history", 250)))
+    for e in events:                              # 附名称（条带图悬停/横幅展示用）
+        e["name"] = meta.get(e["symbol"], {}).get("name", e["symbol"])
     return {
         "window": window, "state": state, "group_roll": roll, "rolls": rolls,
         "events": events, "last_date": (roll.index[-1] if len(roll) else None),
