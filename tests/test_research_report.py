@@ -142,6 +142,52 @@ def test_shares_nav_figure_yaxis_titles():
     assert fig.layout.yaxis2.title.text == "份额（亿份）"   # 右轴（份额）
 
 
+# ---------------- flow_daily_figure（日度净申赎 · 事件级） ----------------
+
+import pytest  # noqa: E402  （本段断言用 approx）
+
+
+def test_flow_daily_figure_values_and_axes():
+    # +5e7份×净值2.0=+1.0亿柱；%线=+5%；双轴：左=亿元 右=%
+    idx = pd.date_range("2026-01-01", periods=30, freq="D")
+    sh = np.full(30, 1e9); sh[20:] = 1.05e9
+    shares = pd.DataFrame({"shares": sh}, index=idx)
+    nav = pd.DataFrame({"unit_nav": np.full(30, 2.0), "acc_nav": np.full(30, 2.0)}, index=idx)
+    fig = rep.flow_daily_figure("测试ETF(000000)", shares, nav)
+    assert fig is not None
+    bar, line = fig.data
+    assert bar.type == "bar" and line.type == "scatter"
+    assert bar.y[20] == pytest.approx(1.0)          # 5e7份 × 2.0 / 1e8 = +1亿
+    assert line.y[20] == pytest.approx(5.0)         # 1.05/1.0−1 = +5%
+    assert fig.layout.yaxis.title.text.startswith("净申赎额")
+    assert fig.layout.yaxis2.title.text == "日增减%"
+    # 柱色：红=净申购 绿=净赎回（第20天申购→红；无变化日 v=0 → 红(≥0)）
+    assert bar.marker.color[20] == "#dc2626"
+
+
+def test_flow_daily_figure_split_no_fake_bar():
+    # 拆分日（份额×2·净值÷2）：前复权后柱≈0、%≈0（原始口径会是 +100%/+数十亿巨柱）
+    idx = pd.date_range("2026-01-01", periods=30, freq="D")
+    unit = np.full(30, 2.0); unit[15:] = 1.0
+    sh = np.full(30, 1e9); sh[15:] = 2e9
+    shares = pd.DataFrame({"shares": sh}, index=idx)
+    nav = pd.DataFrame({"unit_nav": unit, "acc_nav": np.linspace(1, 1.2, 30)}, index=idx)
+    fig = rep.flow_daily_figure("测试ETF(000000)", shares, nav)
+    bar, line = fig.data
+    assert abs(bar.y[15]) < 1e-6
+    assert abs(line.y[15]) < 1e-6
+
+
+def test_flow_daily_figure_no_history_none():
+    assert rep.flow_daily_figure("X(0)", None, None) is None
+    idx = pd.date_range("2026-01-01", periods=2, freq="D")
+    shares = pd.DataFrame({"shares": [1e9, 1e9]}, index=idx)
+    nav = pd.DataFrame({"unit_nav": [1.0, 1.0], "acc_nav": [1.0, 1.0]}, index=idx)
+    assert rep.flow_daily_figure("X(0)", shares, nav) is None   # <3 观测
+
+
+
+
 # ---------------- render 结构（主题/tab/折叠明细/快速跳转/回顶部/排序） ----------------
 
 def _render_mini():

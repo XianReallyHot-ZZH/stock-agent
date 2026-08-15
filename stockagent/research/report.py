@@ -719,18 +719,58 @@ def _detail_chips(snap: dict) -> str:
     return "".join(chips)
 
 
+def flow_daily_figure(label: str, shares_df, nav_df):
+    """日度净申赎（事件级）：柱 = 净申赎额（亿元 = Δ份额 × 当日单位净值·拆分已调整，
+    红=净申购/绿=净赎回），线 = 份额日增减%（右轴，Δ份额/前日份额——分母随时间
+    变化，与柱不同形：柱看这笔申赎的金额大小，线看它相对基金当时体量的大小）。
+
+    份额必须用拆分前复权口径（timing.split_adjusted_shares）——原始份额跨拆分日
+    会画出一根假 +100%/数百亿的巨柱。无份额历史 → None（明细图组自动缩短）。"""
+    adj, _events = tm.split_adjusted_shares(shares_df, nav_df)
+    if adj is None or len(adj.dropna()) < 3:
+        return None
+    nav = pd.to_numeric(nav_df["unit_nav"], errors="coerce").dropna()
+    nav_al = nav.reindex(adj.index)
+    flow_yi = (adj.diff() * nav_al) / 1e8
+    pct = adj.pct_change() * 100.0
+    bar_colors = [("#dc2626" if (v == v and v >= 0) else "#16a34a") for v in flow_yi.values]
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Bar(
+        x=adj.index, y=flow_yi, name="净申赎额(亿)",
+        marker_color=bar_colors,
+        hovertemplate="%{x|%Y-%m-%d}<br>净申赎: %{y:+.2f}亿<extra></extra>"), secondary_y=False)
+    fig.add_trace(go.Scatter(
+        x=adj.index, y=pct, name="份额日增减%",
+        line=dict(color="#2563eb", width=1.2),
+        hovertemplate="%{x|%Y-%m-%d}<br>日增减: %{y:+.2f}%<extra></extra>"), secondary_y=True)
+    fig.update_layout(**_base_layout(f"{label} · 日度净申赎（柱:亿元=Δ份额×当日净值 · 线:份额日增减% · 拆分已调整）",
+                                     CHART_HEIGHT))
+    fig.update_xaxes(type="date", rangeselector=_RANGE_BUTTONS,
+                     rangeslider=dict(visible=True, thickness=0.02))
+    fig.update_yaxes(title_text="净申赎额(亿)", zeroline=True, zerolinewidth=1,
+                     gridcolor=C_GRID, secondary_y=False)
+    fig.update_yaxes(title_text="日增减%", zeroline=False, gridcolor="rgba(0,0,0,0)",
+                     secondary_y=True)
+    return fig
+
+
 def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int) -> list:
-    """每 ETF 明细图组：份额 vs 净值（剪刀差叠加）+ 净值-MA 偏离度（极值标记 + 分位）。"""
+    """每 ETF 明细图组：份额 vs 净值（剪刀差叠加）+ 净值-MA 偏离度（极值标记 + 分位）
+    + 日度净申赎（事件级：柱=亿元·线=%）。"""
     nm = meta.get(sym, {}).get("name", sym)
     aum = snap.get("aum_yi")
     label = f"{nm}({sym})" + (f" · 规模{aum:.0f}亿" if not _nan(aum) else "")
     sm = series_map.get(sym, {})
-    return [
+    figs = [
         shares_nav_figure(label, sm.get("shares"), sm.get("nav"),
                           ma_period=ma_period, current_shares=sm.get("current_shares"),
                           scissor=snap.get("scissor")),
         nav_deviation_figure(label, sm.get("nav"), snap, ma_period=ma_period),
     ]
+    fd = flow_daily_figure(label, sm.get("shares"), sm.get("nav"))
+    if fd is not None:
+        figs.append(fd)
+    return figs
 
 
 # ---------------- 页面级 CSS / JS（浅色默认 + body.dark 覆盖，与其他三看板同模式） ----------------
