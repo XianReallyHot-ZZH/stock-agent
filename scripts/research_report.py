@@ -141,6 +141,50 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     return snapshots, series_map, meta
 
 
+def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
+                       as_of: str | None) -> dict | None:
+    """组装「板块资金流向」payload（research/flow.py 纯函数）。
+
+    组聚合用 etf_pool.yaml 的 group 字段（9 行业组，插入序=pool 顺序即规范序）；
+    旧池无 group → None（render 端 section 静默省略，优雅降级）。阈值读
+    params.yaml research.flow，缺省走 flow.py 内置默认（旧 params 不崩）。
+    """
+    from stockagent.research import flow as rfl
+    groups: dict[str, list[str]] = {}
+    for sym in symbols:
+        g = meta.get(sym, {}).get("group")
+        if g:
+            groups.setdefault(g, []).append(sym)
+    if not groups:
+        return None
+    fp = cfg.params["research"].get("flow", {}) or {}
+    panel, excluded = rfl.flow_panel(series_map)
+    if not panel:
+        return None
+    window = int(fp.get("window", 20))
+    # 线图窗口切换（5/20/60 日）：预计算各窗口滚动；tile/state 仍用 window 主口径
+    windows = sorted({int(w) for w in fp.get("windows", [5, 20, 60])} | {window})
+    rolls = {w: rfl.group_rolling_flow(panel, groups, window=w) for w in windows}
+    roll = rolls[window]
+    state = rfl.pool_flow_state(
+        roll, window=window,
+        in_yi=float(fp.get("state_in_yi", 10.0)), out_yi=float(fp.get("state_out_yi", -10.0)),
+        gross_floor_yi=float(fp.get("gross_floor_yi", 15.0)),
+        breadth_floor_yi=float(fp.get("breadth_floor_yi", 1.0)),
+        breadth_min=float(fp.get("breadth_min", 0.5)))
+    monthly = rfl.group_monthly_matrix(panel, groups,
+                                       start_month=str(fp.get("month_start", "2021-01")))
+    return {
+        "window": window, "state": state, "group_roll": roll, "rolls": rolls,
+        "monthly": monthly,
+        "aum": rfl.group_aum_yi(panel, groups), "groups": list(groups),
+        "members": {g: [(s, meta.get(s, {}).get("name", s)) for s in syms]
+                    for g, syms in groups.items()},   # 看板展示组构成（chips 悬停+明细）
+        "excluded": [(s, meta.get(s, {}).get("name", s)) for s in excluded],
+        "as_of": as_of,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description="ETF 行业研究 · 择时跟踪看板 (read-only)")
     ap.add_argument("--backfill", choices=("nav", "pe", "scale", "earnings", "all"), default=None,
@@ -192,10 +236,12 @@ def main():
                     dates.append(str(s.index[-1]))
         as_of = max(dates) if dates else end
 
+    flow_payload = build_flow_payload(cfg, series_map, meta, symbols, as_of)
     html = rep.render(snapshots, series_map, meta, as_of=as_of,
                       signal_note="纯跟踪·无LLM解读",
                       ma_period=int(cfg.params["research"]["ma_period"]),
-                      pinned=list(cfg.params["research"].get("pinned_etfs", [])))
+                      pinned=list(cfg.params["research"].get("pinned_etfs", [])),
+                      flow=flow_payload)
     out = rep.write_html(html, args.output)
 
     if args.push_alerts:
@@ -223,6 +269,11 @@ def main():
     if excluded:
         names = "、".join(f"{sn['name']}({s})" for s, sn in excluded)
         print(f"\n   ⚠ NAV 历史不足未参与排名({len(excluded)}): {names}")
+    if flow_payload and flow_payload["state"].get("label_key") != "insufficient":
+        st = flow_payload["state"]
+        print(f"   💰 板块资金流向[{st['label']}] 近{flow_payload['window']}日全池净流入 "
+              f"{st['pool_net_yi']:+.0f}亿 · 毛额 {st['pool_gross_yi']:.0f}亿 · "
+              f"轮动强度 {st['intensity']:.2f}")
     print(f"\n   open: file:///{out.resolve()}")
 
 

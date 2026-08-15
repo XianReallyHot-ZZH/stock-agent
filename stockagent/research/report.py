@@ -451,6 +451,185 @@ def _quadrant_banner(snapshots: dict, meta: dict) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# 板块资金流向 section（份额视角 · research/flow.py 算好的 payload 驱动，本模块不算数）
+# ---------------------------------------------------------------------------
+
+# 行业组色环（25 组行业级分组；浅色底可辨；深色主题下线条色不变，仅纸底/轴色切换）
+_FLOW_COLORS = ["#2563eb", "#ea580c", "#16a34a", "#9333ea", "#0891b2", "#dc2626", "#d97706",
+                "#4f46e5", "#65a30d", "#db2777", "#0d9488", "#7c3aed", "#ca8a04", "#059669",
+                "#b91c1c", "#1d4ed8", "#f472b6", "#14b8a6", "#8b5cf6", "#a16207", "#4d7c0f",
+                "#9f1239", "#0f766e", "#6d28d9", "#be123c"]
+
+# 25 条线的 unified 悬浮框（全组横截面对比）：模板只给数值（unified 自动带
+# 顶部日期 + 每行彩色组名——模板里再写日期/组名会每行重复、框高翻倍被裁），
+# 字号压 9 → 单行×25 ≈ 410px；图高 600（有效绘图区 ≈450px）留足余量
+_FLOW_HEIGHT_LINES = 600
+
+
+def _flow_heat_height(n_groups: int) -> int:
+    """热力图高度按组数自适应（21 行业组 ≈ 580px，9 组 ≈ 360px）。"""
+    return max(300, 140 + 21 * max(1, n_groups))
+
+
+def flow_lines_figure(flow: dict) -> go.Figure:
+    """组级 W 日滚动净流入时序（亿元 = Δ份额×当日净值）。
+
+    updatemenus 一组 6 态按钮 = 窗口(5/20/60日) × 单位(绝对亿元/占组规模%) 的完整
+    状态切换——plotly 按钮无状态，每个按钮必须携带全部目标 y 数组与轴/图标题，
+    做不了两个独立维度各自切。% 模式防小组（红利 vs 医药）被压扁；流 signed 不用
+    对数轴；零轴常显。窗口数据来自 payload 的 rolls（无则退化单窗口×2态）。"""
+    aum = flow.get("aum") or {}
+    default_w = flow.get("window", 20)
+    rolls = flow.get("rolls") or {default_w: flow["group_roll"]}
+    windows = sorted(rolls)
+    roll0 = rolls[windows[0]]
+    x = pd.to_datetime(roll0.index)
+    fig = go.Figure()
+    for i, g in enumerate(roll0.columns):
+        fig.add_trace(go.Scatter(
+            x=x, y=roll0[g].astype(float), name=str(g),
+            line=dict(color=_FLOW_COLORS[i % len(_FLOW_COLORS)], width=1.4),
+            hovertemplate="%{fullData.name} %{y:+.1f}<extra></extra>"))
+
+    # 预生成全部 (窗口, 单位) 组合：按钮 label / 目标 y 数组 / 轴标题 / 图标题
+    combos = []
+    for w in windows:
+        roll = rolls[w]
+        abs_ys = [roll[g].astype(float).tolist() for g in roll.columns]
+        pct_ys = [[(v / aum[g] * 100.0) if (aum.get(g) or 0) > 0 else None
+                   for v in roll[g].astype(float)] for g in roll.columns]
+        combos.append((f"{w}日", abs_ys, "净流入(亿)",
+                       f"组级净流入 · {w}日滚动（亿元 = Δ份额×当日净值 · 份额=净申赎）"))
+        combos.append((f"{w}日%", pct_ys, "净流入(% 组规模)",
+                       f"组级净流入 · {w}日滚动（% 组规模）"))
+    active = 2 * windows.index(default_w)      # 默认态 = 主窗口 × 绝对亿元
+
+    fig.update_layout(**_base_layout(
+        f"组级净流入 · {default_w}日滚动（亿元 = Δ份额×当日净值 · 份额=净申赎）",
+        _FLOW_HEIGHT_LINES))
+    # unified 悬浮 = 同一时点全组横截面对比；模板=「组名 数值」同行一行高
+    # （此 plotly 版本 unified 行只带色点不自动带组名文本；日期只在框顶——
+    # 模板里写日期会每行重复、行高翻倍被裁，框顶格式由 xaxis.hoverformat 控）
+    fig.update_layout(hoverlabel=dict(font=dict(size=9)))
+    # 图内 legend 移除：tile 的组 chips 即图例（带色点+点击开关+双击独显，见 _PAGE_JS）
+    # —— 省掉 25 项换行图例的 2-3 行空间，绘图区更高、悬浮框也更从容
+    fig.update_layout(showlegend=False, margin=dict(t=64, l=54, r=54, b=28))
+    # 默认视图 1 年（此 plotly 版本 rangeselector 无 active 属性 → 显式设 x 初始
+    # range；按钮高亮不跟随初始 range 属版本限制，全历史走底部滑块/「全部」按钮）
+    x0 = x[-1] - pd.DateOffset(years=1)
+    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d",
+                     rangeselector=_RANGE_BUTTONS,
+                     rangeslider=dict(visible=True, thickness=0.02),
+                     range=[x0, x[-1]])
+    fig.update_yaxes(title_text="净流入(亿)", zeroline=True, zerolinewidth=1, gridcolor=C_GRID)
+    # 切换按钮放 rangeselector 右侧、避开换行 legend；active=默认态（主窗口·亿元）
+    fig.update_layout(updatemenus=[dict(
+        type="buttons", direction="right", x=0.36, xanchor="left", y=1.24, yanchor="bottom",
+        pad=dict(t=0, b=0), active=active, buttons=[
+            dict(label=lbl, method="update",
+                 args=[{"y": ys}, {"yaxis.title.text": ytitle, "title.text": ftitle}])
+            for lbl, ys, ytitle, ftitle in combos
+        ])])
+    return fig
+
+
+def flow_heatmap_figure(flow: dict) -> go.Figure:
+    """组×月 份额净申赎 ROC 热力图。红=正=流入/绿=负=流出（A股惯例；本节局部语义，
+    与排名表筹码列相反——节首副行有图例）。NaN 格透明=无数据；末列=月内至今。
+
+    单元格色不随主题切换（显式 colorscale），_applyPlotlyTheme 只动纸底/轴/字色。"""
+    m = flow["monthly"]
+    z = m.values.astype(float) * 100.0
+    text = [["" if pd.isna(v) else f"{v:+.0f}" for v in row] for row in z]
+    fig = go.Figure(go.Heatmap(
+        z=z, x=[str(c) for c in m.columns], y=[str(i) for i in m.index],
+        zmid=0, colorscale=[[0.0, "#16a34a"], [0.5, "#e8e7e1"], [1.0, "#dc2626"]],
+        colorbar=dict(title="月度ROC%", thickness=10, tickfont=dict(size=9)),
+        text=text, texttemplate="%{text}", textfont=dict(size=9, color="#1e293b"),
+        hovertemplate="%{y} · %{x}<br>份额ROC %{z:+.1f}%<extra></extra>"))
+    fig.update_layout(**_base_layout(
+        "组×月 份额净申赎 ROC（月末/上月末−1 · 红=流入 绿=流出 · 空白=无数据 · 末列=月内至今）",
+        _flow_heat_height(len(m.index))))
+    fig.update_yaxes(autorange="reversed", showgrid=False)     # 组自上而下（yaml 规范序）
+    ticks = [str(c) for c in m.columns]
+    fig.update_xaxes(tickmode="array", tickvals=ticks[::3], tickangle=-45,
+                     tickfont=dict(size=10), showgrid=False)
+    return fig
+
+
+def _flow_section(flow: dict) -> str:
+    """板块资金流向 section HTML：增量vs存量 tile + 两个 lazy-chart 占位（CHARTS['__flow']）。"""
+    st = flow.get("state") or {}
+    W = flow.get("window", 20)
+    label, key = st.get("label", "数据不足"), st.get("label_key", "insufficient")
+    net, gross = st.get("pool_net_yi"), st.get("pool_gross_yi")
+    inten, br = st.get("intensity"), st.get("breadth")
+    lbl_cls = {"broad_in": "flow-lbl-in", "focused_in": "flow-lbl-in",
+               "rotation": "flow-lbl-rot", "net_out": "flow-lbl-out"}.get(key, "flow-lbl-quiet")
+    net_cls = "flow-pos" if (not _nan(net) and net > 0) else "flow-neg"
+    net_s = f"{net:+.0f}亿" if not _nan(net) else "NA"
+    gross_s = f"{gross:.0f}亿" if not _nan(gross) else "NA"
+    inten_s = f"{inten:.2f}" if not _nan(inten) else "NA"
+    br_s = f"{br:.0%}" if not _nan(br) else "NA"
+    members = flow.get("members") or {}
+
+    def _members_title(g: str) -> str:
+        ms = members.get(g) or []
+        return ("成员：" + "、".join(f"{nm}({s})" for s, nm in ms)) if ms else ""
+
+    groups_order = flow.get("groups") or []
+
+    def _group_color(g: str) -> str:
+        return _FLOW_COLORS[groups_order.index(g) % len(_FLOW_COLORS)] if g in groups_order else "#94a3b8"
+
+    chips = "".join(
+        f'<span class="flow-chip {"flow-pos" if (not _nan(gf.get("flow_yi")) and gf["flow_yi"] > 0) else "flow-neg"} on" '
+        f'data-flow-group="{gf["group"]}" title="{_members_title(gf["group"])}" '
+        f'onclick="flowChipClick(\'{gf["group"]}\')" '
+        f'ondblclick="flowChipSolo(\'{gf["group"]}\')">'
+        f'<i class="flow-dot" style="background:{_group_color(gf["group"])}"></i>'
+        f'{gf["group"]} {gf["flow_yi"]:+.1f}亿</span>'
+        for gf in (st.get("group_flows") or []) if not _nan(gf.get("flow_yi")))
+    chips += ('<span class="flow-chip flow-chip-all" onclick="flowChipAll()" '
+              'title="恢复全部组显示">↺ 全部</span>')
+    groups_lines = "".join(
+        f'<div><b>{g}</b><span class="muted">（{len(ms)}只）</span>：{"、".join(nm for _s, nm in ms)}</div>'
+        for g, ms in members.items() if ms)
+    groups_block = (f'<details class="flow-groups"><summary>🏷️ {len(members)} 行业组构成'
+                    f'（点击展开 · 悬停上方组 chip 可看成员代码）</summary>'
+                    f'<div class="flow-groups-body">{groups_lines}</div></details>'
+                    if groups_lines else "")
+    excl = flow.get("excluded") or []
+    excl_s = (f' · ⚠️ 未计入{len(excl)}只无份额历史：'
+              + "、".join(f"{nm}({s})" for s, nm in excl[:6])
+              + ("等" if len(excl) > 6 else "")) if excl else ""
+    return (
+        '<h3>💰 板块资金流向（份额视角）</h3>'
+        '<p class="sub">ETF份额=净申赎（配置盘的脚印·比主力资金流干净）· 金额=Δ份额×当日净值 · '
+        '本节颜色：<b class="flow-pos">红=净流入</b>/<b class="flow-neg">绿=净流出</b>'
+        '（A股惯例·与排名表筹码列相反）· 组=下方「行业组构成」'
+        f'{excl_s}</p>'
+        '<div class="summary-box flow-tile">'
+        f'<div class="flow-lbl {lbl_cls}">{label}</div>'
+        f'<div class="flow-stats">近{W}日全池净流入 <b class="{net_cls}">{net_s}</b>'
+        f' · 毛额(Σ|组净流入|) {gross_s} · 轮动强度(净/毛) {inten_s} · 流入广度 {br_s}'
+        '<span class="sub2">（强度 0=纯对冲轮动 1=全同向 · 温度计非开关·标签只是辅助）</span></div>'
+        f'<div class="flow-chips">{chips}</div>'
+        '</div>'
+        f'{groups_block}'
+        '<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="0" '
+        f'style="min-height:{_FLOW_HEIGHT_LINES}px"></div></div>'
+        '<p class="sub">⌨ 图上按钮：<b>N日</b> = 过去 N 个交易日的净流入<b>合计</b>'
+        '（5日≈周内爆发·最灵敏 ｜ 20日≈月度节奏·与上方 tile 同口径 ｜ 60日≈季度趋势·最钝）；'
+        '带 <b>%</b> = 各组占<b>自身规模</b>的百分比（大小组可横向比），不带 = 绝对亿元。'
+        '切换只换窗口/口径不改数据；滚动值对拐点的反应约滞后半个窗口。<br>'
+        '🎛 组筛选：<b>单击</b>上方组 chip = 该组线开/关（灰=已隐藏）· <b>双击</b> = 仅看该组'
+        '（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。</p>'
+        '<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
+        f'style="min-height:{_flow_heat_height(len(members) or 1)}px"></div></div>')
+
+
 def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) -> str:
     rows = sorted(snapshots.items(), key=lambda kv: _extremeness(kv[1]), reverse=True)
     out = ""
@@ -464,6 +643,9 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
         style = snap.get("style", "growth")
         style_cn = _STYLE_CN.get(style, style)
         style_cls = _STYLE_CLS.get(style, "")
+        # 行业组（板块资金流向的聚合口径）副行——与流向 section 互相参照
+        group = meta.get(sym, {}).get("group") or ""
+        group_html = f"<br><span class='sub2 muted'>{group}</span>" if group else ""
 
         # 净值MA偏离 cell：当前偏离%（着色）+ 分位 + 极值区 chip
         cur = snap.get("nav_dev_cur")
@@ -514,7 +696,7 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
             f"data-chip=\"{_num_attr((snap.get('chip') or {}).get('flow_main'))}\">"
             f"<td><b><a href='#{sym}' class='etf-link'>{nm}</a></b>"
             f"<br><span class='sub2 muted'>{sym}</span>{aum_html}</td>"
-            f"<td class='c bold {style_cls}'>{style_cn}</td>"
+            f"<td class='c bold {style_cls}'>{style_cn}{group_html}</td>"
             f"{dev_cell}{sc_cell}{chip_cell}"
             f"{_earnings_cell(snap)}"
             f"<td class='c text2'>{to_html}</td></tr>"
@@ -615,6 +797,26 @@ p.sub { color:var(--muted); font-size:13px; margin-top:2px; }
 .en-dn { color:#ea580c; } body.dark .en-dn { color:#fb923c; }
 .en-bad { color:#dc2626; } body.dark .en-bad { color:#f87171; }
 .en-na { color:var(--faint); }
+/* 板块资金流向 section（红=流入/绿=流出·A股惯例·本节局部语义，与筹码列相反） */
+.flow-pos { color:#dc2626; } body.dark .flow-pos { color:#f87171; }
+.flow-neg { color:#16a34a; } body.dark .flow-neg { color:#4ade80; }
+.flow-tile { display:flex; flex-direction:column; gap:6px; }
+.flow-lbl { font-size:20px; font-weight:700; }
+.flow-lbl-in { color:#dc2626; } body.dark .flow-lbl-in { color:#f87171; }
+.flow-lbl-rot { color:#7c3aed; } body.dark .flow-lbl-rot { color:#c4b5fd; }
+.flow-lbl-out { color:#16a34a; } body.dark .flow-lbl-out { color:#4ade80; }
+.flow-lbl-quiet { color:var(--muted); }
+.flow-stats { font-size:13px; color:var(--text2); }
+.flow-chips { display:flex; flex-wrap:wrap; gap:6px; }
+.flow-chip { background:var(--chipbg); border-radius:10px; padding:2px 8px; font-size:12px;
+             cursor:pointer; user-select:none; }   /* 点击=线开关·双击=独显·title=成员列表 */
+.flow-chip:not(.on) { opacity:.38; filter:grayscale(.8); }   /* 关闭态：变灰去色 */
+.flow-dot { display:inline-block; width:8px; height:8px; border-radius:50%;
+            margin-right:4px; vertical-align:baseline; }
+.flow-groups { margin-top:2px; }
+.flow-groups summary { cursor:pointer; color:var(--muted); font-size:12px; }
+.flow-groups-body { display:grid; grid-template-columns:repeat(3, minmax(0,1fr));
+                    gap:2px 18px; font-size:12px; color:var(--text2); padding:6px 0 2px; }
 /* 排名表 */
 table { border-collapse:collapse; width:100%; margin:12px 0; font-size:13px; background:var(--card); }
 th { background:var(--thbg); padding:10px; text-align:center; border-bottom:2px solid var(--border2); }
@@ -776,7 +978,41 @@ function _renderChart(el){
   if(el.style.minHeight) el.style.height = el.style.minHeight;
   Plotly.newPlot(el, list[i], {responsive:true, displaylogo:false}).then(function(){
     if(el.dataset.rendered === '1') _applyPlotlyTheme(el, _isDark());
+    if(sym === '__flow' && i === 0) _applyFlowFilter();   // 组chips过滤态在(重)渲染后恢复
   }).catch(function(){});
+}
+// —— 板块资金流向：组 chips = 线图图例开关（图内 legend 已移除，chips 即图例）——
+// 单击 chip=该组线开关 · 双击=仅看该组(已独显则复位) · ↺全部=全开
+function _flowLinesEl(){
+  return document.querySelector('.lazy-chart[data-sym="__flow"][data-idx="0"]');
+}
+function _applyFlowFilter(){
+  var el = _flowLinesEl();
+  if(!el || el.dataset.rendered !== '1' || !el.data) return;
+  var vis = el.data.map(function(tr){
+    var c = document.querySelector('.flow-chip[data-flow-group="' + tr.name + '"]');
+    return (!c || c.classList.contains('on')) ? true : 'legendonly';
+  });
+  try { Plotly.restyle(el, {'visible': vis}); } catch(e) {}
+}
+function flowChipClick(name){
+  var c = document.querySelector('.flow-chip[data-flow-group="' + name + '"]');
+  if(c) c.classList.toggle('on');
+  _applyFlowFilter();
+}
+function flowChipSolo(name){
+  var chips = [].slice.call(document.querySelectorAll('.flow-chip[data-flow-group]'));
+  var nc = document.querySelector('.flow-chip[data-flow-group="' + name + '"]');
+  var isSolo = nc && nc.classList.contains('on') &&
+               chips.filter(function(c){ return c.classList.contains('on'); }).length === 1;
+  chips.forEach(function(c){ c.classList.toggle('on', isSolo ? true : c === nc); });
+  _applyFlowFilter();
+}
+function flowChipAll(){
+  [].slice.call(document.querySelectorAll('.flow-chip[data-flow-group]')).forEach(function(c){
+    c.classList.add('on');
+  });
+  _applyFlowFilter();
 }
 function _purgeChart(el){
   if(el.dataset.rendered !== '1') return;
@@ -893,8 +1129,12 @@ window.addEventListener('load', _openTarget);
 
 def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
            signal_note: str = "", ma_period: int = 60, pool_summary: str = "",
-           pinned: list[str] | None = None) -> str:
-    """Build the full HTML. series_map[symbol] = {close, shares, nav}."""
+           pinned: list[str] | None = None, flow: dict | None = None) -> str:
+    """Build the full HTML. series_map[symbol] = {close, shares, nav}。
+
+    flow: research/flow.py 的 payload（{window, state, group_roll, monthly, aum,
+    groups, excluded, as_of}），由 scripts/research_report.py 组装；None/数据不足 →
+    section 整体省略（优雅降级）。"""
     # data_sufficient ETFs 参与排名；不足者（NAV 历史不够算偏离度）保留明细图、不进排名。
     ranked = {s: sn for s, sn in snapshots.items() if sn.get("data_sufficient", True)}
     excluded = {s: sn for s, sn in snapshots.items() if not sn.get("data_sufficient", True)}
@@ -928,6 +1168,12 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
         chart_blocks.append(block + "</details>")
         jump_options.append(f'<option value="{sym}">{nm}（{sym}）</option>')
     charts_html = "\n".join(chart_blocks)
+    # 板块资金流向：图表挂 CHARTS['__flow'] 伪 key（JS 纯 dict 查找，与 ETF 图同一懒渲染管线）
+    flow_html = ""
+    if flow and (flow.get("state") or {}).get("label_key") not in (None, "insufficient"):
+        flow_figs = [flow_lines_figure(flow), flow_heatmap_figure(flow)]
+        charts_json["__flow"] = [f.to_json() for f in flow_figs]
+        flow_html = _flow_section(flow)
     _esc = lambda s: re.sub(r"</script", r"<\\/script", s, flags=re.I)
     entries = _esc(",\n".join(f'"{sym}":[{",".join(charts_json[sym])}]' for sym in charts_json))
     charts_script = ("<script>\n" + _esc(get_plotlyjs()) + "\nvar CHARTS={" + entries + "};\n"
@@ -972,6 +1218,12 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
 
     extreme_banner_html = _extreme_banner(snapshots, meta)
     quadrant_banner_html = _quadrant_banner(snapshots, meta)
+    flow_guide = ("" if not flow_html else
+                  "④ <b>板块资金流向（份额视角）</b>：ETF份额=净申赎（配置盘的脚印，比主力资金流干净——"
+                  "真实现金进出·非逐笔推断）；份额流入≠看好（A股常有越跌越买的逆势申购，须与偏离度交叉看）；"
+                  "「板块间流向」是推断非直接观测（申赎是独立净额·资金来源无标签，存量约束下的此消彼长"
+                  "=跷跷板最强证据）；本池是精选池非全市场，流出可能去了池外主题ETF（代表性偏差）；"
+                  "拆分/折算已做前复权（份额×净值反向断崖检测），不计入流入。<br>")
 
     return f"""<html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -984,10 +1236,11 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
 <div class="guide-body">本看板跟踪三件事——① <b>净值-MA{ma_period}偏离度</b>：净值相对自身均线的偏离 + 历史百分位分位（0=最负/超卖…1=最正/超买），副图标历史极值「第几低/高」（1=史上最极端，纯观察）。
 ② <b>份额-净值剪刀差</b>：份额与净值走向分化（一升一降）时置灰标注漂移幅度与窗口天数；检不出干净分化则只画原始双线。
 ③ <b>偏离度×筹码 四象限提醒</b>：偏离度进入自身历史 5%/95% 极端分位 × 筹码方向（份额申赎 5/10/20/30/60 日近端等差加权投票·±1% 死区·阈值2，机构行为代理·主体不可辨）交叉——超卖+筹码增=🟢机会（深跌有承接）/超买+筹码减=🟠风险（高位兑现）/超卖+筹码减=🔴严重警告（深跌无承接）/超买+筹码增=🔵关注（惯性未死）。筹码多窗口值（5/10/20/30/60 日净变化率）在排名表第二行与四象限条目下直接展示，一眼看申赎节奏。观察坐标·非买卖建议。<br>
-表格点击表头可排序；逐标的明细默认折叠，点击行展开，或用右侧下拉快速跳转。</div></details>
+{flow_guide}表格点击表头可排序；逐标的明细默认折叠，点击行展开，或用右侧下拉快速跳转。</div></details>
 {summary_html}
 {extreme_banner_html}
 {quadrant_banner_html}
+{flow_html}
 <h3>📊 择时跟踪排名 · 三类分页（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只 NAV 历史不足未参与" or ""}）</h3>
 {excluded_note}
 {tabs_html}

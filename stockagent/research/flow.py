@@ -1,0 +1,277 @@
+"""板块资金流向（份额视角）· 跨 ETF 横截面纯函数。
+
+研究看板「板块资金流向」section 的计算核心：把池内 ETF 的份额净申赎聚合到
+行业组（etf_pool.yaml 的 group 字段，9 组），回答两个问题：
+
+  1. 钱是全市场增量进来，还是板块间存量轮动？
+     —— 全池净流入 vs 毛额（Σ|各组净流入|）的分解 + 轮动强度 + 定性标签
+        （增量普涨/增量聚焦/存量轮动/净赎回/缩量观望；温度计非开关，数字永远展示）。
+  2. 各组各自的净流入节奏与热度迁移史？
+     —— 组级 W 日滚动净流入时序（亿元）+ 组×月 份额 ROC 热力图。
+
+口径：flow_t = (shares_t − shares_{t−1}) × unit_nav_t / 1e8（Δ份额 × 当日单位
+净值，亿元；AUM 口径的真实现金进出，unit_nav 才是可交易的真实每份价值）。
+拆分/份额折算事件由 timing.split_adjusted_shares 前复权消掉（份额×unit_nav
+反向断崖检测，见该函数 docstring；同包内引用，非跨包耦合）。
+
+方法论注记（与看板读图说明同步，防止误读）：
+  - ETF 份额 = 净申赎（配置盘的脚印，比股票"主力资金流"干净——真实现金进出，
+    非逐笔成交方向推断）。
+  - 份额流入 ≠ 看好：A 股常见越跌越买的逆势申购——必须与偏离度/净值动量交叉看。
+  - 「板块间流向」是推断非观测：每只 ETF 的申赎是独立净额，资金来源无标签
+    （可能来自存款/卖股票/池外 ETF）；存量约束下的此消彼长是跷跷板的最强证据。
+  - 池是精选池非全市场，流出可能去了池外主题 ETF（代表性偏差）。
+
+隔离：纯函数（pandas 进 → DataFrame/dict 出），不 import DB/config；所有阈值
+都是函数参数，由 scripts/research_report.py 从 params.yaml research.flow 注入。
+不喂交易引擎（research 只读旁路）。
+"""
+from __future__ import annotations
+
+import numpy as np
+import pandas as pd
+
+from stockagent.research.timing import split_adjusted_shares
+
+YI = 1e8  # 份 × 元/份 → 亿元
+
+
+# ---------------------------------------------------------------------------
+# 单 ETF 流入原语
+# ---------------------------------------------------------------------------
+
+def etf_flow_yi(shares_al: pd.Series, nav_al: pd.Series) -> pd.Series:
+    """日净流入（亿元），索引与对齐后份额一致：flow_t = Δshares × nav_t / 1e8。
+
+    shares_al/nav_al 应为 split_adjusted_shares 对齐产物（同一 unit_nav 日历）。
+    diff() 使首个有效份额前为 NaN（ETF「出现」不算流入；上市前 reindex 后为 0）。
+    """
+    if shares_al is None or nav_al is None:
+        return pd.Series(dtype=float)
+    flow = (shares_al.diff() * nav_al) / YI
+    return flow
+
+
+def flow_panel(series_map: dict, min_obs: int = 2) -> tuple[dict, list]:
+    """从 series_map 组装逐 ETF 对齐面板（拆分前复权口径）。
+
+    series_map[sym] = {"shares": Store.get_scale_series df | None,
+                       "nav":    Store.get_nav_series df | None,
+                       ...}（多余 key 如 "current_shares" 忽略——spot-only 标的
+    无历史序列，本来就不该进资金流聚合）。
+
+    Returns (panel, excluded):
+      panel[sym]  = {"shares": 前复权份额(unit_nav 日历, ffill),
+                     "nav":    对齐 unit_nav,
+                     "flow":   etf_flow_yi(...),
+                     "splits": 拆分事件列表}
+      excluded    = [sym, ...] 份额/净值不可用或有效份额观测 < min_obs 的标的
+                    （进 panel 的条件按数据判，不按名单硬编码）。
+    中途上市 ETF 正常纳入：上市前 flow=0（真实含义，非缺数）。
+    """
+    panel: dict = {}
+    excluded: list = []
+    for sym, m in (series_map or {}).items():
+        shares_df = (m or {}).get("shares")
+        nav_df = (m or {}).get("nav")
+        # min_obs 按**原始**份额观测数判（对齐 ffill 会把 1 行放大成整条日历）
+        if shares_df is None or "shares" not in shares_df.columns:
+            excluded.append(sym)
+            continue
+        raw_obs = len(pd.to_numeric(shares_df["shares"], errors="coerce").dropna())
+        if raw_obs < min_obs:
+            excluded.append(sym)
+            continue
+        adj, events = split_adjusted_shares(shares_df, nav_df)
+        if adj is None or adj.dropna().empty:
+            excluded.append(sym)
+            continue
+        nav_al = pd.to_numeric(nav_df["unit_nav"], errors="coerce").dropna()
+        nav_al = nav_al.reindex(adj.index)
+        panel[sym] = {"shares": adj, "nav": nav_al, "flow": etf_flow_yi(adj, nav_al),
+                      "splits": events}
+    return panel, excluded
+
+
+# ---------------------------------------------------------------------------
+# 组级聚合
+# ---------------------------------------------------------------------------
+
+def group_rolling_flow(panel: dict, groups: dict[str, list[str]],
+                       window: int = 20) -> pd.DataFrame:
+    """组级 W 日滚动净流入（亿元）。groups: {组名: [sym,...]}（插入序=列序）。
+
+    每组 = Σ成员 flow，统一对齐到**全池**并集日历、缺数补 0（上市前/首观测/
+    个别成员净值晚一天 → 0 流入是真实含义），再 rolling(window, min_periods=window).sum()。
+    必须对齐全池而非组内日历：单成员组的净值日历若短于全池（如 159941 净值晚一天），
+    组内对齐会让该组在 DataFrame 拼接时尾部变 NaN。
+    返回 DataFrame：index=日期str 升序、columns=组名（groups 插入序）、值=亿元。
+    """
+    if not panel:
+        return pd.DataFrame()
+    pool_idx = sorted(set().union(*(panel[s]["flow"].index for s in panel)))
+    if not pool_idx:
+        return pd.DataFrame()
+    frames = {}
+    for g, members in groups.items():
+        members_in = [s for s in members if s in panel]
+        if not members_in:
+            continue
+        total = pd.Series(0.0, index=pool_idx)
+        for s in members_in:
+            total = total.add(panel[s]["flow"].reindex(pool_idx).fillna(0.0), fill_value=0.0)
+        frames[g] = total.rolling(window, min_periods=window).sum()
+    if not frames:
+        return pd.DataFrame()
+    return pd.DataFrame(frames).sort_index()
+
+
+def group_aum_yi(panel: dict, groups: dict[str, list[str]]) -> dict[str, float]:
+    """各组最新规模（亿元）= Σ成员 末份份额 × 末 unit_nav / 1e8。"""
+    out: dict[str, float] = {}
+    for g, members in groups.items():
+        tot = 0.0
+        for s in members:
+            if s not in panel:
+                continue
+            sh = panel[s]["shares"].dropna()
+            nv = panel[s]["nav"].reindex(sh.index).dropna()
+            if sh.empty or nv.empty:
+                continue
+            tot += float(sh.iloc[-1]) * float(nv.iloc[-1]) / YI
+        out[g] = tot
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 增量 vs 存量 分解（tile 数据）
+# ---------------------------------------------------------------------------
+
+def pool_flow_state(group_roll: pd.DataFrame, *, window: int | None = None,
+                    in_yi: float = 10.0, out_yi: float = -10.0,
+                    gross_floor_yi: float = 15.0, breadth_floor_yi: float = 1.0,
+                    breadth_min: float = 0.5) -> dict:
+    """全池资金状态分解（取 group_roll 末行 = 截止最近交易日的 W 日窗口）。
+
+    指标（温度计，数字永远展示；标签只是辅助阅读）：
+      pool_net_yi    = Σ各组净流入 —— 全池口径的增量/撤退
+      pool_gross_yi  = Σ|各组净流入| —— 组间双向活跃度（毛额）
+      intensity      = |net|/gross ∈ [0,1] —— 0=纯对冲（存量轮动），1=全同向
+      breadth        = 净流入 ≥ breadth_floor_yi 的组占比 —— 区分「普涨」vs「独大」
+                       （净/毛比对这两种状态都 ≈1，必须靠广度分开）
+      concentration  = max|组流|/gross —— 最大单组贡献占比（诊断量，不参与判定）
+
+    标签判定树（顺序求值，完备）：
+      net ≤ out_yi                     → 净赎回 (net_out)
+      net ≥ in_yi  且 breadth ≥ min    → 增量普涨 (broad_in)
+      net ≥ in_yi  且 breadth < min    → 增量聚焦 (focused_in)
+      |net| < in_yi 且 gross ≥ floor   → 存量轮动 (rotation)
+      其余（毛额不足，双向都不活跃）     → 缩量观望 (quiet)
+      无有效数据                        → 数据不足 (insufficient)
+    """
+    if group_roll is None or len(group_roll) == 0 or group_roll.dropna(how="all").empty:
+        return {"label": "数据不足", "label_key": "insufficient", "window": window,
+                "pool_net_yi": np.nan, "pool_gross_yi": np.nan, "intensity": np.nan,
+                "breadth": np.nan, "concentration": np.nan, "group_flows": [],
+                "n_groups": 0}
+    last = group_roll.iloc[-1].dropna()
+    if last.empty:
+        return {"label": "数据不足", "label_key": "insufficient", "window": window,
+                "pool_net_yi": np.nan, "pool_gross_yi": np.nan, "intensity": np.nan,
+                "breadth": np.nan, "concentration": np.nan, "group_flows": [],
+                "n_groups": 0}
+    net = float(last.sum())
+    gross = float(last.abs().sum())
+    intensity = abs(net) / gross if gross > 0 else np.nan
+    n_groups = len(last)
+    breadth = float((last >= breadth_floor_yi).sum()) / n_groups if n_groups else np.nan
+    concentration = float(last.abs().max()) / gross if gross > 0 else np.nan
+    if net <= out_yi:
+        key = "net_out"
+    elif net >= in_yi and breadth >= breadth_min:
+        key = "broad_in"
+    elif net >= in_yi:
+        key = "focused_in"
+    elif gross >= gross_floor_yi:
+        key = "rotation"
+    else:
+        key = "quiet"
+    labels = {"net_out": "净赎回", "broad_in": "增量普涨", "focused_in": "增量聚焦",
+              "rotation": "存量轮动", "quiet": "缩量观望"}
+    return {
+        "label": labels[key], "label_key": key,
+        "window": window,
+        "pool_net_yi": net, "pool_gross_yi": gross,
+        "intensity": intensity, "breadth": breadth, "concentration": concentration,
+        "group_flows": [{"group": g, "flow_yi": float(v)} for g, v in last.items()],
+        "n_groups": n_groups,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 组×月 热力图矩阵
+# ---------------------------------------------------------------------------
+
+def group_monthly_matrix(panel: dict, groups: dict[str, list[str]],
+                         start_month: str = "2021-01",
+                         end_month: str | None = None) -> pd.DataFrame:
+    """组×月 份额净申赎 ROC（小数；热力图格式化为 %）。
+
+    行=组名（groups 插入序）、列='YYYY-MM' 升序。
+    每组每月：roc = Σ_{valid} 月末份额 / Σ_{valid} 上月末份额 − 1
+    （月末 vs 上月末：落在月初第一个交易日的申赎归入当月——「月初 vs 月末」
+    口径会把它整笔丢掉）。首月无上月末 → 用并集日历首日做基点。
+    端点取并集 NAV 日历在该月的最后一个交易日；valid = 成员在两端都非 NaN
+    （月中上市 → 当月剔除，分子分母同剔，不造"上市即巨幅流入"假象；
+    ffill 对齐下上月末值 = 天然衔接值）。全组无 valid 成员 → NaN（空白=无数据）。
+    末月为「月内至今」。
+    """
+    if not panel:
+        return pd.DataFrame()
+    cal = sorted(set().union(*(panel[s]["shares"].index for s in panel)))
+    if not cal:
+        return pd.DataFrame()
+    cal_s = pd.Series(pd.to_datetime(cal), index=cal)
+    first_month = pd.Period(start_month, freq="M")
+    last_month = pd.Period(end_month, freq="M") if end_month else cal_s.iloc[-1].to_period("M")
+    months = pd.period_range(first_month, last_month, freq="M")
+
+    # 每月端点：月末 = 该月并集日历最后一天；基点 = 上月末（首月 = 日历首日）
+    ends: dict[str, str] = {}
+    base: dict[str, str | None] = {}
+    prev_end: str | None = None
+    for m in months:
+        in_m = cal_s[cal_s.dt.to_period("M") == m]
+        key = str(m)
+        if in_m.empty:
+            ends[key] = prev_end or ""      # 无交易日 → 空端点 → NaN 单元
+            base[key] = None
+            continue
+        ends[key] = in_m.index[-1]
+        base[key] = prev_end if prev_end is not None else cal[0]
+        prev_end = ends[key]
+
+    rows = {}
+    for g, members in groups.items():
+        row = {}
+        for m in months:
+            key = str(m)
+            d0, d1 = base.get(key), ends.get(key)
+            num = den = 0.0
+            valid = False
+            if d0 and d1 and d0 != d1:
+                for s in members:
+                    if s not in panel:
+                        continue
+                    sh = panel[s]["shares"]
+                    v0, v1 = sh.get(d0), sh.get(d1)
+                    if v0 is None or v1 is None or pd.isna(v0) or pd.isna(v1) or v0 <= 0:
+                        continue
+                    den += float(v0)
+                    num += float(v1)
+                    valid = True
+            row[key] = (num / den - 1.0) if (valid and den > 0) else np.nan
+        rows[g] = row
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame.from_dict(rows, orient="index")[[str(m) for m in months]]

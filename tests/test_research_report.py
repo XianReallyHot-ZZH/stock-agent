@@ -220,3 +220,114 @@ def test_render_details_collapsed_pinned_open():
     assert '<span class="etf-chips">' in html and "偏离 -15.0%" in html
     # 置顶标 ⭐、不再全员 📌
     assert "⭐" in html and "📌" not in html
+
+
+# ---------------- 板块资金流向 section（flow payload 驱动 · report.py 不算数） ----------------
+
+def _flow_mini():
+    idx = pd.date_range("2026-01-01", periods=40, freq="D")
+    roll = pd.DataFrame({"大金融": np.linspace(-2, 8, 40), "科技": np.linspace(3, -6, 40)},
+                        index=idx)
+    monthly = pd.DataFrame({"2026-01": [0.05, -0.02], "2026-02": [-0.03, 0.08],
+                            "2026-03": [0.01, 0.04]}, index=["大金融", "科技"])
+    state = {"label": "存量轮动", "label_key": "rotation", "window": 20,
+             "pool_net_yi": 2.0, "pool_gross_yi": 14.0, "intensity": 0.14,
+             "breadth": 0.22, "concentration": 0.6,
+             "group_flows": [{"group": "大金融", "flow_yi": 8.0},
+                             {"group": "科技", "flow_yi": -6.0}],
+             "n_groups": 2}
+    return {"window": 20, "state": state, "group_roll": roll, "monthly": monthly,
+            "aum": {"大金融": 900.0, "科技": 1200.0}, "groups": ["大金融", "科技"],
+            "members": {"大金融": [("512800", "银行ETF")], "科技": [("512480", "半导体ETF")]},
+            "excluded": [("000000", "无份额ETF")], "as_of": "2026-08-14"}
+
+
+def test_render_flow_section_present():
+    snaps = {"159915": {"nav_dev_pct": 0.02, "nav_dev_cur": -0.12, "nav_extreme_events": [],
+                        "data_sufficient": True, "style": "growth", "aum_yi": 500.0,
+                        "chip": {"data_sufficient": True, "state": "accumulating", "votes": 6,
+                                 "flow_main": 0.03, "flow_main_window": 20,
+                                 "flows": {20: 0.03}}}}
+    html = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
+                      {"159915": {"name": "创业板ETF", "group": "成长宽基"}},
+                      as_of="2026-08-14", flow=_flow_mini())
+    assert "💰 板块资金流向（份额视角）" in html
+    # 线图 + 热力图两个懒渲染占位（_PAGE_JS 选择器里另有 data-sym 字样，只数占位 div）
+    assert html.count('class="lazy-chart" data-sym="__flow"') == 2
+    assert '"__flow":[' in html                          # 图 JSON 挂 CHARTS 伪 key
+    assert "存量轮动" in html and "轮动强度" in html      # tile 标签 + 指标
+    assert "大金融 +8.0亿" in html and "科技 -6.0亿" in html  # 组 chips
+    assert "无份额ETF" in html                           # 未计入注记
+    assert "配置盘的脚印" in html                        # 读图说明 ④ 方法论注记
+    assert "图上按钮" in html and "60日≈季度趋势" in html  # 线图下方按钮说明常驻
+    # 组筛选：chips=图例开关（图内 legend 已移除）
+    assert html.count('data-flow-group="') >= 2            # 每组 chip 带筛选属性
+    assert 'onclick="flowChipClick(' in html and 'ondblclick="flowChipSolo(' in html
+    assert "↺ 全部" in html and "仅看该组" in html         # 复位 chip + 操作说明
+    assert 'class="flow-dot"' in html                      # chip 色点=线色
+    # 组构成可见：chips 悬停 title 带成员代码 + 可展开明细块列全成员 + 排名表类型列组副行
+    assert 'title="成员：银行ETF(512800)"' in html
+    assert "行业组构成" in html and "银行ETF" in html and "半导体ETF" in html
+    assert "成长宽基" in html                            # 排名表 类型 cell 的组副行
+    # 位置：四象限横幅之后、排名标题之前
+    i_banner = html.index("偏离度 × 筹码动向 · 四象限提醒")
+    i_flow = html.index("💰 板块资金流向")
+    assert i_banner < i_flow < html.index("择时跟踪排名")
+
+
+def test_render_flow_absent_by_default():
+    html = _render_mini()                                # 不带 flow → section 整体省略
+    assert "💰 板块资金流向" not in html
+    # 占位与图 JSON 都不得出现（注意：_PAGE_JS 的选择器字符串里本就含
+    # data-sym="__flow" 字样，故占位断言用 CSS 类组合、图用 CHARTS key）
+    assert 'class="lazy-chart" data-sym="__flow"' not in html
+    assert '"__flow":[' not in html
+    assert "配置盘的脚印" not in html
+
+
+def test_render_flow_insufficient_payload_omitted():
+    payload = _flow_mini()
+    payload["state"] = {"label": "数据不足", "label_key": "insufficient"}
+    html = rep.render({}, {}, {}, as_of="2026-08-14", flow=payload)
+    assert "💰 板块资金流向" not in html and '"__flow":[' not in html
+
+
+def test_flow_figures_structure():
+    fl = _flow_mini()
+    lines = rep.flow_lines_figure(fl)
+    assert len(lines.data) == 2 and {t.name for t in lines.data} == {"大金融", "科技"}
+    # 无 rolls → 单窗口退化：仅 绝对/% 两态按钮
+    assert len(lines.layout.updatemenus[0].buttons) == 2
+    assert lines.layout.yaxis.zeroline is True             # 跷跷板必看零轴
+    assert lines.layout.hovermode == "x unified"           # 同一时点全组横截面对比
+    assert lines.layout.hoverlabel.font.size <= 9          # 25 行悬浮框压字号防裁剪
+    assert lines.layout.height >= 600                      # 图加高让悬浮框装得下
+    assert lines.layout.xaxis.hoverformat == "%Y-%m-%d"    # 框顶日期显示到「日」
+    assert lines.layout.showlegend is False                # 图例移除（tile chips 即图例）
+    rng = lines.layout.xaxis.range                         # 默认视图 = 最近 1 年
+    assert rng is not None and (pd.Timestamp(rng[1]) - pd.Timestamp(rng[0])).days in range(360, 371)
+    assert all("%{x|" not in (t.hovertemplate or "")       # 模板不写日期（框顶统一显示，
+               and "%{fullData.name}" in (t.hovertemplate or "")  # 重复写会行高翻倍被裁）
+               and "<br>" not in (t.hovertemplate or "")   # 组名+数值同行一行高
+               for t in lines.data)
+    heat = rep.flow_heatmap_figure(fl)
+    hm = heat.data[0]
+    assert hm.zmid == 0
+    assert hm.colorscale[-1][1] == "#dc2626"               # 红=正=流入（A股惯例）
+    assert heat.layout.yaxis.autorange == "reversed"       # 组自上而下规范序
+
+
+def test_flow_lines_window_unit_buttons():
+    # 窗口(5/20/60) × 单位(亿/%) 无状态全量切换：6 态按钮各带完整 y 数组+轴/图标题
+    import pytest
+    base = _flow_mini()
+    roll = base["group_roll"]
+    base["rolls"] = {5: roll * 0.5, 20: roll, 60: roll * 1.5}
+    fig = rep.flow_lines_figure(base)
+    menu = fig.layout.updatemenus[0]
+    assert [b.label for b in menu.buttons] == ["5日", "5日%", "20日", "20日%", "60日", "60日%"]
+    assert menu.active == 2                                # 默认态 = 20日·亿元
+    assert menu.buttons[2].args[1]["title.text"].startswith("组级净流入 · 20日滚动")
+    assert menu.buttons[1].args[1]["yaxis.title.text"] == "净流入(% 组规模)"
+    assert menu.buttons[2].args[0]["y"][0][0] == pytest.approx(float(roll["大金融"].iloc[0]))
+    assert menu.buttons[0].args[0]["y"][0][0] == pytest.approx(float(roll["大金融"].iloc[0]) * 0.5)
