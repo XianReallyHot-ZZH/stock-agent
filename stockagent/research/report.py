@@ -553,6 +553,35 @@ def flow_lines_figure(flow: dict) -> go.Figure:
     return fig
 
 
+def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
+    """📡 申赎异动横幅：近 N 交易日内的单 ETF 大额申赎事件（|日增减%|≥自身历史
+    分位 且 ≥金额地板），点条目跳该 ETF 日度净申赎图。最新交易日事件加「最新」
+    徽标置顶。全空 → 整横幅省略（与四象限同惯例）。纯观察·非买卖建议。"""
+    events = flow.get("events") or []
+    if not events:
+        return ""
+    last_date = flow.get("last_date")
+    shown = events[:top_n]
+    items = []
+    for ev in shown:
+        nm = meta.get(ev["symbol"], {}).get("name", ev["symbol"])
+        cls = "flow-pos" if ev["flow_yi"] > 0 else "flow-neg"
+        arrow = "净申购" if ev["flow_yi"] > 0 else "净赎回"
+        badge = ('<b class="flow-ev-today">最新</b> ' if ev["date"] == last_date else "")
+        items.append(
+            f'<span class="xb-item"><a href="#{ev["symbol"]}" class="xb-link">{nm}({ev["symbol"]})</a> '
+            f'{badge}<b class="{cls}">{arrow} {ev["flow_yi"]:+.1f}亿</b> '
+            f'<span class="xb-sub">{ev["date"]} · 日增减 {ev["pct"]:+.1%} · '
+            f'历史分位 {ev["pctile"]:.1%}</span></span>')
+    more = f'<span class="xb-sub">…另有 {len(events) - top_n} 条</span>' if len(events) > top_n else ""
+    return (
+        '<div class="extreme-banner">'
+        '<div class="extreme-title">📡 申赎异动 · 单日大额申赎事件 '
+        '<span class="xb-note">近5个交易日 · |日增减%|≥自身历史99%分位 且 ≥1亿 · '
+        '流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议 · 点击跳该ETF日度申赎图</span></div>'
+        f'<div class="xb-list">{"".join(items)}{more}</div></div>')
+
+
 def _flow_section(flow: dict) -> str:
     """板块资金流向 section HTML：增量vs存量 tile + 两个 lazy-chart 占位（CHARTS['__flow']）。"""
     st = flow.get("state") or {}
@@ -845,6 +874,8 @@ p.sub { color:var(--muted); font-size:13px; margin-top:2px; }
 .flow-chips { display:flex; flex-wrap:wrap; gap:6px; }
 .flow-chip { background:var(--chipbg); border-radius:10px; padding:2px 8px; font-size:12px;
              cursor:pointer; user-select:none; }   /* 点击=线开关·双击=独显·title=成员列表 */
+.flow-ev-today { font-size:10px; background:#fcd34d; color:#78350f; border-radius:4px;
+                 padding:0 4px; margin-left:2px; }   /* 申赎异动「最新」徽标 */
 .flow-chip:not(.on) { opacity:.38; filter:grayscale(.8); }   /* 关闭态：变灰去色 */
 .flow-dot { display:inline-block; width:8px; height:8px; border-radius:50%;
             margin-right:4px; vertical-align:baseline; }
@@ -1205,9 +1236,11 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     charts_html = "\n".join(chart_blocks)
     # 板块资金流向：图表挂 CHARTS['__flow'] 伪 key（JS 纯 dict 查找，与 ETF 图同一懒渲染管线）
     flow_html = ""
+    flow_events_html = ""
     if flow and (flow.get("state") or {}).get("label_key") not in (None, "insufficient"):
         charts_json["__flow"] = [flow_lines_figure(flow).to_json()]
         flow_html = _flow_section(flow)
+        flow_events_html = _flow_events_banner(flow, meta)
     _esc = lambda s: re.sub(r"</script", r"<\\/script", s, flags=re.I)
     entries = _esc(",\n".join(f'"{sym}":[{",".join(charts_json[sym])}]' for sym in charts_json))
     charts_script = ("<script>\n" + _esc(get_plotlyjs()) + "\nvar CHARTS={" + entries + "};\n"
@@ -1257,7 +1290,10 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                   "真实现金进出·非逐笔推断）；份额流入≠看好（A股常有越跌越买的逆势申购，须与偏离度交叉看）；"
                   "「板块间流向」是推断非直接观测（申赎是独立净额·资金来源无标签，存量约束下的此消彼长"
                   "=跷跷板最强证据）；本池是精选池非全市场，流出可能去了池外主题ETF（代表性偏差）；"
-                  "拆分/折算已做前复权（份额×净值反向断崖检测），不计入流入。<br>")
+                  "拆分/折算已做前复权（份额×净值反向断崖检测），不计入流入。<br>"
+                  + ("⑤ <b>申赎异动横幅</b>：近5个交易日内 |日增减%| 进入自身历史99%分位 且 ≥1亿 的单日大额"
+                     "申赎事件（自适应各ETF波动性+金额地板滤小钱噪声；全历史分位·纯观察不防前视）；流入≠看好。"
+                     "点击条目跳该ETF的日度净申赎图看事件细节。<br>" if flow_events_html else ""))
 
     return f"""<html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1274,6 +1310,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
 {summary_html}
 {extreme_banner_html}
 {quadrant_banner_html}
+{flow_events_html}
 {flow_html}
 <h3>📊 择时跟踪排名 · 三类分页（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只 NAV 历史不足未参与" or ""}）</h3>
 {excluded_note}

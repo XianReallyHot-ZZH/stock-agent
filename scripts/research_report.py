@@ -172,8 +172,13 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
         gross_floor_yi=float(fp.get("gross_floor_yi", 15.0)),
         breadth_floor_yi=float(fp.get("breadth_floor_yi", 1.0)),
         breadth_min=float(fp.get("breadth_min", 0.5)))
+    ap = fp.get("alert", {}) or {}
+    events = rfl.daily_flow_events(
+        panel, pctile=float(ap.get("pctile", 0.99)), floor_yi=float(ap.get("floor_yi", 1.0)),
+        lookback_days=int(ap.get("days", 5)), min_history=int(ap.get("min_history", 250)))
     return {
         "window": window, "state": state, "group_roll": roll, "rolls": rolls,
+        "events": events, "last_date": (roll.index[-1] if len(roll) else None),
         "aum": rfl.group_aum_yi(panel, groups),
         "aum_series": rfl.group_aum_series(panel, groups),   # % 态逐日分母
         "groups": list(groups),

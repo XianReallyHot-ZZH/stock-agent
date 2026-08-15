@@ -202,6 +202,37 @@ def test_flow_daily_figure_no_history_none():
 
 
 
+def test_flow_events_banner_present_and_absent():
+    # 有事件 → 横幅：标题+条目+「最新」徽标+跳转链接；无事件 → 整横幅省略
+    base = _flow_mini()
+    base["events"] = [
+        {"symbol": "512800", "date": "2026-08-14", "flow_yi": 38.2, "pct": 0.084,
+         "pctile": 0.996, "side": "in"},
+        {"symbol": "512070", "date": "2026-08-12", "flow_yi": -21.0, "pct": -0.031,
+         "pctile": 0.992, "side": "out"},
+    ]
+    base["last_date"] = "2026-08-14"
+    snaps = {"159915": {"nav_dev_pct": 0.5, "nav_dev_cur": 0.0, "nav_extreme_events": [],
+                        "data_sufficient": True, "style": "growth",
+                        "chip": {"state": "flat", "flows": {}}}}
+    html = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
+                      {"159915": {"name": "创业板ETF", "group": "成长宽基"},
+                       "512800": {"name": "银行ETF"}, "512070": {"name": "证券保险ETF"}},
+                      as_of="2026-08-14", flow=base)
+    assert "申赎异动 · 单日大额申赎事件" in html
+    assert 'href="#512800"' in html and "净申购 +38.2亿" in html
+    assert "净赎回 -21.0亿" in html and "历史分位 99.6%" in html
+    assert 'class="flow-ev-today">最新</b>' in html           # 最新日事件有徽标
+    assert "申赎异动横幅" in html                             # 读图说明 ⑤
+    # 无事件（_flow_mini 无 events 键）→ 不渲染（CSS 注释里也有「申赎异动」字样，
+    # 用横幅标题做缺席断言）
+    html2 = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
+                       {"159915": {"name": "创业板ETF"}}, as_of="2026-08-14",
+                       flow=_flow_mini())
+    assert "申赎异动 · 单日大额申赎事件" not in html2
+    assert ">最新</b>" not in html2                       # 徽标文本（类名在 CSS 里恒存在）
+
+
 # ---------------- render 结构（主题/tab/折叠明细/快速跳转/回顶部/排序） ----------------
 
 def _render_mini():
