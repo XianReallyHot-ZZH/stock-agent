@@ -57,7 +57,7 @@ python scripts/research_report.py
 
 ## 验证
 - `python scripts/dashboard_data_check.py` 应显示：price/shares/nav 新鲜 N/N（515880 份额全缺是已知）
-- 打开 `data/research_report.html`，应见：顶部「偏离度极端区」横幅 + 三类分页排名表（偏离度/剪刀差列）+ 各 ETF 的份额净值图（剪刀差窗口）与净值-MA60 偏离度图（第几极值 ▲▼ 标记）。置顶 创业板/科创50 在逐标的明细最前（⭐）。
+- 打开 `data/research_report.html`，应见：顶部「偏离度极端区」横幅 + 价值/成长/周期 三类 tab 分页排名表（偏离度/剪刀差列，表头可排序）+ 逐标的明细折叠面板（默认收起，点开见份额净值图（剪刀差窗口）与净值-MA60 偏离度图（第几极值 ▲▼ 标记））。置顶 创业板/科创50 默认展开在最前（⭐）。右上 🌙/☀️ 可切深浅色。
 
 ## 常见坑
 - **plotly 未装**：报 `ModuleNotFoundError: plotly` → `pip install plotly`（已在 requirements）
