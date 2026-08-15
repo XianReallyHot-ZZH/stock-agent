@@ -647,6 +647,10 @@ function _renderChart(el){
   var sym = el.getAttribute('data-sym'), i = +el.getAttribute('data-idx');
   var list = CHARTS[sym]; if(!list || !list[i]) return;
   el.dataset.rendered = '1';
+  // 把占位 min-height 提升为显式 height：打破 responsive 模式下 Plotly 注入的
+  // .plot-container height:100% × 父级 auto 高度的循环百分比环（异步 relayout 时序
+  // 下 Chrome 会把盒子卡在错误高度——svg 460 而盒 765，多出的空洞=图间大间隔）
+  if(el.style.minHeight) el.style.height = el.style.minHeight;
   Plotly.newPlot(el, list[i], {responsive:true, displaylogo:false}).then(function(){
     if(el.dataset.rendered === '1') _applyPlotlyTheme(el, _isDark());
   }).catch(function(){});
@@ -655,6 +659,7 @@ function _purgeChart(el){
   if(el.dataset.rendered !== '1') return;
   try { Plotly.purge(el); } catch(e) {}
   delete el.dataset.rendered;
+  el.style.height = '';   // 还原为 min-height 占位
 }
 var _queue = [], _queued = [], _pumping = false, _paused = false, _scrollIdle = null;
 function _enqueue(el){
@@ -673,7 +678,11 @@ function _pump(){
     var el = _queue.shift();
     if(el !== undefined){
       var k = _queued.indexOf(el); if(k >= 0) _queued.splice(k, 1);
-      if(el.dataset.rendered !== '1' && el.isConnected) _renderChart(el);
+      try {
+        if(el.dataset.rendered !== '1' && el.isConnected) _renderChart(el);
+      } catch(e) {                                 // 单图异常不得杀死泵链
+        try { delete el.dataset.rendered; el.style.height = ''; } catch(e2) {}
+      }
     }
     if(_queue.length){ requestAnimationFrame(step); }
     else { _pumping = false; }
