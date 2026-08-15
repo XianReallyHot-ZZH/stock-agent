@@ -43,7 +43,6 @@ rotation_pool:
   - {symbol: "512400", name: "有色金属ETF", sector: "有色金属", csrc_industry: "有色金属冶炼和压延加工业",          style: "cyclic", style_alt: []}
   - {symbol: "515220", name: "煤炭ETF",     sector: "煤炭",     csrc_industry: "煤炭开采和洗选业",                  style: "cyclic", style_alt: []}
   - {symbol: "159611", name: "电力ETF",     sector: "电力",     csrc_industry: "电力、热力生产和供应业",            style: "cyclic", style_alt: []}
-  - {symbol: "518880", name: "黄金ETF",     sector: "黄金",     style: "cyclic", style_alt: []}     # 商品ETF，无PE（不走估值因子）
   - {symbol: "159870", name: "化工ETF",     sector: "化工",     csrc_industry: "化学原料和化学制品制造业",          style: "cyclic", style_alt: []}
   - {symbol: "515210", name: "钢铁ETF",     sector: "钢铁",     csrc_industry: "黑色金属冶炼和压延加工业",          style: "cyclic", style_alt: []}
   - {symbol: "159745", name: "建材ETF",     sector: "建材",     csrc_industry: "非金属矿物制品业",                  style: "cyclic", style_alt: []}
