@@ -368,6 +368,89 @@ def _num_attr(v, nd=4) -> str:
     return "" if _nan(v) else f"{v:.{nd}f}"
 
 
+# 四象限定义：偏离度极端区(≤5% 超卖 / ≥95% 超买) × 筹码方向(增/减；持平不入格)
+_QUADRANTS = [
+    ("opp", "🟢 机会提醒", "超卖+筹码增", "深跌·有承接", "quad-opp"),
+    ("watch", "🔵 关注提醒", "超买+筹码增", "高位·仍增仓", "quad-watch"),
+    ("severe", "🔴 严重警告", "超卖+筹码减", "深跌·无承接", "quad-severe"),
+    ("risk", "🟠 风险提示", "超买+筹码减", "高位·兑现中", "quad-risk"),
+]
+_QUAD_KEY = {"opp": "机会", "watch": "关注", "severe": "严重警告", "risk": "风险提示"}
+_QUAD_INFO = {k: (t, c) for k, t, c, _s, _cl in _QUADRANTS}   # key → (标题, 条件)
+
+
+def _quad_of(snap: dict) -> str | None:
+    """单 ETF 的象限 key（opp/watch/severe/risk）；非极端区/筹码持平/数据不足 → None。"""
+    if not snap.get("data_sufficient", True):
+        return None
+    p = snap.get("nav_dev_pct")
+    if _nan(p):
+        return None
+    st = (snap.get("chip") or {}).get("state")
+    if st not in ("accumulating", "distributing"):
+        return None
+    if p <= _OVERSOLD_PCT:
+        return "opp" if st == "accumulating" else "severe"
+    if p >= _OVERBOUGHT_PCT:
+        return "watch" if st == "accumulating" else "risk"
+    return None
+
+
+def _partition_quadrant(snapshots: dict) -> dict[str, list]:
+    """四象限分组（_quad_of 判定）。各格按偏离极值程度降序。"""
+    quads: dict[str, list] = {k: [] for k, *_ in _QUADRANTS}
+    for sym, snap in snapshots.items():
+        qk = _quad_of(snap)
+        if qk:
+            quads[qk].append((sym, snap))
+    for q in quads.values():
+        q.sort(key=lambda kv: abs(kv[1].get("nav_dev_pct") - 0.5), reverse=True)
+    return quads
+
+
+def _quadrant_banner(snapshots: dict, meta: dict) -> str:
+    """四象限提醒横幅：偏离度极端 × 筹码方向交叉，2×2 格局。按提醒级别着色
+    （绿/蓝/红/琥珀），每条可点跳转明细（折叠面板自动展开）。四格全空 → 整横幅省略。"""
+    quads = _partition_quadrant(snapshots)
+    if not any(quads.values()):
+        return ""
+
+    def _items(rows):
+        parts = []
+        for sym, snap in rows:
+            nm = meta.get(sym, {}).get("name", sym)
+            cur, p = snap.get("nav_dev_cur"), snap.get("nav_dev_pct")
+            chip = snap.get("chip") or {}
+            pos = "c-pos" if (not _nan(cur) and cur > 0) else "c-neg"
+            rank = _extreme_rank(snap)
+            rk = f" · 第{rank}{'低' if (not _nan(cur) and cur < 0) else '高'}" if rank else ""
+            fm = chip.get("flow_main")
+            fm_s = f"筹码 {fm:+.1%}" if not _nan(fm) else ""
+            flows = chip.get("flows") or {}
+            seq_s = (" · ".join(f"{W}日{v:+.1%}" for W, v in sorted(flows.items()))
+                     if flows else "")
+            seq_line = (f'<span class="xb-seq">{seq_s}</span>' if seq_s else "")
+            parts.append(
+                f'<span class="xb-item"><a href="#{sym}" class="xb-link">{nm}</a> '
+                f'<b class="{pos}">{cur:+.1%}</b> '
+                f'<span class="xb-sub">分位 {p:.0%}{rk} · {fm_s}'
+                f'（{chip.get("flow_main_window") or "?"}日）</span>{seq_line}</span>')
+        return parts and "".join(parts) or '<span class="xb-sub">无</span>'
+
+    cells = "".join(
+        f'<div class="quad {cls}"><div class="quad-head">{title}'
+        f'<span class="quad-note">{cond} · {scene} · {len(quads[key])}</span></div>'
+        f'{_items(quads[key])}</div>'
+        for key, title, cond, scene, cls in _QUADRANTS)
+    return (
+        '<div class="extreme-banner">'
+        '<div class="extreme-title">🔔 偏离度 × 筹码动向 · 四象限提醒 '
+        '<span class="xb-note">仅列偏离度进入自身历史 5%/95% 极端分位的 ETF · '
+        '筹码=份额申赎方向·机构行为代理（主体不可辨） · 观察·非买卖建议</span></div>'
+        f'<div class="quad-grid">{cells}</div></div>'
+    )
+
+
 def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) -> str:
     rows = sorted(snapshots.items(), key=lambda kv: _extremeness(kv[1]), reverse=True)
     out = ""
@@ -409,14 +492,30 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
 
         to = snap.get("turnover_5d_yi")
         to_html = f"{to:.1f}亿" if not _nan(to) else "—"
+
+        # 筹码方向 cell（份额申赎 · 机构行为代理）：主窗口值 + 方向 + 多窗口带标签直接展示
+        chip = snap.get("chip") or {}
+        if chip.get("data_sufficient") and not _nan(chip.get("flow_main")):
+            st_cn = {"accumulating": "增", "distributing": "减", "flat": "平"}.get(chip["state"], "平")
+            st_cls = {"accumulating": "chip-up", "distributing": "chip-dn"}.get(chip["state"], "")
+            flows = chip.get("flows") or {}
+            seq = " · ".join(f"{W}日{flows[W]:+.1%}" for W in sorted(flows))
+            chip_cell = (f"<td class='c bold'>{chip['flow_main']:+.1%}"
+                         f"<br><span class='sub2 muted'>近{chip['flow_main_window']}日 "
+                         f"<b class='{st_cls}'>{st_cn}</b>"
+                         f"<br><span class='chip-seq'>{seq}</span></span></td>")
+        else:
+            chip_cell = "<td class='c'><span class='ghost'>—</span></td>"
+
         out += (
             f"<tr data-name=\"{nm}\" data-style=\"{style}\" "
             f"data-dev=\"{_num_attr(cur)}\" data-pct=\"{_num_attr(pct)}\" "
-            f"data-aum=\"{_num_attr(aum, 1)}\" data-turnover=\"{_num_attr(to, 1)}\">"
+            f"data-aum=\"{_num_attr(aum, 1)}\" data-turnover=\"{_num_attr(to, 1)}\" "
+            f"data-chip=\"{_num_attr((snap.get('chip') or {}).get('flow_main'))}\">"
             f"<td><b><a href='#{sym}' class='etf-link'>{nm}</a></b>"
             f"<br><span class='sub2 muted'>{sym}</span>{aum_html}</td>"
             f"<td class='c bold {style_cls}'>{style_cn}</td>"
-            f"{dev_cell}{sc_cell}"
+            f"{dev_cell}{sc_cell}{chip_cell}"
             f"{_earnings_cell(snap)}"
             f"<td class='c text2'>{to_html}</td></tr>"
         )
@@ -445,6 +544,10 @@ def _detail_chips(snap: dict) -> str:
         sd, nd = sc["share_drift"], sc["nav_drift"]
         arrow = "✂ 份↑净↓" if sc["direction"] == "share_up_nav_down" else "✂ 份↓净↑"
         chips.append(f'<span class="chip sc-txt">{arrow} 份{sd:+.0%}/净{nd:+.0%}·{sc["window"]}日</span>')
+    qk = _quad_of(snap)
+    if qk:
+        title, cond = _QUAD_INFO[qk]
+        chips.append(f'<span class="chip quad-{qk}">{title}·{cond}</span>')
     label = snap.get("earnings_label")
     if label:
         chips.append(f'<span class="chip {_EARN_CLASS.get(label, "en-flat")}">{label}</span>')
@@ -476,13 +579,15 @@ _PAGE_CSS = """
         --thbg:#f1f5f9; --hover:#f1f5f9; --chipbg:#f1f5f9; --targetbg:#eff6ff;
         --shadow:0 1px 3px rgba(0,0,0,.08); --warn:#b45309;
         --sumbg:#eff6ff; --sumline:#2563eb; --sumtext:#1e3a8a;
-        --ovbg:#dcfce7; --ovline:#16a34a; --obbg:#fee2e2; --obline:#dc2626; }
+        --ovbg:#dcfce7; --ovline:#16a34a; --obbg:#fee2e2; --obline:#dc2626;
+        --wtbg:#eff6ff; --wtline:#2563eb; --rskbg:#fef3c7; --rskline:#d97706; }
 body.dark { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --head:#cbd5e1; --text2:#cbd5e1;
         --muted:#94a3b8; --faint:#94a3b8; --ghost:#475569; --border:#334155; --border2:#475569;
         --thbg:#283548; --hover:#26334a; --chipbg:#334155; --targetbg:#1e3a5f;
         --shadow:0 1px 3px rgba(0,0,0,.3); --warn:#fbbf24;
         --sumbg:#16233f; --sumline:#3b82f6; --sumtext:#bfdbfe;
-        --ovbg:rgba(34,197,94,.13); --ovline:#4ade80; --obbg:rgba(220,38,38,.15); --obline:#f87171; }
+        --ovbg:rgba(34,197,94,.13); --ovline:#4ade80; --obbg:rgba(220,38,38,.15); --obline:#f87171;
+        --wtbg:#16233f; --wtline:#3b82f6; --rskbg:#3a2c0a; --rskline:#fbbf24; }
 * { box-sizing:border-box; }
 body { font-family:'Microsoft YaHei',sans-serif; margin:0; padding:20px; background:var(--bg);
        color:var(--text); font-size:14px; }
@@ -543,6 +648,24 @@ table.sortable th[data-key].desc::after { content:" ▼"; }
 .extreme-head { font-weight:600; color:var(--text); margin-bottom:6px; }
 .xb-item { display:inline-block; margin:3px 12px 3px 0; font-size:13px; white-space:nowrap; }
 .xb-sub { color:var(--muted); font-size:12px; }
+.xb-seq { display:block; white-space:normal; font-size:11px; color:var(--faint);
+          font-variant-numeric:tabular-nums; margin-top:1px; }
+/* 四象限提醒（偏离度极端 × 筹码方向）：按提醒级别着色 */
+.quad-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.quad { border-radius:6px; padding:8px 12px; border-left:4px solid; }
+.quad-head { font-weight:600; color:var(--text); margin-bottom:6px; font-size:13px; }
+.quad-note { color:var(--muted); font-weight:400; font-size:11px; margin-left:6px; }
+.quad-opp { background:var(--ovbg); border-color:var(--ovline); }
+.quad-watch { background:var(--wtbg); border-color:var(--wtline); }
+.quad-severe { background:var(--obbg); border-color:var(--obline); }
+.quad-risk { background:var(--rskbg); border-color:var(--rskline); }
+.chip.quad-opp { color:#16a34a; } body.dark .chip.quad-opp { color:#4ade80; }
+.chip.quad-watch { color:#2563eb; } body.dark .chip.quad-watch { color:#60a5fa; }
+.chip.quad-severe { color:#dc2626; } body.dark .chip.quad-severe { color:#f87171; }
+.chip.quad-risk { color:#b45309; } body.dark .chip.quad-risk { color:#fbbf24; }
+.chip-up { color:#16a34a; } body.dark .chip-up { color:#4ade80; }
+.chip-dn { color:#dc2626; } body.dark .chip-dn { color:#f87171; }
+.chip-seq { font-size:10px; color:var(--faint); font-variant-numeric:tabular-nums; white-space:normal; }
 /* 全池格局 / 读图说明 */
 .summary-box { background:var(--sumbg); border-left:4px solid var(--sumline); padding:12px 16px;
                border-radius:6px; font-size:14px; line-height:1.7; color:var(--sumtext); margin:14px 0; }
@@ -823,6 +946,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                     '<th data-key="style" data-type="text">类型</th>'
                     f'<th data-key="dev" data-type="num">净值MA{ma_period}偏离<sup style="font-size:9px">分位</sup></th>'
                     '<th>份额/净值剪刀差</th>'
+                    '<th data-key="chip" data-type="num">筹码<sub style="font-size:9px">20日</sub></th>'
                     '<th>业绩预期<sup style="font-size:9px">信息</sup></th>'
                     '<th data-key="turnover" data-type="num">成交<sub style="font-size:9px">5日</sub></th></tr>')
     tabs_html = (
@@ -847,6 +971,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                     if pool_summary else "")
 
     extreme_banner_html = _extreme_banner(snapshots, meta)
+    quadrant_banner_html = _quadrant_banner(snapshots, meta)
 
     return f"""<html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -856,11 +981,13 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
 <button id="theme-btn" onclick="toggleTheme()" title="深浅色切换">🌙</button></div>
 <p class="sub">数据截至 {as_of} 收盘 · 纯跟踪视图（只跟踪、不标买卖点、不含涨跌预测；决策请综合多个看板）· {signal_note}</p>
 <details class="guide"><summary>📖 读图说明 · 偏离度 / 剪刀差（点击展开）</summary>
-<div class="guide-body">本看板跟踪两件事——① <b>净值-MA{ma_period}偏离度</b>：净值相对自身均线的偏离 + 历史百分位分位（0=最负/超卖…1=最正/超买），副图标历史极值「第几低/高」（1=史上最极端，纯观察）。
-② <b>份额-净值剪刀差</b>：份额与净值走向分化（一升一降）时置灰标注漂移幅度与窗口天数；检不出干净分化则只画原始双线。两者均为跟踪/观察信号，不构成买卖建议。<br>
+<div class="guide-body">本看板跟踪三件事——① <b>净值-MA{ma_period}偏离度</b>：净值相对自身均线的偏离 + 历史百分位分位（0=最负/超卖…1=最正/超买），副图标历史极值「第几低/高」（1=史上最极端，纯观察）。
+② <b>份额-净值剪刀差</b>：份额与净值走向分化（一升一降）时置灰标注漂移幅度与窗口天数；检不出干净分化则只画原始双线。
+③ <b>偏离度×筹码 四象限提醒</b>：偏离度进入自身历史 5%/95% 极端分位 × 筹码方向（份额申赎 5/10/20/30/60 日近端等差加权投票·±1% 死区·阈值2，机构行为代理·主体不可辨）交叉——超卖+筹码增=🟢机会（深跌有承接）/超买+筹码减=🟠风险（高位兑现）/超卖+筹码减=🔴严重警告（深跌无承接）/超买+筹码增=🔵关注（惯性未死）。筹码多窗口值（5/10/20/30/60 日净变化率）在排名表第二行与四象限条目下直接展示，一眼看申赎节奏。观察坐标·非买卖建议。<br>
 表格点击表头可排序；逐标的明细默认折叠，点击行展开，或用右侧下拉快速跳转。</div></details>
 {summary_html}
 {extreme_banner_html}
+{quadrant_banner_html}
 <h3>📊 择时跟踪排名 · 三类分页（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只 NAV 历史不足未参与" or ""}）</h3>
 {excluded_note}
 {tabs_html}

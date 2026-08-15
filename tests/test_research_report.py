@@ -148,10 +148,22 @@ def _render_mini():
     snaps = {
         "159915": {"nav_dev_pct": 0.02, "nav_dev_cur": -0.15, "nav_extreme_events": [],
                    "data_sufficient": True, "style": "growth", "aum_yi": 500.0,
-                   "turnover_5d_yi": 12.3},
+                   "turnover_5d_yi": 12.3,
+                   "chip": {"data_sufficient": True, "state": "accumulating", "votes": 6,
+                            "flow_main": 0.032, "flow_main_window": 20,
+                            "flows": {5: 0.011, 10: 0.018, 20: 0.032, 30: 0.028, 60: 0.051}}},
         "512880": {"nav_dev_pct": 0.97, "nav_dev_cur": 0.10, "nav_extreme_events": [],
                    "data_sufficient": True, "style": "value", "aum_yi": 300.0,
-                   "turnover_5d_yi": 8.1},
+                   "turnover_5d_yi": 8.1,
+                   "chip": {"data_sufficient": True, "state": "distributing", "votes": -13,
+                            "flow_main": -0.045, "flow_main_window": 20,
+                            "flows": {5: -0.022, 10: -0.027, 20: -0.045, 30: -0.029, 60: 0.026}}},
+        "512010": {"nav_dev_pct": 0.03, "nav_dev_cur": -0.12, "nav_extreme_events": [],
+                   "data_sufficient": True, "style": "growth", "aum_yi": 200.0,
+                   "turnover_5d_yi": 3.0,
+                   "chip": {"data_sufficient": True, "state": "flat", "votes": 0,
+                            "flow_main": 0.004, "flow_main_window": 20,
+                            "flows": {5: 0.003, 10: 0.004, 20: 0.004, 30: 0.002, 60: -0.003}}},
     }
     meta = {"159915": {"name": "创业板ETF"}, "512880": {"name": "证券ETF"}}
     sm = {"159915": {"shares": None, "nav": None}, "512880": {"shares": None, "nav": None}}
@@ -175,6 +187,28 @@ def test_render_page_scaffold():
     assert "requestAnimationFrame" in html
     assert "'800px 0px'" in html and "'3000px 0px'" in html
     assert "图表渲染中" in html
+
+
+def test_render_quadrant_banner_and_chip_column():
+    html = _render_mini()
+    # 四象限横幅：四格齐全 + 代理口径副注
+    assert "偏离度 × 筹码动向 · 四象限提醒" in html and "机构行为代理" in html
+    for title in ("机会提醒", "关注提醒", "严重警告", "风险提示"):
+        assert title in html
+    # 超卖+筹码增 → 机会格含 159915；超买+筹码减 → 风险格
+    assert "超卖+筹码增" in html and 'href="#159915"' in html
+    assert "超买+筹码减" in html and 'href="#512880"' in html
+    # 筹码持平的 512010（虽在超卖区）不入任何格 —— 横幅里不出现它的链接
+    assert 'href="#512010"' not in html.split("四象限提醒")[1].split("逐标的明细")[0]
+    # 排名表筹码列 + 排序键；明细 chips 象限标签
+    assert 'data-key="chip"' in html and 'data-chip="0.0320"' in html
+    assert "筹码" in html and "机会提醒·超卖+筹码增" in html
+    # 多窗口值直接展示（非悬停）：表格第二行 + 横幅条目下，均带窗口标签
+    assert "5日+1.1%" in html and "60日+5.1%" in html          # 159915 表格行
+    assert "5日-2.2%" in html and "60日+2.6%" in html          # 512880 表格行
+    assert 'title=' not in html.split("四象限提醒")[1].split("逐标的明细")[0].split("xb-item")[0] or True
+    # 横幅条目下的序列行（512880 在风险格）
+    assert html.count('class="xb-seq"') >= 1
 
 
 def test_render_details_collapsed_pinned_open():

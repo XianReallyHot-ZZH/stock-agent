@@ -7,6 +7,9 @@
      极值点）。每个 ETF 自标，不跨 ETF 比。
   2. 份额-净值「剪刀差」分化跟踪：returns 口径、自适应窗口、双向；检不出干净分化
      则退化原始数据、不强标。
+  3. 筹码方向（chip_direction）：份额申赎 5/10/20/30/60 日近端加权投票（等差权重
+     5/4/3/2/1）+ ±1% 死区 → 增/减/持平（机构行为·代理口径），供「偏离度×筹码」
+     四象限提醒交叉。
 
 隔离说明：偏离度计算的纯函数（ma_series / deviation_series / deviation_extremes /
 _merged_runs / deviation_extreme_events）从 stockagent/tracker/indicators.py **复制**
@@ -200,13 +203,71 @@ def scissor_divergence(shares, nav_acc, window_range: tuple[int, int] = (20, 120
 
 
 # ---------------------------------------------------------------------------
+# 筹码方向（份额申赎 · 机构行为代理）—— 多窗口 2-of-3 共识 + 死区
+# ---------------------------------------------------------------------------
+
+def chip_direction(shares, nav_acc, windows: tuple[int, ...] = (5, 10, 20, 30, 60),
+                   deadzone: float = 0.01, vote_threshold: int = 2) -> dict:
+    """份额申赎方向投票（近端加权）：每窗口 flow = shares_t/shares_{t-W} − 1，
+    >+deadzone 记 +1、<−deadzone 记 −1、否则 0（死区弃权）。
+
+    **等差权重**：窗口越近权重越高（5/10/20/30/60 → 5/4/3/2/1）——近端主导但
+    远端共识仍可翻盘（如 5 日一票权 5 压不过 10+20+30 三票同向权 9），避免单日
+    异动独裁方向。判定阈值 vote_threshold=2 ≈「近端两票同向」的强度，防单个远端
+    窗口翻转；参与窗口权重不足时阈值自动降级（单窗口一票即定）。
+
+    Returns: {data_sufficient, state, votes(加权和), flow_main, flow_main_window,
+              flows(各窗口值), weights(各窗口权重), vote_threshold(生效阈值)}
+    """
+    empty = {"data_sufficient": False, "state": "flat", "votes": 0,
+             "flow_main": np.nan, "flow_main_window": None, "flows": {},
+             "weights": {}, "vote_threshold": vote_threshold}
+    if shares is None or nav_acc is None:
+        return empty
+    n = pd.to_numeric(pd.Series(nav_acc), errors="coerce").dropna()
+    s = pd.to_numeric(pd.Series(shares), errors="coerce").dropna()
+    if len(n) < 5 or len(s) < 5:
+        return empty
+    # 与 scissor_divergence 同法对齐：NAV 日线时间轴 + 份额 ffill，取公共日期
+    df = pd.DataFrame({"s": s.reindex(n.index, method="ffill")}).dropna()
+    if len(df) < 5:
+        return empty
+
+    wins = sorted(windows)
+    weights = {W: len(wins) - i for i, W in enumerate(wins)}   # 越近权重越高（等差）
+    flows, votes = {}, 0
+    s_last = float(df["s"].iloc[-1])
+    for W in wins:
+        if len(df) <= W or float(df["s"].iloc[-W]) <= 0:
+            continue                                # 该窗口历史不足，弃票
+        flow = s_last / float(df["s"].iloc[-W]) - 1.0
+        flows[W] = flow
+        sign = 1 if flow > deadzone else (-1 if flow < -deadzone else 0)
+        votes += weights[W] * sign
+    if not flows:
+        return empty
+    avail = sorted(flows)
+    main_w = avail[len(avail) // 2]                 # 中间窗口（默认 20 日）做主展示
+    thr = min(vote_threshold, sum(weights[W] for W in avail))
+    state = ("accumulating" if votes >= thr
+             else "distributing" if votes <= -thr else "flat")
+    return {"data_sufficient": True, "state": state, "votes": votes,
+            "flow_main": flows[main_w], "flow_main_window": main_w,
+            "flows": flows, "weights": weights, "vote_threshold": thr}
+
+
+# ---------------------------------------------------------------------------
 # 单 ETF 快照装配
 # ---------------------------------------------------------------------------
 
 def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
                     scissor_window: tuple[int, int] = (20, 120),
-                    scissor_floor: float = 0.05) -> dict:
-    """单 ETF 择时快照：净值-MA 偏离度（分位 + 第几极值）+ 份额/净值剪刀差。纯函数。
+                    scissor_floor: float = 0.05,
+                    chip_windows: tuple[int, ...] = (5, 10, 20, 30, 60),
+                    chip_deadzone: float = 0.01,
+                    chip_vote_threshold: int = 2) -> dict:
+    """单 ETF 择时快照：净值-MA 偏离度（分位 + 第几极值）+ 份额/净值剪刀差
+    + 筹码方向（份额申赎 · 机构行为代理）。纯函数。
 
     nav_df: Store.get_nav_series → [unit_nav, acc_nav]（优先 acc_nav，复权连续）
     shares_df: Store.get_scale_series → [shares, ...] 或 None
@@ -223,10 +284,14 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
                     nav_series, nav_col = cand, col
                     break
 
+    _chip_empty = {"data_sufficient": False, "state": "flat", "votes": 0,
+                   "flow_main": np.nan, "flow_main_window": None, "flows": {},
+                   "weights": {}, "vote_threshold": chip_vote_threshold}
     if nav_series is None or len(nav_series) < ma_period:
         return {"nav_dev_cur": np.nan, "nav_dev_pct": np.nan, "nav_dev_max": np.nan,
                 "nav_dev_min": np.nan, "nav_extreme_events": [],
-                "scissor": {"detected": False}, "data_sufficient": False,
+                "scissor": {"detected": False}, "chip": _chip_empty,
+                "data_sufficient": False,
                 "ma_period": ma_period, "nav_col": nav_col}
 
     ext = deviation_extremes(nav_series, period=ma_period)
@@ -236,6 +301,9 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         shares_series = shares_df["shares"]
     scissor = scissor_divergence(shares_series, nav_series,
                                  window_range=scissor_window, floor=scissor_floor)
+    chip = chip_direction(shares_series, nav_series,
+                          windows=chip_windows, deadzone=chip_deadzone,
+                          vote_threshold=chip_vote_threshold)
     return {
         "nav_dev_cur": ext["cur_dev"],
         "nav_dev_pct": ext["pct"],
@@ -243,6 +311,7 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         "nav_dev_min": ext["min_dev"],
         "nav_extreme_events": events,
         "scissor": scissor,
+        "chip": chip,
         "data_sufficient": bool(ext["valid"]),
         "ma_period": ma_period,
         "nav_col": nav_col,

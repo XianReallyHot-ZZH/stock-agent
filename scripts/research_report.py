@@ -76,6 +76,10 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     # 剪刀差参数可选调（默认窗口 20-120、地板 ±5%）；params.yaml 未配则用默认
     scissor_window = tuple(rp.get("scissor_window", [20, 120]))
     scissor_floor = float(rp.get("scissor_floor", 0.05))
+    # 筹码方向（机构行为·代理）：近端加权投票窗口 + 死区 + 阈值 → 偏离度×筹码四象限提醒
+    chip_windows = tuple(rp.get("chip_windows", [5, 10, 20, 30, 60]))
+    chip_deadzone = float(rp.get("chip_deadzone", 0.01))
+    chip_vote_threshold = int(rp.get("chip_vote_threshold", 2))
     snapshots: dict[str, dict] = {}
     series_map: dict[str, dict] = {}
     for sym in symbols:
@@ -87,9 +91,11 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
         shares_df = store.get_scale_series(sym, end=as_of)
         nav_df = store.get_nav_series(sym, end=as_of)
 
-        # 择时跟踪快照：净值-MA 偏离度（分位 + 第几极值）+ 份额/净值剪刀差
+        # 择时跟踪快照：净值-MA 偏离度（分位 + 第几极值）+ 份额/净值剪刀差 + 筹码方向
         snap = rtm.timing_snapshot(nav_df, shares_df, ma_period=ma_period,
-                                   scissor_window=scissor_window, scissor_floor=scissor_floor)
+                                   scissor_window=scissor_window, scissor_floor=scissor_floor,
+                                   chip_windows=chip_windows, chip_deadzone=chip_deadzone,
+                                   chip_vote_threshold=chip_vote_threshold)
         snap["style"] = style_main or "growth"
         snap["name"] = m.get("name", sym)
         snap["csrc_industry"] = csrc or "(宽基/无单一行业)"
