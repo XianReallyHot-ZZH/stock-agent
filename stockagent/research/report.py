@@ -556,30 +556,35 @@ def flow_lines_figure(flow: dict) -> go.Figure:
 def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
     """📡 申赎异动横幅：近 N 交易日内的单 ETF 大额申赎事件（|日增减%|≥自身历史
     分位 且 ≥金额地板），点条目跳该 ETF 日度净申赎图。最新交易日事件加「最新」
-    徽标置顶。全空 → 整横幅省略（与四象限同惯例）。纯观察·非买卖建议。"""
+    徽标置顶。无命中也常驻（安静窗口占位——否则功能容易被遗忘）。纯观察·非买卖建议。"""
     events = flow.get("events") or []
-    if not events:
-        return ""
     last_date = flow.get("last_date")
-    shown = events[:top_n]
-    items = []
-    for ev in shown:
-        nm = meta.get(ev["symbol"], {}).get("name", ev["symbol"])
-        cls = "flow-pos" if ev["flow_yi"] > 0 else "flow-neg"
-        arrow = "净申购" if ev["flow_yi"] > 0 else "净赎回"
-        badge = ('<b class="flow-ev-today">最新</b> ' if ev["date"] == last_date else "")
-        items.append(
-            f'<span class="xb-item"><a href="#{ev["symbol"]}" class="xb-link">{nm}({ev["symbol"]})</a> '
-            f'{badge}<b class="{cls}">{arrow} {ev["flow_yi"]:+.1f}亿</b> '
-            f'<span class="xb-sub">{ev["date"]} · 日增减 {ev["pct"]:+.1%} · '
-            f'历史分位 {ev["pctile"]:.1%}</span></span>')
-    more = f'<span class="xb-sub">…另有 {len(events) - top_n} 条</span>' if len(events) > top_n else ""
+    if not events:
+        body = ('<span class="xb-sub muted">近5个交易日无大额申赎事件 —— 安静窗口属正常。'
+                '判定：|日增减%| ≥ 自身历史99%分位 <b>且</b> |净申赎额| ≥ 1亿'
+                '（阈值可调 params research.flow.alert）</span>')
+    else:
+        shown = events[:top_n]
+        items = []
+        for ev in shown:
+            nm = meta.get(ev["symbol"], {}).get("name", ev["symbol"])
+            cls = "flow-pos" if ev["flow_yi"] > 0 else "flow-neg"
+            arrow = "净申购" if ev["flow_yi"] > 0 else "净赎回"
+            badge = ('<b class="flow-ev-today">最新</b> ' if ev["date"] == last_date else "")
+            items.append(
+                f'<span class="xb-item"><a href="#{ev["symbol"]}" class="xb-link">{nm}({ev["symbol"]})</a> '
+                f'{badge}<b class="{cls}">{arrow} {ev["flow_yi"]:+.1f}亿</b> '
+                f'<span class="xb-sub">{ev["date"]} · 日增减 {ev["pct"]:+.1%} · '
+                f'历史分位 {ev["pctile"]:.1%}</span></span>')
+        more = (f'<span class="xb-sub">…另有 {len(events) - top_n} 条</span>'
+                if len(events) > top_n else "")
+        body = "".join(items) + more
     return (
         '<div class="extreme-banner">'
         '<div class="extreme-title">📡 申赎异动 · 单日大额申赎事件 '
         '<span class="xb-note">近5个交易日 · |日增减%|≥自身历史99%分位 且 ≥1亿 · '
         '流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议 · 点击跳该ETF日度申赎图</span></div>'
-        f'<div class="xb-list">{"".join(items)}{more}</div></div>')
+        f'<div class="xb-list">{body}</div></div>')
 
 
 def _flow_section(flow: dict) -> str:
