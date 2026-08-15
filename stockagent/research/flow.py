@@ -143,6 +143,40 @@ def group_aum_yi(panel: dict, groups: dict[str, list[str]]) -> dict[str, float]:
     return out
 
 
+def group_aum_series(panel: dict, groups: dict[str, list[str]]) -> pd.DataFrame:
+    """各组**逐日真实规模**（亿元）= Σ成员 当日真实份额 × 当日 unit_nav / 1e8。
+
+    panel 的份额是拆分前复权口径（末段=真实、历史被乘过拆分乘数）——用 splits
+    事件回退：raw_t = adj_t ÷ Π(拆分日 > t 的 ratio)，否则历史 AUM 被高估
+    2~4 倍、% 分母失真。对齐全池并集日历（与 group_rolling_flow 同一日历），
+    成员缺数（未上市/日历外）计 0。
+    作 % 态的逐日分母：pct_t = 净流入_t ÷ AUM_t × 100——分母随时间变化，
+    单组曲线形状与亿态不同（规模小的时期同额流入占比更大）。
+    """
+    if not panel:
+        return pd.DataFrame()
+    pool_idx = sorted(set().union(*(panel[s]["shares"].index for s in panel)))
+    if not pool_idx:
+        return pd.DataFrame()
+    frames = {}
+    for g, members in groups.items():
+        tot = pd.Series(0.0, index=pool_idx)
+        for s in members:
+            if s not in panel:
+                continue
+            sh = panel[s]["shares"].reindex(pool_idx).astype(float).copy()
+            for ev in panel[s].get("splits") or []:      # 前复权 → 真实份额
+                d = ev["date"]
+                if d in sh.index:
+                    sh.loc[sh.index < d] = sh.loc[sh.index < d] / float(ev["ratio"])
+            nv = panel[s]["nav"].reindex(pool_idx)
+            tot = tot.add((sh * nv).fillna(0.0) / YI, fill_value=0.0)
+        frames[g] = tot
+    if not frames:
+        return pd.DataFrame()
+    return pd.DataFrame(frames).sort_index()
+
+
 # ---------------------------------------------------------------------------
 # 增量 vs 存量 分解（tile 数据）
 # ---------------------------------------------------------------------------

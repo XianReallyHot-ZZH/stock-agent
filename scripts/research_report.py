@@ -177,7 +177,9 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
     return {
         "window": window, "state": state, "group_roll": roll, "rolls": rolls,
         "monthly": monthly,
-        "aum": rfl.group_aum_yi(panel, groups), "groups": list(groups),
+        "aum": rfl.group_aum_yi(panel, groups),
+        "aum_series": rfl.group_aum_series(panel, groups),   # % 态逐日分母
+        "groups": list(groups),
         "members": {g: [(s, meta.get(s, {}).get("name", s)) for s in syms]
                     for g, syms in groups.items()},   # 看板展示组构成（chips 悬停+明细）
         "excluded": [(s, meta.get(s, {}).get("name", s)) for s in excluded],

@@ -111,6 +111,39 @@ def test_group_aum_yi_latest():
     assert abs(aum["G"] - 90.0) < 1e-9
 
 
+def test_group_aum_series_split_unwind_restores_real_aum():
+    # 拆分前复权回退：原始份额 1e9→2e9(×2)、nav 1.0→0.5(÷2)——真实 AUM 拆分前后
+    # 连续 = 10亿。panel 份额为前复权口径(2e9 平坦)；不回退则前半被高估成 20亿
+    n, at = 20, 10
+    unit = np.full(n, 1.0); unit[at:] = 0.5
+    sh = np.full(n, 1e9); sh[at:] = 2e9              # 原始口径（有跳变→检测器识别）
+    idx = _idx(n)
+    m = {"shares": pd.DataFrame({"shares": sh}, index=idx),
+         "nav": pd.DataFrame({"unit_nav": unit, "acc_nav": np.linspace(1, 1.2, n)}, index=idx)}
+    panel, _ = fl.flow_panel({"A": m})
+    assert len(panel["A"]["splits"]) == 1            # 拆分被识别、adj=2e9 平坦
+    assert abs(panel["A"]["shares"].iloc[0] - 2e9) < 1e6
+    s = fl.group_aum_series(panel, {"G": ["A"]})
+    assert list(s.columns) == ["G"]
+    assert abs(s["G"].iloc[0] - 10.0) < 1e-9         # 回退后真实 AUM：1e9×1.0/1e8
+    assert abs(s["G"].iloc[-1] - 10.0) < 1e-9        # 2e9×0.5/1e8（拆分保值·连续）
+    assert abs(s["G"].max() - 10.0) < 1e-9           # 全程 10亿（无回退则前半=20亿）
+
+
+def test_group_aum_series_unlisted_member_zero():
+    # 成员中途上市：上市前贡献 0（组 AUM 随成员上市跳增——真实含义）
+    n = 20
+    a = _series_map(n, np.full(n, 1e9), nav_val=1.0)
+    b = _series_map(n, None, nav_val=1.0)
+    idx = _idx(n)
+    b["shares"] = pd.DataFrame({"shares": np.r_[np.full(10, np.nan), np.full(10, 2e9)]}, index=idx)
+    panel, _ = fl.flow_panel({"A": a, "B": b})
+    s = fl.group_aum_series(panel, {"G": ["A", "B"]})
+    assert abs(s["G"].iloc[0] - 10.0) < 1e-9         # 仅 A：1e9×1.0
+    assert abs(s["G"].iloc[-1] - 30.0) < 1e-9        # A+B：1e9+2e9（×1.0）
+
+
+
 # ---------------- pool_flow_state（增量vs存量 标签树） ----------------
 
 def _roll(**cols) -> pd.DataFrame:

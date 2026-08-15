@@ -492,17 +492,26 @@ def flow_lines_figure(flow: dict) -> go.Figure:
             line=dict(color=_FLOW_COLORS[i % len(_FLOW_COLORS)], width=1.4),
             hovertemplate="%{fullData.name} %{y:+.1f}<extra></extra>"))
 
-    # 预生成全部 (窗口, 单位) 组合：按钮 label / 目标 y 数组 / 轴标题 / 图标题
+    # 预生成全部 (窗口, 单位) 组合：按钮 label / 目标 y 数组 / 轴标题 / 图标题。
+    # % 态分母 = 逐日组规模（aum_series，时间变化）——单组曲线形状与亿态也不同；
+    # 无 aum_series（旧 payload）退化用最新规模常数分母
+    aum_s = flow.get("aum_series")
+    has_aum_series = aum_s is not None and len(aum_s)
     combos = []
     for w in windows:
         roll = rolls[w]
         abs_ys = [roll[g].astype(float).tolist() for g in roll.columns]
-        pct_ys = [[(v / aum[g] * 100.0) if (aum.get(g) or 0) > 0 else None
-                   for v in roll[g].astype(float)] for g in roll.columns]
+        if has_aum_series:
+            al = aum_s.reindex(roll.index)
+            pct_df = (roll / al * 100.0).where(al > 0)
+            pct_ys = [pct_df[g].tolist() for g in roll.columns]
+        else:
+            pct_ys = [[(v / aum[g] * 100.0) if (aum.get(g) or 0) > 0 else None
+                       for v in roll[g].astype(float)] for g in roll.columns]
         combos.append((f"{w}日", abs_ys, "净流入(亿)", "",
                        f"组级净流入 · {w}日滚动（亿元 = Δ份额×当日净值 · 份额=净申赎）"))
-        combos.append((f"{w}日%", pct_ys, "净流入(% 组规模)", "%",
-                       f"组级净流入 · {w}日滚动（% 组规模）"))
+        combos.append((f"{w}日%", pct_ys, "净流入(% 当日组规模)", "%",
+                       f"组级净流入 · {w}日滚动（% 当日组规模·逐日分母）"))
     active = 2 * windows.index(default_w)      # 默认态 = 主窗口 × 绝对亿元
 
     fig.update_layout(**_base_layout(
@@ -623,12 +632,11 @@ def _flow_section(flow: dict) -> str:
         f'style="min-height:{_FLOW_HEIGHT_LINES}px"></div></div>'
         '<p class="sub">⌨ 图上按钮：<b>N日</b> = 过去 N 个交易日的净流入<b>合计</b>'
         '（5日≈周内爆发·最灵敏 ｜ 20日≈月度节奏·与上方 tile 同口径 ｜ 60日≈季度趋势·最钝）；'
-        '带 <b>%</b> = 各组占<b>自身规模</b>的百分比（相对增减强度——大小组可横向比），'
-        '不带 = 绝对亿元。切换只换窗口/口径不改数据；滚动值对拐点的反应约滞后半个窗口。<br>'
+        '带 <b>%</b> = 占<b>当日自身规模</b>的百分比（<b>逐日分母</b>：单组时曲线形状也与亿态不同，'
+        '规模小的时期同额流入占比更大；大小组可横向比），不带 = 绝对亿元。'
+        '切换只换窗口/口径不改数据；滚动值对拐点的反应约滞后半个窗口。<br>'
         '🎛 组筛选：<b>单击</b>上方组 chip = 该组线开/关（灰=已隐藏）· <b>双击</b> = 仅看该组'
-        '（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。<br>'
-        '⚠️ <b>仅显示单组时，N日 与 N日% 是同一曲线</b>（% = 亿 ÷ 该组规模，只改纵轴刻度，'
-        '数学必然·非故障；若该组规模恰近百亿则数值也几乎重合）——% 口径的价值在<b>多组横向比</b>。</p>'
+        '（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。</p>'
         '<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
         f'style="min-height:{_flow_heat_height(len(members) or 1)}px"></div></div>')
 

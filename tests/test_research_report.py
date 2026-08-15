@@ -237,7 +237,11 @@ def _flow_mini():
                              {"group": "科技", "flow_yi": -6.0}],
              "n_groups": 2}
     return {"window": 20, "state": state, "group_roll": roll, "monthly": monthly,
-            "aum": {"大金融": 900.0, "科技": 1200.0}, "groups": ["大金融", "科技"],
+            "aum": {"大金融": 400.0, "科技": 1200.0},
+            "aum_series": pd.DataFrame(                       # 逐日分母（变化，证明非常数）
+                {"大金融": np.linspace(900.0, 400.0, 40), "科技": np.linspace(1500.0, 1200.0, 40)},
+                index=roll.index),
+            "groups": ["大金融", "科技"],
             "members": {"大金融": [("512800", "银行ETF")], "科技": [("512480", "半导体ETF")]},
             "excluded": [("000000", "无份额ETF")], "as_of": "2026-08-14"}
 
@@ -260,7 +264,7 @@ def test_render_flow_section_present():
     assert "无份额ETF" in html                           # 未计入注记
     assert "配置盘的脚印" in html                        # 读图说明 ④ 方法论注记
     assert "图上按钮" in html and "60日≈季度趋势" in html  # 线图下方按钮说明常驻
-    assert "仅显示单组时" in html                      # 单组下 N日/N日% 同形的说明
+    assert "逐日分母" in html                          # % 态=占当日自身规模说明
     # 组筛选：chips=图例开关（图内 legend 已移除）
     assert html.count('data-flow-group="') >= 2            # 每组 chip 带筛选属性
     assert 'onclick="flowChipClick(' in html and 'ondblclick="flowChipSolo(' in html
@@ -329,8 +333,12 @@ def test_flow_lines_window_unit_buttons():
     assert [b.label for b in menu.buttons] == ["5日", "5日%", "20日", "20日%", "60日", "60日%"]
     assert menu.active == 2                                # 默认态 = 20日·亿元
     assert menu.buttons[2].args[1]["title.text"].startswith("组级净流入 · 20日滚动")
-    assert menu.buttons[1].args[1]["yaxis.title.text"] == "净流入(% 组规模)"
+    assert menu.buttons[1].args[1]["yaxis.title.text"] == "净流入(% 当日组规模)"
     assert menu.buttons[1].args[1]["yaxis.ticksuffix"] == "%"   # % 态刻度带 % 后缀
     assert menu.buttons[0].args[1]["yaxis.ticksuffix"] == ""    # 亿 态清除后缀
     assert menu.buttons[2].args[0]["y"][0][0] == pytest.approx(float(roll["大金融"].iloc[0]))
     assert menu.buttons[0].args[0]["y"][0][0] == pytest.approx(float(roll["大金融"].iloc[0]) * 0.5)
+    # % 态 = 逐日分母：5日按钮的 pct[0] = roll5[0] ÷ 当日组规模（非常数除法）
+    aser = base["aum_series"]["大金融"]
+    exp = float((roll["大金融"] * 0.5).iloc[0]) / float(aser.iloc[0]) * 100.0
+    assert menu.buttons[1].args[0]["y"][0][0] == pytest.approx(exp, rel=1e-9)
