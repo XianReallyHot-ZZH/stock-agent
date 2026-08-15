@@ -499,9 +499,9 @@ def flow_lines_figure(flow: dict) -> go.Figure:
         abs_ys = [roll[g].astype(float).tolist() for g in roll.columns]
         pct_ys = [[(v / aum[g] * 100.0) if (aum.get(g) or 0) > 0 else None
                    for v in roll[g].astype(float)] for g in roll.columns]
-        combos.append((f"{w}日", abs_ys, "净流入(亿)",
+        combos.append((f"{w}日", abs_ys, "净流入(亿)", "",
                        f"组级净流入 · {w}日滚动（亿元 = Δ份额×当日净值 · 份额=净申赎）"))
-        combos.append((f"{w}日%", pct_ys, "净流入(% 组规模)",
+        combos.append((f"{w}日%", pct_ys, "净流入(% 组规模)", "%",
                        f"组级净流入 · {w}日滚动（% 组规模）"))
     active = 2 * windows.index(default_w)      # 默认态 = 主窗口 × 绝对亿元
 
@@ -528,8 +528,9 @@ def flow_lines_figure(flow: dict) -> go.Figure:
         type="buttons", direction="right", x=0.36, xanchor="left", y=1.24, yanchor="bottom",
         pad=dict(t=0, b=0), active=active, buttons=[
             dict(label=lbl, method="update",
-                 args=[{"y": ys}, {"yaxis.title.text": ytitle, "title.text": ftitle}])
-            for lbl, ys, ytitle, ftitle in combos
+                 args=[{"y": ys}, {"yaxis.title.text": ytitle, "yaxis.ticksuffix": tsuf,
+                                   "title.text": ftitle}])
+            for lbl, ys, ytitle, tsuf, ftitle in combos
         ])])
     return fig
 
@@ -625,7 +626,9 @@ def _flow_section(flow: dict) -> str:
         '带 <b>%</b> = 各组占<b>自身规模</b>的百分比（相对增减强度——大小组可横向比），'
         '不带 = 绝对亿元。切换只换窗口/口径不改数据；滚动值对拐点的反应约滞后半个窗口。<br>'
         '🎛 组筛选：<b>单击</b>上方组 chip = 该组线开/关（灰=已隐藏）· <b>双击</b> = 仅看该组'
-        '（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。</p>'
+        '（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。<br>'
+        '⚠️ <b>仅显示单组时，N日 与 N日% 是同一曲线</b>（% = 亿 ÷ 该组规模，只改纵轴刻度，'
+        '数学必然·非故障；若该组规模恰近百亿则数值也几乎重合）——% 口径的价值在<b>多组横向比</b>。</p>'
         '<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
         f'style="min-height:{_flow_heat_height(len(members) or 1)}px"></div></div>')
 

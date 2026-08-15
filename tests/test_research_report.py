@@ -260,6 +260,7 @@ def test_render_flow_section_present():
     assert "无份额ETF" in html                           # 未计入注记
     assert "配置盘的脚印" in html                        # 读图说明 ④ 方法论注记
     assert "图上按钮" in html and "60日≈季度趋势" in html  # 线图下方按钮说明常驻
+    assert "仅显示单组时" in html                      # 单组下 N日/N日% 同形的说明
     # 组筛选：chips=图例开关（图内 legend 已移除）
     assert html.count('data-flow-group="') >= 2            # 每组 chip 带筛选属性
     assert 'onclick="flowChipClick(' in html and 'ondblclick="flowChipSolo(' in html
@@ -329,5 +330,7 @@ def test_flow_lines_window_unit_buttons():
     assert menu.active == 2                                # 默认态 = 20日·亿元
     assert menu.buttons[2].args[1]["title.text"].startswith("组级净流入 · 20日滚动")
     assert menu.buttons[1].args[1]["yaxis.title.text"] == "净流入(% 组规模)"
+    assert menu.buttons[1].args[1]["yaxis.ticksuffix"] == "%"   # % 态刻度带 % 后缀
+    assert menu.buttons[0].args[1]["yaxis.ticksuffix"] == ""    # 亿 态清除后缀
     assert menu.buttons[2].args[0]["y"][0][0] == pytest.approx(float(roll["大金融"].iloc[0]))
     assert menu.buttons[0].args[0]["y"][0][0] == pytest.approx(float(roll["大金融"].iloc[0]) * 0.5)
