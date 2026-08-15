@@ -534,52 +534,6 @@ def flow_lines_figure(flow: dict) -> go.Figure:
     return fig
 
 
-def flow_intensity_figure(flow: dict) -> go.Figure:
-    """组级流入强度：W 日净流入 / 组自身规模 ×100（%）——量级图看「多少钱」，
-    本图看「相对体量的增减强度」，小组与大组可横向比（红利-23亿是大幅缩水，
-    医药-31亿只是零头）。与量级图同色同序；窗口按钮独立（5/20/60日，单位恒%）。
-    y 也可为负（净流出）；零轴=增减分界。"""
-    aum = flow.get("aum") or {}
-    default_w = flow.get("window", 20)
-    rolls = flow.get("rolls") or {default_w: flow["group_roll"]}
-    windows = sorted(rolls)
-    roll0 = rolls[windows[0]]
-    x = pd.to_datetime(roll0.index)
-    fig = go.Figure()
-    for i, g in enumerate(roll0.columns):
-        a = float(aum.get(g) or 0.0)
-        y = roll0[g].astype(float) / a * 100.0 if a > 0 else pd.Series(np.nan, index=roll0.index)
-        fig.add_trace(go.Scatter(
-            x=x, y=y, name=str(g),
-            line=dict(color=_FLOW_COLORS[i % len(_FLOW_COLORS)], width=1.4),
-            hovertemplate="%{fullData.name} %{y:+.2f}%<extra></extra>"))
-    combos = [(f"{w}日", rolls[w], f"组级流入强度 · {w}日净流入占组规模%") for w in windows]
-    active = windows.index(default_w)
-    fig.update_layout(**_base_layout(
-        f"组级流入强度 · {default_w}日净流入占组规模%（量级看上图 · 强度看此图：相对自身体量的增减，小组与大组可横向比）",
-        _FLOW_HEIGHT_LINES))
-    fig.update_layout(hoverlabel=dict(font=dict(size=9)))
-    fig.update_layout(showlegend=False, margin=dict(t=64, l=54, r=54, b=28))
-    x0 = x[-1] - pd.DateOffset(years=1)
-    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d",
-                     rangeselector=_RANGE_BUTTONS,
-                     rangeslider=dict(visible=True, thickness=0.02),
-                     range=[x0, x[-1]])
-    fig.update_yaxes(title_text="净流入(% 组规模)", zeroline=True, zerolinewidth=1,
-                     gridcolor=C_GRID, tickformat="+.0f")
-    fig.update_layout(updatemenus=[dict(
-        type="buttons", direction="right", x=0.36, xanchor="left", y=1.24, yanchor="bottom",
-        pad=dict(t=0, b=0), active=active, buttons=[
-            dict(label=lbl, method="update",
-                 args=[{"y": [([v / aum[g] * 100.0 if (aum.get(g) or 0) > 0 else None
-                               for v in roll[g].astype(float)])
-                              for g in roll.columns]},
-                      {"title.text": ftitle}])
-            for lbl, roll, ftitle in combos
-        ])])
-    return fig
-
-
 def flow_heatmap_figure(flow: dict) -> go.Figure:
     """组×月 份额净申赎 ROC 热力图。红=正=流入/绿=负=流出（A股惯例；本节局部语义，
     与排名表筹码列相反——节首副行有图例）。NaN 格透明=无数据；末列=月内至今。
@@ -666,17 +620,13 @@ def _flow_section(flow: dict) -> str:
         f'{groups_block}'
         '<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="0" '
         f'style="min-height:{_FLOW_HEIGHT_LINES}px"></div></div>'
+        '<p class="sub">⌨ 图上按钮：<b>N日</b> = 过去 N 个交易日的净流入<b>合计</b>'
+        '（5日≈周内爆发·最灵敏 ｜ 20日≈月度节奏·与上方 tile 同口径 ｜ 60日≈季度趋势·最钝）；'
+        '带 <b>%</b> = 各组占<b>自身规模</b>的百分比（相对增减强度——大小组可横向比），'
+        '不带 = 绝对亿元。切换只换窗口/口径不改数据；滚动值对拐点的反应约滞后半个窗口。<br>'
+        '🎛 组筛选：<b>单击</b>上方组 chip = 该组线开/关（灰=已隐藏）· <b>双击</b> = 仅看该组'
+        '（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。</p>'
         '<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
-        f'style="min-height:{_FLOW_HEIGHT_LINES}px"></div></div>'
-        '<p class="sub">⌨ 两图同色同序：上=<b>量级</b>（净流入多少亿），下=<b>强度</b>（净流入占'
-        '组自身规模%，增减的相对强弱——大小组可横向比）；按钮 <b>N日</b> = 过去 N 个交易日'
-        '净流入<b>合计</b>（5日≈周内爆发·最灵敏 ｜ 20日≈月度节奏·与上方 tile 同口径 ｜ '
-        '60日≈季度趋势·最钝）；两图窗口各自独立。滚动值对拐点的反应约滞后半个窗口。<br>'
-        '🎛 组筛选（对上下两图同时生效）：<b>单击</b>上方组 chip = 该组线开/关（灰=已隐藏）· '
-        '<b>双击</b> = 仅看该组（再双击复位）· <b>↺ 全部</b> = 恢复显示。chip 色点=线的颜色。<br>'
-        '⚠️ <b>独显单组时强度图与量级图同形</b>（强度=量级÷组规模，仅纵轴缩放，属预期非故障）'
-        '——强度图的价值在<b>多组横向比</b>（谁相对自身体量被买/卖最猛），单组细看请用上方量级图。</p>'
-        '<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="2" '
         f'style="min-height:{_flow_heat_height(len(members) or 1)}px"></div></div>')
 
 
@@ -1028,26 +978,22 @@ function _renderChart(el){
   if(el.style.minHeight) el.style.height = el.style.minHeight;
   Plotly.newPlot(el, list[i], {responsive:true, displaylogo:false}).then(function(){
     if(el.dataset.rendered === '1') _applyPlotlyTheme(el, _isDark());
-    if(sym === '__flow' && (i === 0 || i === 1)) _applyFlowFilter();  // chips过滤态在(重)渲染后恢复
+    if(sym === '__flow' && i === 0) _applyFlowFilter();   // 组chips过滤态在(重)渲染后恢复
   }).catch(function(){});
 }
-// —— 板块资金流向：组 chips = 两张线图（量级idx0/强度idx1）共用的图例开关 ——
-// （图内 legend 已移除，chips 即图例；热力图 idx2 不参与）
+// —— 板块资金流向：组 chips = 线图图例开关（图内 legend 已移除，chips 即图例）——
 // 单击 chip=该组线开关 · 双击=仅看该组(已独显则复位) · ↺全部=全开
-function _flowLinesEls(){
-  return [].slice.call(document.querySelectorAll(
-    '.lazy-chart[data-sym="__flow"][data-idx="0"],' +
-    '.lazy-chart[data-sym="__flow"][data-idx="1"]'));
+function _flowLinesEl(){
+  return document.querySelector('.lazy-chart[data-sym="__flow"][data-idx="0"]');
 }
 function _applyFlowFilter(){
-  _flowLinesEls().forEach(function(el){
-    if(!el || el.dataset.rendered !== '1' || !el.data) return;
-    var vis = el.data.map(function(tr){
-      var c = document.querySelector('.flow-chip[data-flow-group="' + tr.name + '"]');
-      return (!c || c.classList.contains('on')) ? true : 'legendonly';
-    });
-    try { Plotly.restyle(el, {'visible': vis}); } catch(e) {}
+  var el = _flowLinesEl();
+  if(!el || el.dataset.rendered !== '1' || !el.data) return;
+  var vis = el.data.map(function(tr){
+    var c = document.querySelector('.flow-chip[data-flow-group="' + tr.name + '"]');
+    return (!c || c.classList.contains('on')) ? true : 'legendonly';
   });
+  try { Plotly.restyle(el, {'visible': vis}); } catch(e) {}
 }
 function flowChipClick(name){
   var c = document.querySelector('.flow-chip[data-flow-group="' + name + '"]');
@@ -1225,8 +1171,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     # 板块资金流向：图表挂 CHARTS['__flow'] 伪 key（JS 纯 dict 查找，与 ETF 图同一懒渲染管线）
     flow_html = ""
     if flow and (flow.get("state") or {}).get("label_key") not in (None, "insufficient"):
-        flow_figs = [flow_lines_figure(flow), flow_intensity_figure(flow),
-                     flow_heatmap_figure(flow)]
+        flow_figs = [flow_lines_figure(flow), flow_heatmap_figure(flow)]
         charts_json["__flow"] = [f.to_json() for f in flow_figs]
         flow_html = _flow_section(flow)
     _esc = lambda s: re.sub(r"</script", r"<\\/script", s, flags=re.I)
