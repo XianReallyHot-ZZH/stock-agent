@@ -71,6 +71,18 @@ def _base_layout(title: str, height: int = CHART_HEIGHT) -> dict:
     )
 
 
+def _x_range_default(fig: go.Figure, years: float = 3.0) -> None:
+    """逐标的明细图初始视图 = 最近 N 年（默认 3 年）。此 plotly 版本 rangeselector
+    无 active 属性 → 显式设 x range（按钮高亮不跟随初始 range 属版本限制；
+    全历史走「全部」按钮/底部滑块）。x 末端取全部 trace 的最大日期。"""
+    ends = [pd.to_datetime(tr.x[-1]) for tr in fig.data
+            if tr.x is not None and len(tr.x) and tr.x[-1] is not None]
+    if not ends:
+        return
+    x_last = max(ends)
+    fig.update_xaxes(range=[x_last - pd.DateOffset(years=years), x_last])
+
+
 def _nav_series(nav_df):
     """Pick acc_nav (split+dividend-adjusted, continuous) else unit_nav. Returns (Series, label)."""
     if nav_df is None or not len(nav_df):
@@ -143,6 +155,7 @@ def shares_nav_figure(name: str, shares_df, nav_df, ma_period: int = 60,
     fig.update_yaxes(title_text="份额（亿份）", secondary_y=True, gridcolor=C_GRID)
     fig.update_xaxes(type="date", hoverformat="%Y-%m-%d", rangeselector=_RANGE_BUTTONS,
                      rangeslider=dict(visible=True, thickness=0.02))
+    _x_range_default(fig)                     # 初始视图 = 最近 3 年
     return fig
 
 
@@ -228,6 +241,7 @@ def nav_deviation_figure(name: str, nav_df, snap: dict, ma_period: int = 60) -> 
     # 底部子图（row=2）挂 rangeslider —— 与 shares_nav_figure 一致，拖拽滑块切观察窗口；
     # shared_xaxes=True 故上下两图联动。写法参照 tracker/dashboard.py 的 2-row 子图。
     fig.update_xaxes(rangeslider=dict(visible=True, thickness=0.02), row=2, col=1)
+    _x_range_default(fig)                     # 初始视图 = 最近 3 年（shared_xaxes 上下联动）
     return fig
 
 
@@ -751,6 +765,7 @@ def flow_daily_figure(label: str, shares_df, nav_df):
                      gridcolor=C_GRID, secondary_y=False)
     fig.update_yaxes(title_text="日增减%", zeroline=False, gridcolor="rgba(0,0,0,0)",
                      secondary_y=True)
+    _x_range_default(fig)                     # 初始视图 = 最近 3 年
     return fig
 
 

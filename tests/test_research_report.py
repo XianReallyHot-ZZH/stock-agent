@@ -142,6 +142,19 @@ def test_shares_nav_figure_yaxis_titles():
     assert fig.layout.yaxis2.title.text == "份额（亿份）"   # 右轴（份额）
 
 
+def test_detail_figures_default_3y_range():
+    # 逐标的明细三图初始视图 = 最近 3 年（1095±15 天；数据不足 3 年时范围仍设满 3 年）
+    shares, nav = _mini_dfs()
+    for fig in (rep.shares_nav_figure("T", shares, nav),
+                rep.nav_deviation_figure("T", nav, {"nav_dev_cur": 0.01, "nav_dev_pct": 0.5,
+                                                    "nav_extreme_events": []}),
+                rep.flow_daily_figure("T(0)", shares, nav)):
+        rng = fig.layout.xaxis.range
+        assert rng is not None, "初始 x range 未设置"
+        days = (pd.Timestamp(rng[1]) - pd.Timestamp(rng[0])).days
+        assert 1080 <= days <= 1110, days
+
+
 # ---------------- flow_daily_figure（日度净申赎 · 事件级） ----------------
 
 import pytest  # noqa: E402  （本段断言用 approx）
