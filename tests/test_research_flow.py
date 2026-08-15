@@ -152,22 +152,36 @@ import pytest  # noqa: E402  （本段断言用 approx）
 def test_daily_flow_events_thresholds():
     # A：300日历史、3天前单日+30%（×nav2.0=6亿 ≥ 地板）→ 命中；
     # S：同幅+30% 但净值0.001（flow=0.003亿 < 地板）→ 金额地板滤掉；
-    # Y：仅60日历史 → min_history 跳过；A 巨幅发生在窗外(-200日) → lookback 排除
+    # Y：仅60日历史 → min_history 跳过；O：巨幅在 -200日（scan_days=250 窗内）→ 也命中（台账含历史）
     n = 300
     sh_a = np.full(n, 1e9); sh_a[-3:] = 1.3e9        # 跳变后保持（否则回落日也成事件）
     a = _series_map(n, sh_a, nav_val=2.0)
     sh_s = np.full(n, 1e9); sh_s[-2:] = 1.3e9
     s = _series_map(n, sh_s, nav_val=0.001)
     y = _series_map(60, np.full(60, 1e9))
-    sh_o = np.full(n, 1e9); sh_o[-200] = 1.4e9
+    sh_o = np.full(n, 1e9); sh_o[-200:] = 1.4e9
     o = _series_map(n, sh_o, nav_val=2.0)
     panel, _ = fl.flow_panel({"A": a, "S": s, "Y": y, "O": o})
     evs = fl.daily_flow_events(panel, pctile=0.99, floor_yi=1.0,
-                               lookback_days=5, min_history=250)
-    assert [e["symbol"] for e in evs] == ["A"]
+                               scan_days=250, top=8, min_history=250)
+    assert [e["symbol"] for e in evs] == ["A", "O"]   # 日期降序（A 最近）
     assert evs[0]["side"] == "in"
     assert evs[0]["pctile"] >= 0.99
     assert evs[0]["flow_yi"] == pytest.approx(6.0, abs=1e-9)   # 3e8份×2.0/1e8
+
+
+def test_daily_flow_events_top_cap():
+    # top 上限：两条命中、top=1 → 只留最新那条（新事件顶旧事件）
+    n = 300
+    sh = np.full(n, 1e9); sh[-20:-5] = 1.4e9; sh[-5:] = 1.8e9   # -20日+40%、-5日+28.6%
+    m = _series_map(n, sh, nav_val=2.0)
+    panel, _ = fl.flow_panel({"A": m})
+    all_evs = fl.daily_flow_events(panel, scan_days=250, top=8)
+    assert len(all_evs) == 2
+    newest = str(_idx(n)[-5])[:10]
+    assert str(all_evs[0]["date"])[:10] == newest               # 最新在前
+    top1 = fl.daily_flow_events(panel, scan_days=250, top=1)
+    assert len(top1) == 1 and str(top1[0]["date"])[:10] == newest
 
 
 def test_daily_flow_events_empty():

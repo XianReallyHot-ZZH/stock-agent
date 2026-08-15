@@ -320,8 +320,9 @@ def group_monthly_matrix(panel: dict, groups: dict[str, list[str]],
 # ---------------------------------------------------------------------------
 
 def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.0,
-                      lookback_days: int = 5, min_history: int = 250) -> list[dict]:
-    """单 ETF 申赎异动事件（近 lookback_days 个交易日内）。
+                      scan_days: int = 250, top: int = 8, min_history: int = 250) -> list[dict]:
+    """最近申赎异动事件台账（回检用）：近 scan_days 个交易日内全部命中里，取
+    最新 top 条——新事件把旧事件顶下去，横幅常驻有数据。
 
     判定（自适应每只 ETF 自身波动性 + 金额地板滤小钱噪声）：
       |日增减%|（Δ份额/前日份额·拆分前复权口径）≥ 自身历史 pctile 分位
@@ -330,7 +331,7 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
     有效观测 < min_history 的 ETF 跳过（历史太短分位不可靠）。
 
     Returns: [{symbol, date, flow_yi, pct, pctile, side('in'/'out')}, ...]
-             按日期降序、同日按金额降序（report 层再截 top-N 并标最新日）。"""
+             按日期降序、同日按金额降序。"""
     events: list[dict] = []
     for sym, p in panel.items():
         pct = p["shares"].pct_change().dropna()
@@ -338,7 +339,7 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
             continue
         ranks = pct.abs().rank(method="average", pct=True)
         flow = p["flow"]
-        for d in pct.index[-lookback_days:]:
+        for d in pct.index[-scan_days:]:
             f = flow.get(d)
             if f is None or f != f or abs(float(f)) < floor_yi:
                 continue
@@ -347,4 +348,4 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
                                "pct": float(pct.loc[d]), "pctile": float(ranks.loc[d]),
                                "side": "in" if float(pct.loc[d]) > 0 else "out"})
     events.sort(key=lambda e: (e["date"], abs(e["flow_yi"])), reverse=True)
-    return events
+    return events[:top]

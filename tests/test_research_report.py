@@ -219,22 +219,22 @@ def test_flow_events_banner_present_and_absent():
                       {"159915": {"name": "创业板ETF", "group": "成长宽基"},
                        "512800": {"name": "银行ETF"}, "512070": {"name": "证券保险ETF"}},
                       as_of="2026-08-14", flow=base)
-    assert "申赎异动 · 单日大额申赎事件" in html
+    assert "申赎异动 · 最近大额申赎事件台账" in html
     assert 'href="#512800"' in html and "净申购 +38.2亿" in html
     assert "净赎回 -21.0亿" in html and "历史分位 99.6%" in html
     assert 'class="flow-ev-today">最新</b>' in html           # 最新日事件有徽标
-    assert "申赎异动横幅" in html                             # 读图说明 ⑤
+    assert "申赎异动台账" in html                             # 读图说明 ⑤
     # 无事件（_flow_mini 无 events 键）→ 横幅仍常驻（安静窗口占位）
     html2 = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
                        {"159915": {"name": "创业板ETF"}}, as_of="2026-08-14",
                        flow=_flow_mini())
-    assert "申赎异动 · 单日大额申赎事件" in html2
+    assert "申赎异动 · 最近大额申赎事件台账" in html2
     assert "安静窗口属正常" in html2
     assert ">最新</b>" not in html2 and 'href="#512800"' not in html2   # 无条目无徽标
     # 完全不带 flow payload → 横幅整体省略
     html3 = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
                        {"159915": {"name": "创业板ETF"}}, as_of="2026-08-14")
-    assert "申赎异动 · 单日大额申赎事件" not in html3
+    assert "申赎异动 · 最近大额申赎事件台账" not in html3
 
 
 # ---------------- render 结构（主题/tab/折叠明细/快速跳转/回顶部/排序） ----------------

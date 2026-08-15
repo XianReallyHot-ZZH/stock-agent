@@ -554,13 +554,13 @@ def flow_lines_figure(flow: dict) -> go.Figure:
 
 
 def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
-    """📡 申赎异动横幅：近 N 交易日内的单 ETF 大额申赎事件（|日增减%|≥自身历史
-    分位 且 ≥金额地板），点条目跳该 ETF 日度净申赎图。最新交易日事件加「最新」
-    徽标置顶。无命中也常驻（安静窗口占位——否则功能容易被遗忘）。纯观察·非买卖建议。"""
+    """📡 申赎异动横幅：最近大额申赎事件台账（|日增减%|≥自身历史分位 且 ≥金额
+    地板），点条目跳该 ETF 日度净申赎图。近1年扫描、最新在前（新事件顶旧事件），
+    最新交易日事件加「最新」徽标。无命中也常驻（安静占位）。纯观察·非买卖建议。"""
     events = flow.get("events") or []
     last_date = flow.get("last_date")
     if not events:
-        body = ('<span class="xb-sub muted">近5个交易日无大额申赎事件 —— 安静窗口属正常。'
+        body = ('<span class="xb-sub muted">近一年扫描无大额申赎命中 —— 安静窗口属正常。'
                 '判定：|日增减%| ≥ 自身历史99%分位 <b>且</b> |净申赎额| ≥ 1亿'
                 '（阈值可调 params research.flow.alert）</span>')
     else:
@@ -581,8 +581,8 @@ def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
         body = "".join(items) + more
     return (
         '<div class="extreme-banner">'
-        '<div class="extreme-title">📡 申赎异动 · 单日大额申赎事件 '
-        '<span class="xb-note">近5个交易日 · |日增减%|≥自身历史99%分位 且 ≥1亿 · '
+        '<div class="extreme-title">📡 申赎异动 · 最近大额申赎事件台账 '
+        '<span class="xb-note">近1年扫描·最新在前（新事件顶旧事件） · |日增减%|≥自身历史99%分位 且 ≥1亿 · '
         '流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议 · 点击跳该ETF日度申赎图</span></div>'
         f'<div class="xb-list">{body}</div></div>')
 
@@ -1296,9 +1296,9 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                   "「板块间流向」是推断非直接观测（申赎是独立净额·资金来源无标签，存量约束下的此消彼长"
                   "=跷跷板最强证据）；本池是精选池非全市场，流出可能去了池外主题ETF（代表性偏差）；"
                   "拆分/折算已做前复权（份额×净值反向断崖检测），不计入流入。<br>"
-                  + ("⑤ <b>申赎异动横幅</b>：近5个交易日内 |日增减%| 进入自身历史99%分位 且 ≥1亿 的单日大额"
-                     "申赎事件（自适应各ETF波动性+金额地板滤小钱噪声；全历史分位·纯观察不防前视）；流入≠看好。"
-                     "点击条目跳该ETF的日度净申赎图看事件细节。<br>" if flow_events_html else ""))
+                  + ("⑤ <b>申赎异动台账</b>：近1年扫描 |日增减%| 进入自身历史99%分位 且 ≥1亿 的单日大额"
+                     "申赎事件，最新8条滚动展示（新事件顶旧事件·供回检）；全历史分位·纯观察不防前视；"
+                     "流入≠看好。点击条目跳该ETF的日度净申赎图看事件细节。<br>" if flow_events_html else ""))
 
     return f"""<html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
