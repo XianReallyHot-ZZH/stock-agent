@@ -47,7 +47,7 @@ else:
 ```bash
 # ETF 行业研究：全套历史(价格+份额+净值；PE 已不用)+ 渲染 research_report.html（自含依赖/.env 检查）
 PYTHONIOENCODING=utf-8 python scripts/setup_research_dashboard.py --skip-pe   # PE 已不用，跳过省 ~30min
-# 指数择时（全量幂等：6 宽基日线含000001 + 沪深300 PE/PB + 全市场 PB + 两市成交额）
+# 指数择时（全量幂等：7 宽基日线含000001+000852 + 沪深300 PE/PB + 全市场 PB + 两市成交额）
 PYTHONIOENCODING=utf-8 python scripts/backfill_index.py
 # 个股诊断（全量幂等：日线 / baidu PE·PB / sina 财报 / 分红 / eastmoney 预告）
 PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py

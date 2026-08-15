@@ -21,7 +21,20 @@ def test_index_prefix():
     assert _index_prefix("000300") == "sh"  # 沪深300
     assert _index_prefix("000905") == "sh"  # 中证500
     assert _index_prefix("000688") == "sh"  # 科创50
+    assert _index_prefix("000852") == "sh"  # 中证1000
     assert _index_prefix("399006") == "sz"  # 创业板指
+
+
+def test_broad_indices_set_synced_and_ordered():
+    """diagnose 与 DataManager 两份宽基清单必须同集合(人为复制,靠测试防漂移);
+    diagnose 侧顺序=看板展示序(①偏离极值曲线等):上证综指→沪深300→创业板→科创50→上证50→中证500→中证1000。"""
+    from stockagent.data.manager import DataManager
+    from stockagent.tracker import diagnose
+
+    assert [s for s, _ in diagnose.BROAD_INDICES] == \
+        ["000001", "000300", "399006", "000688", "000016", "000905", "000852"]
+    assert set(DataManager.BROAD_INDICES) == {s for s, _ in diagnose.BROAD_INDICES}
+    assert len(diagnose.BROAD_INDICES) == 7
 
 
 def test_index_daily_roundtrip():

@@ -1,6 +1,6 @@
 """Backfill / update broad-index data for the 指数择时层 (V4 tracker).
 
-5 宽基日线 (sina) + 沪深300/上证50/中证500 PE (legulegu) + 全市场 PB (legulegu).
+7 宽基日线 (sina) + 沪深300/上证50/中证500 PE (legulegu) + 全市场 PB (legulegu).
 Idempotent — each endpoint returns full history, upsert overwrites. Safe to re-run.
 
 Usage:
@@ -26,8 +26,9 @@ from stockagent.utils.logging_setup import setup_logging
 def _summary(dm: DataManager):
     store = dm.store
     print("\n=== 指数层数据覆盖 ===")
-    names = [("000016", "上证50"), ("000300", "沪深300"), ("000905", "中证500"),
-             ("399006", "创业板指"), ("000688", "科创50"), ("000001", "上证综指")]
+    names = [("000001", "上证综指"), ("000300", "沪深300"), ("399006", "创业板指"),
+             ("000688", "科创50"), ("000016", "上证50"), ("000905", "中证500"),
+             ("000852", "中证1000")]
     for sym, nm in names:
         df = store.get_index_daily_series(sym)
         if len(df):
@@ -70,7 +71,7 @@ def _summary(dm: DataManager):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--daily", action="store_true", help="only 6 broad-index daily OHLCV")
+    ap.add_argument("--daily", action="store_true", help="only 7 broad-index daily OHLCV")
     ap.add_argument("--pe", action="store_true", help="指数 PE+PB (沪深300/上证50/中证500)")
     ap.add_argument("--pb", action="store_true", help="only whole-market PB")
     ap.add_argument("--turnover", action="store_true", help="only 两市日成交额(⑧地量监测,baostock)")

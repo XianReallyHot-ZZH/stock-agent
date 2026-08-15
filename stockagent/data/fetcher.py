@@ -652,8 +652,9 @@ def _index_prefix(symbol: str) -> str:
 def fetch_index_daily(symbol: str, timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
     """Broad-index daily OHLCV (sina stock_zh_index_daily, RAW — indices need no 复权).
 
-    Returns DataFrame indexed by date(str): open/high/low/close/volume. Covers 上证50/沪深300/
-    中证500/创业板指/科创50 (科创50 from 2020-01, 创业板指 from 2010-06, others back to 2002-2005).
+    Returns DataFrame indexed by date(str): open/high/low/close/volume. Covers 上证综指/沪深300/
+    创业板指/科创50/上证50/中证500/中证1000 (科创50 from 2020-01, 中证1000 from 2014-10,
+    创业板指 from 2010-06, others back to 2002-2005).
     """
     pre = _index_prefix(symbol)
     last_err = None

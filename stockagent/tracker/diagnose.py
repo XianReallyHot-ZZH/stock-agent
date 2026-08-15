@@ -17,11 +17,13 @@ import pandas as pd
 
 from . import indicators as ti
 
-# 6 broad indices (same set as DataManager.BROAD_INDICES; duplicated here so the diagnose
-# layer has a stable iteration order independent of the manager). 000001(上证综指) is the
-# benchmark for ⑦相对周期律 (创业板 vs 上证 点差周期)。
-BROAD_INDICES = [("000016", "上证50"), ("000300", "沪深300"), ("000905", "中证500"),
-                 ("399006", "创业板指"), ("000688", "科创50"), ("000001", "上证综指")]
+# 7 broad indices (same set as DataManager.BROAD_INDICES; duplicated here so the diagnose
+# layer has a stable iteration order independent of the manager). 顺序=看板展示序
+# (①偏离极值曲线/②趋势表/⑤信号区共用): 上证综指(总览)→沪深300→创业板→科创50→上证50→中证500→中证1000。
+# 000001(上证综指) is the benchmark for ⑦相对周期律 (创业板 vs 上证 点差周期)。
+BROAD_INDICES = [("000001", "上证综指"), ("000300", "沪深300"), ("399006", "创业板指"),
+                 ("000688", "科创50"), ("000016", "上证50"), ("000905", "中证500"),
+                 ("000852", "中证1000")]
 VALUATION_INDEX = "沪深300"            # ④估值开关以沪深300(大盘benchmark)为主
 PE_PCT_LOW, PE_PCT_HIGH = 0.20, 0.80   # 估值低/高位分位阈值(④ 敏感度建议)
 

@@ -108,7 +108,7 @@ python scripts/fix_splits.py                          # 修拆分（运行一次
 
 # 四套看板所需（首次较久，之后增量）
 python scripts/setup_research_dashboard.py            # ETF 研究看板一键（价格+份额+净值+PE+渲染）
-python scripts/backfill_index.py                      # 6 宽基日线(含上证综指) + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 上交所融资融券(⑨恐惧贪婪)
+python scripts/backfill_index.py                      # 7 宽基日线(含上证综指·中证1000) + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 上交所融资融券(⑨恐惧贪婪)
 python scripts/backfill_stock_data.py                 # 观察池个股 日线/估值/财报/分红/预告
 python scripts/backfill_stock_data.py --comm          # 商品价(碳酸锂/铜/螺纹钢/黄金/原油)
 

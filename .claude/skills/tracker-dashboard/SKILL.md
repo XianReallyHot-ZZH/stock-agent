@@ -1,6 +1,6 @@
 ---
 name: tracker-dashboard
-description: Refresh data and generate the 指数择时层看板 (index_timing.html, 9 sections). Use when the user wants to update/refresh the index-timing / broad-market dashboard, or asks to "生成/刷新指数看板/大盘择时看板/index timing dashboard". Backfills 6 broad-index daily(含上证综指000001) + 沪深300/上证50/中证500 PE/PB + 全市场 PB + 两市成交额(baostock) + 上交所融资融券(⑨恐惧贪婪·杠杆成分), then renders the dashboard. Phase 1-B of the tracker module.
+description: Refresh data and generate the 指数择时层看板 (index_timing.html, 9 sections). Use when the user wants to update/refresh the index-timing / broad-market dashboard, or asks to "生成/刷新指数看板/大盘择时看板/index timing dashboard". Backfills 7 broad-index daily(含上证综指000001·中证1000 000852) + 沪深300/上证50/中证500 PE/PB + 全市场 PB + 两市成交额(baostock) + 上交所融资融券(⑨恐惧贪婪·杠杆成分), then renders the dashboard. Phase 1-B of the tracker module.
 ---
 
 # 指数择时层看板 — 维护与生成
@@ -17,13 +17,13 @@ description: Refresh data and generate the 指数择时层看板 (index_timing.h
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/backfill_index.py
 ```
-抓 6 宽基日线(sina,含上证综指000001=⑦基准) + 沪深300/上证50/中证500 PE+PB(legulegu) + 全市场 PB + 两市成交额(baostock sh.000001+sz.399001=⑧地量数据源,首次拉历史到 1991 起、稍慢) + 上交所融资融券(`stock_margin_sse`按年分段,⑨恐惧贪婪·杠杆成分,历史自 2010-03)。可选 `--turnover`/`--margin` 只刷单项。每次全量覆盖。
+抓 7 宽基日线(sina,含上证综指000001=⑦基准·中证1000 000852) + 沪深300/上证50/中证500 PE+PB(legulegu) + 全市场 PB + 两市成交额(baostock sh.000001+sz.399001=⑧地量数据源,首次拉历史到 1991 起、稍慢) + 上交所融资融券(`stock_margin_sse`按年分段,⑨恐惧贪婪·杠杆成分,历史自 2010-03)。可选 `--turnover`/`--margin` 只刷单项。每次全量覆盖。
 
 或先看新鲜度(指数段):
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/dashboard_data_check.py
 ```
-读「指数层(择时)」段:6 宽基日线 / PE / PB / 全市场 PB 是否到最新交易日。
+读「指数层(择时)」段:7 宽基日线 / PE / PB / 全市场 PB 是否到最新交易日。
 
 ### 2. 生成看板
 ```bash
@@ -42,7 +42,7 @@ PYTHONIOENCODING=utf-8 python scripts/validate_volume_bottom.py
 - **估值开关 zone**(低位·可激进 / 高位·宜保守 / 结构分化·宜观望 / 中位·中性)+ 沪深300 PE/PB 分位(③图看历史位置)
 - **市场温度**:大小盘温差(同步 / 小盘偏贵 / 小盘偏便宜)
 - **蓝筹 vs 成长**仓位倾向
-- **6 宽基趋势**:60 日线上下 / 突破跌破档位 / 震荡市 flag / 偏离度
+- **7 宽基趋势**:60 日线上下 / 突破跌破档位 / 震荡市 flag / 偏离度
 - **偏离极值**:接近历史正/负极值的指数(S13 套利区)
 - **⑦ 相对周期律**:创业板 vs 上证 点差在 5 年包络的位置(极点才有方向 / 中枢无 edge)
 - **⑧ 成交量地量**:成交额/MA250 + 量底→价底时效(~1 月);**地量≠高胜率买点**(实证:各 horizon 胜率~50%,仅时效成立)
@@ -58,7 +58,7 @@ PYTHONIOENCODING=utf-8 python scripts/validate_volume_bottom.py
 ## 端点真相(akshare 1.18.64)
 | 数据 | 端点 | 备注 |
 |---|---|---|
-| 宽基日线 | `stock_zh_index_daily(symbol="sh000300")` | sina,sh/sz 前缀(000xxx→sh, 399xxx→sz);6 宽基含上证综指 sh000001(⑦基准) |
+| 宽基日线 | `stock_zh_index_daily(symbol="sh000300")` | sina,sh/sz 前缀(000xxx→sh, 399xxx→sz);7 宽基含上证综指 sh000001(⑦基准)·中证1000 sh000852 |
 | 两市成交额 | baostock `sh.000001`+`sz.399001` 的 `amount` | ⑧地量数据源;两所 amount 求和=两市(交易所总数,非成分和),历史到 1991 |
 | 沪深300 PE | `stock_index_pe_lg(symbol="沪深300")` | legulegu,中文名,取「滚动市盈率」 |
 | 沪深300 PB | `stock_index_pb_lg(symbol="沪深300")` | 同上,「市净率」 |

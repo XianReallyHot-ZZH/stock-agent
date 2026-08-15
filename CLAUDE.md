@@ -31,7 +31,7 @@ python scripts/research_report.py              # 生成 ETF 择时跟踪看板�
 # --push-alerts / --no-llm 已退役（仅可视化），保留 flag 向后兼容；改置顶 ETF 在 config/params.yaml 的 research.pinned_etfs
 
 # 指数择时层（tracker，Phase 1-B · 只读诊断，基于课程 S12-13）
-python scripts/backfill_index.py            # 回填 6 宽基日线(含上证综指000001) + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 上交所融资融券(⑨恐惧贪婪·杠杆成分)（幂等）
+python scripts/backfill_index.py            # 回填 7 宽基日线(含上证综指000001·中证1000 000852) + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 上交所融资融券(⑨恐惧贪婪·杠杆成分)（幂等）
 python scripts/index_timing_report.py       # 生成指数择时看板（data/index_timing.html，九 section（含 ⑨恐惧贪婪指数），深浅色可切）
 python scripts/validate_volume_bottom.py    # ⑧地量 event-study 深度报告（data/volume_bottom_study.html）
 
@@ -92,7 +92,7 @@ python scripts/transcribe_video.py --url "<链接>" --no-subtitle --device cpu #
 - **数据源**：AkShare（eastmoney→sina→baostock 三源容错）；份额 SSE `fund_etf_scale_sse` + SZSE `fund_etf_scale_szse`（双源，深市不再缺历史）
 - **行业研究数据**：单位净值 `fund_etf_fund_info_em`（真NAV，天然正确无需复权）；行业PE `stock_industry_pe_ratio_cninfo`（证监会行业，按日快照，历史~2023起约3年，cninfo 限流需重试）
 - **不复权数据**：sina 原始价格，需 `fix_splits.py` 修拆分后使用（仅影响价格序列；真NAV不受影响）
-- **指数择时数据**：6 宽基日线 `stock_zh_index_daily`（sina，含上证综指 000001=⑦基准）；沪深300 PE/PB `stock_index_pe/pb_lg`（legulegu，仅沪深300/上证50/中证500，**不支持**创业板指/科创50/上证综指）；全市场 PB `stock_a_all_pb`；两市成交额 baostock（sh.000001+sz.399001 的 amount 求和=两市，历史到 1991，**仅 ⑧ 用**）。存 `index_daily`/`index_pe`/`index_pb`/`market_pb`/`market_turnover`/`market_margin` 表（指数日线独立于 `daily_prices`，不复用 ETF 复权族）；⑨恐惧贪婪·杠杆成分 = 上交所融资余额 `stock_margin_sse`（按年分段拉，单次封顶 2000 行；深市总量历史 akshare 不可得，v1 仅沪市）
+- **指数择时数据**：7 宽基日线(含中证1000) `stock_zh_index_daily`（sina，含上证综指 000001=⑦基准）；沪深300 PE/PB `stock_index_pe/pb_lg`（legulegu，仅沪深300/上证50/中证500，**不支持**创业板指/科创50/上证综指）；全市场 PB `stock_a_all_pb`；两市成交额 baostock（sh.000001+sz.399001 的 amount 求和=两市，历史到 1991，**仅 ⑧ 用**）。存 `index_daily`/`index_pe`/`index_pb`/`market_pb`/`market_turnover`/`market_margin` 表（指数日线独立于 `daily_prices`，不复用 ETF 复权族）；⑨恐惧贪婪·杠杆成分 = 上交所融资余额 `stock_margin_sse`（按年分段拉，单次封顶 2000 行；深市总量历史 akshare 不可得，v1 仅沪市）
 - **ETF 三类标签**：`etf_pool.yaml` 的 `style`/`style_alt`（人工标 value/growth/cyclic，主+次）仅作择时跟踪看板的分页分组（不再用于估值）；偏离度/剪刀差与类别无关。PE/PB/分红/筹码 已不在本看板使用
 - **决策门**：walk-forward 样本外 PASS（更低回撤 + 不输基准）才能用
 - **A股交易日**：9:30-11:30 / 13:00-15:00；报告 8:30 前基于前日收盘
