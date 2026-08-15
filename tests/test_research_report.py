@@ -145,10 +145,11 @@ def test_shares_nav_figure_yaxis_titles():
 def test_detail_figures_default_3y_range():
     # 逐标的明细三图初始视图 = 最近 3 年（1095±15 天；数据不足 3 年时范围仍设满 3 年）
     shares, nav = _mini_dfs()
+    nav_both = nav.assign(unit_nav=nav["acc_nav"])       # flow_daily 需 unit_nav 列
     for fig in (rep.shares_nav_figure("T", shares, nav),
                 rep.nav_deviation_figure("T", nav, {"nav_dev_cur": 0.01, "nav_dev_pct": 0.5,
                                                     "nav_extreme_events": []}),
-                rep.flow_daily_figure("T(0)", shares, nav)):
+                rep.flow_daily_figure("T(0)", shares, nav_both)):
         rng = fig.layout.xaxis.range
         assert rng is not None, "初始 x range 未设置"
         days = (pd.Timestamp(rng[1]) - pd.Timestamp(rng[0])).days
