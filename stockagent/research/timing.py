@@ -10,6 +10,9 @@
   3. 筹码方向（chip_direction）：份额申赎 5/10/20/30/60 日近端加权投票（等差权重
      5/4/3/2/1）+ ±1% 死区 → 增/减/持平（机构行为·代理口径），供「偏离度×筹码」
      四象限提醒交叉。
+  4. 拆分/份额折算连续性调整（split_adjusted_shares）：份额×unit_nav 反向断崖检测
+     → 前复权。份额系指标（剪刀差/筹码/资金流向）共用前置——原始份额跨拆分日会读出
+     +100% 假"申赎"（2026-08 修复：515880 等刚拆分 ETF 的 30/60 日筹码票曾被污染）。
 
 隔离说明：偏离度计算的纯函数（ma_series / deviation_series / deviation_extremes /
 _merged_runs / deviation_extreme_events）从 stockagent/tracker/indicators.py **复制**
@@ -140,6 +143,57 @@ def deviation_extreme_events(close: pd.Series, period: int = MA_PERIOD,
     out = [e for e in events if "rank" in e]
     out.sort(key=lambda e: e["date"])                   # 按日期升序（便于绘图）
     return out
+
+
+# ---------------------------------------------------------------------------
+# 拆分/份额折算连续性调整 —— 份额系指标共用前置（剪刀差/筹码/资金流向）
+# ---------------------------------------------------------------------------
+
+def split_adjusted_shares(shares_df, nav_df, *, sh_jump: float = 0.20,
+                          nav_cliff: float = 0.25) -> tuple[pd.Series | None, list[dict]]:
+    """检测拆分/份额折算事件并把份额序列前复权成连续口径。
+
+    检测规则（阈值实证自 2021-2026 全池 36 只：12 起真事件零漏报，分红/巨额真实
+    申赎零误报）：
+      拆分日 = |份额日环比| ≥ sh_jump(20%) 且 |unit_nav 日环比| ≥ nav_cliff(25%)
+               且两者反号（拆分: 份×r & 净值÷r；反向折算: 份÷r & 净值×r；AUM 连续）。
+      - 分红不会触发：unit_nav 断崖但份额无 ≥20% 跳变（如 512690 2021-12-31 分红）。
+      - 真实巨额申赎不会触发：份额跳变但 unit_nav 正常波动（±10% 涨跌停内），
+        如 2024 年初国家队、2025-07-22 多只同日大额申购——这些是真信号，必须保留。
+
+    调整：每个拆分日 d（当日份额环比 r）把 d 之前的历史 ×(1+r)（前复权到末段
+    口径）；多次拆分按时间升序累乘。
+
+    Returns: (调整后份额 Series（对齐到 unit_nav 日历、ffill）， 事件列表
+             [{date, ratio}, ...])。份额/净值不可用 → (None, [])。
+             acc_nav 不用于检测（复权连续、无断崖），拆分检测必须用 unit_nav。
+    """
+    if shares_df is None or nav_df is None:
+        return None, []
+    if len(shares_df) == 0 or len(nav_df) == 0:
+        return None, []
+    if "shares" not in shares_df.columns or "unit_nav" not in nav_df.columns:
+        return None, []
+    n = pd.to_numeric(nav_df["unit_nav"], errors="coerce").dropna()
+    s = pd.to_numeric(shares_df["shares"], errors="coerce").dropna()
+    if n.empty or s.empty:
+        return None, []
+    s = s.sort_index()
+    s = s[~s.index.duplicated(keep="last")]
+    al = s.reindex(n.index, method="ffill")
+    if al.dropna().empty:
+        return None, []
+    sh_roc = al.pct_change()
+    nav_ret = n.pct_change()
+    is_split = (((sh_roc >= sh_jump) & (nav_ret <= -nav_cliff))
+                | ((sh_roc <= -sh_jump) & (nav_ret >= nav_cliff))).fillna(False)
+    events: list[dict] = []
+    adj = al.copy()
+    for d in al.index[is_split]:
+        r = 1.0 + float(sh_roc.loc[d])
+        adj.loc[adj.index < d] = adj.loc[adj.index < d] * r
+        events.append({"date": d, "ratio": r})
+    return adj, events
 
 
 # ---------------------------------------------------------------------------
@@ -291,13 +345,18 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         return {"nav_dev_cur": np.nan, "nav_dev_pct": np.nan, "nav_dev_max": np.nan,
                 "nav_dev_min": np.nan, "nav_extreme_events": [],
                 "scissor": {"detected": False}, "chip": _chip_empty,
+                "share_splits": [],
                 "data_sufficient": False,
                 "ma_period": ma_period, "nav_col": nav_col}
 
     ext = deviation_extremes(nav_series, period=ma_period)
     events = deviation_extreme_events(nav_series, period=ma_period)
-    shares_series = None
-    if shares_df is not None and len(shares_df) and "shares" in shares_df.columns:
+    # 份额系指标（剪刀差/筹码）必须用拆分前复权的连续份额——原始份额跨拆分日
+    # 会读出 +100% 假"申赎"，污染最长 60 日窗口的筹码投票（2026-08 修复）。
+    # nav_df 无 unit_nav 列（拆分检测不可能）→ 退化为原始份额（与旧行为一致）
+    shares_series, split_events = split_adjusted_shares(shares_df, nav_df)
+    if shares_series is None and shares_df is not None and len(shares_df) \
+            and "shares" in shares_df.columns:
         shares_series = shares_df["shares"]
     scissor = scissor_divergence(shares_series, nav_series,
                                  window_range=scissor_window, floor=scissor_floor)
@@ -312,6 +371,7 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         "nav_extreme_events": events,
         "scissor": scissor,
         "chip": chip,
+        "share_splits": split_events,
         "data_sufficient": bool(ext["valid"]),
         "ma_period": ma_period,
         "nav_col": nav_col,

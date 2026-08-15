@@ -282,3 +282,92 @@ def test_timing_snapshot_embeds_chip():
     snap2 = tm.timing_snapshot(nav_df, shares_df, ma_period=60)
     assert snap2["chip"]["data_sufficient"] is True
     assert snap2["chip"]["state"] in ("accumulating", "distributing", "flat")
+
+
+# ---------------- split_adjusted_shares（拆分/折算 前复权 · 份额系指标共用前置） ----------------
+
+def _split_frames(n=200, split_at=100, ratio=2.0):
+    """构造 (nav_df, shares_df)：split_at 日份额 ×(1/ratio 系数语义见下) 且 unit_nav 反向。
+
+    ratio>1 = 拆分（份额 ×ratio、净值 ÷ratio）；ratio<1 = 反向折算（份额 ÷、净值 ×）。
+    acc_nav 始终连续（复权），符合真实数据形态。
+    """
+    idx = _idx(n)
+    unit = np.linspace(2.0, 2.1, n)
+    sh = np.full(n, 1e9)
+    unit[split_at:] = unit[split_at:] / ratio
+    sh[split_at:] = 1e9 * ratio
+    nav_df = pd.DataFrame({"unit_nav": unit, "acc_nav": np.linspace(1.0, 1.3, n)}, index=idx)
+    shares_df = pd.DataFrame({"shares": sh}, index=idx)
+    return nav_df, shares_df
+
+
+def test_split_adjusted_shares_split_detected_and_continuous():
+    nav_df, shares_df = _split_frames(ratio=2.0)
+    adj, events = tm.split_adjusted_shares(shares_df, nav_df)
+    assert len(events) == 1
+    assert abs(events[0]["ratio"] - 2.0) < 1e-9
+    # 前复权后全序列连续：单日环比无 >10% 跳变，前后段同量级（末段口径 2e9）
+    roc = adj.pct_change().dropna().abs()
+    assert roc.max() < 0.10
+    assert abs(adj.iloc[0] - 2e9) < 1e6 and abs(adj.iloc[-1] - 2e9) < 1e6
+
+
+def test_split_adjusted_shares_reverse_consolidation():
+    # 反向折算：份额 ÷2、unit_nav ×2 → 同样检测并前复权
+    nav_df, shares_df = _split_frames(ratio=0.5)
+    adj, events = tm.split_adjusted_shares(shares_df, nav_df)
+    assert len(events) == 1
+    roc = adj.pct_change().dropna().abs()
+    assert roc.max() < 0.10
+    assert abs(adj.iloc[-1] - 5e8) < 1e6
+
+
+def test_split_adjusted_shares_multiple_splits_cumulative():
+    idx = _idx(200)
+    unit = np.linspace(2.0, 2.1, 200)
+    sh = np.full(200, 1e9)
+    unit[60:] = unit[60:] / 2
+    sh[60:] = 2e9
+    unit[140:] = unit[140:] / 3
+    sh[140:] = 6e9
+    nav_df = pd.DataFrame({"unit_nav": unit, "acc_nav": np.linspace(1.0, 1.3, 200)}, index=idx)
+    adj, events = tm.split_adjusted_shares(pd.DataFrame({"shares": sh}, index=idx), nav_df)
+    assert len(events) == 2
+    roc = adj.pct_change().dropna().abs()
+    assert roc.max() < 0.10
+    assert abs(adj.iloc[-1] - 6e9) < 1e6
+
+
+def test_split_adjusted_shares_dividend_not_split():
+    # 分红：unit_nav 断崖 -30% 但份额无 ≥20% 跳变 → 不调整（如 512690 2021-12-31）
+    idx = _idx(200)
+    unit = np.linspace(2.0, 2.1, 200)
+    unit[100:] = unit[100:] * 0.7
+    nav_df = pd.DataFrame({"unit_nav": unit, "acc_nav": np.linspace(1.0, 1.3, 200)}, index=idx)
+    shares_df = pd.DataFrame({"shares": np.full(200, 1e9)}, index=idx)
+    adj, events = tm.split_adjusted_shares(shares_df, nav_df)
+    assert events == []
+    assert abs(adj.max() - 1e9) < 1e6
+
+
+def test_split_adjusted_shares_big_real_creation_not_split():
+    # 真实巨额申购：份额 +30% 但 unit_nav 正常波动 → 保留（真信号）
+    idx = _idx(200)
+    nav_df = pd.DataFrame({"unit_nav": np.linspace(1.0, 1.02, 200),
+                           "acc_nav": np.linspace(1.0, 1.02, 200)}, index=idx)
+    sh = np.full(200, 1e9)
+    sh[100:] = 1.3e9
+    adj, events = tm.split_adjusted_shares(pd.DataFrame({"shares": sh}, index=idx), nav_df)
+    assert events == []
+    assert abs(adj.iloc[-1] - 1.3e9) < 1e6   # 跳变原样保留
+
+
+def test_timing_snapshot_chip_uses_split_adjusted_shares():
+    # 回归修复：刚拆分 ETF 的长窗口筹码票不得被 +100% 假"申赎"污染
+    nav_df, shares_df = _split_frames(ratio=2.0)   # 第 100 日拆分，前后份额各自平坦
+    snap = tm.timing_snapshot(nav_df, shares_df, ma_period=60)
+    assert len(snap["share_splits"]) == 1
+    assert snap["chip"]["data_sufficient"] is True
+    assert snap["chip"]["state"] == "flat"          # 前复权后各窗口 flow≈0（原始口径会是 +100% → 假 accumulating）
+    assert max(abs(v) for v in snap["chip"]["flows"].values()) < 0.01
