@@ -766,6 +766,98 @@ def fetch_index_constituents(index_code: str, timeout: float = 40.0) -> pd.DataF
     return out
 
 
+# ---- Candidate-pool screening feeds (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
+def fetch_stock_spot(min_rows: int = 4000, timeout: float = 60.0, retries: int = 2) -> pd.DataFrame:
+    """全市场 A 股现货快照(东财 stock_zh_a_spot_em 整表, 一次调用)。
+
+    Returns DataFrame indexed by 6-digit code with [name, close] — 候选池 universe 的
+    ST/退 名称过滤 + 展示名唯一来源。close 仅调试用(筛选一律走 daily_prices 复权序列)。
+    Thin-guard: 行数 < min_rows 视为端点半死 → FetchError, 空结果绝不落库(consensus 同款教训)。
+    """
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.stock_zh_a_spot_em, timeout)
+            n = 0 if df is None else len(df)
+            if n < min_rows:
+                raise FetchError(f"spot table too thin ({n} rows < {min_rows})")
+            out = pd.DataFrame({
+                "code": df["代码"].astype(str).str.zfill(6),
+                "name": df["名称"].astype(str),
+                "close": pd.to_numeric(df["最新价"], errors="coerce"),
+            })
+            return out.drop_duplicates("code", keep="last").set_index("code")
+        except FetchError as ex:
+            last_err = ex
+        except Exception as ex:  # noqa: BLE001
+            last_err = FetchError(str(ex)[:200])
+    raise FetchError(f"stock_spot failed ({last_err})")
+
+
+def fetch_stock_spot_from_consensus(min_rows: int = 1000, timeout: float = 90.0) -> pd.DataFrame:
+    """spot 兜底(纯名称): consensus 盈利预测整表自带「名称」列(stock_profit_forecast_em,
+    datacenter-web 端点族——与 push2 行情族不同源,限流互不影响,实测稳定)。
+
+    push2/clist 被本网拦时(RemoteDisconnected, akshare 已知顽疾)用它保住 universe 的
+    ST 过滤+展示名。close 置 NaN(仅调试字段,筛选一律走 daily_prices)。Thin-guard 同款。
+    """
+    df = _run_with_timeout(ak.stock_profit_forecast_em, timeout, symbol="")
+    n = 0 if df is None else len(df)
+    if n < min_rows or "代码" not in df.columns or "名称" not in df.columns:
+        raise FetchError(f"consensus table too thin for names ({n} rows)")
+    out = pd.DataFrame({
+        "code": df["代码"].astype(str).str.zfill(6),
+        "name": df["名称"].astype(str),
+        "close": float("nan"),
+    })
+    return out.drop_duplicates("code", keep="last").set_index("code")
+
+
+def fetch_industry_list(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """东财行业板块名录(stock_board_industry_name_em)。Returns DataFrame [industry]。
+    Thin-guard: < 50 板块视为端点半死 → FetchError。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.stock_board_industry_name_em, timeout)
+            n = 0 if df is None else len(df)
+            if n < 50:
+                raise FetchError(f"industry list too thin ({n} boards)")
+            return pd.DataFrame({"industry": df["板块名称"].astype(str)})
+        except FetchError as ex:
+            last_err = ex
+        except Exception as ex:  # noqa: BLE001
+            last_err = FetchError(str(ex)[:200])
+    raise FetchError(f"industry list failed ({last_err})")
+
+
+def fetch_industry_cons(industry: str, timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """单行业板块成分股(stock_board_industry_cons_em, symbol=板块名)。Returns DataFrame
+    [code(6位), name]。空结果按端点异常处理 → FetchError(调用方记日志跳过该板块)。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.0 * attempt)
+        try:
+            df = _run_with_timeout(ak.stock_board_industry_cons_em, timeout, symbol=industry)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            out = pd.DataFrame({
+                "code": df["代码"].astype(str).str.zfill(6),
+                "name": df["名称"].astype(str) if "名称" in df.columns else "",
+            })
+            return out.drop_duplicates("code", keep="last")
+        except FetchError as ex:
+            last_err = ex
+        except Exception as ex:  # noqa: BLE001
+            last_err = FetchError(str(ex)[:200])
+    raise FetchError(f"industry_cons {industry} failed ({last_err})")
+
+
 # ---- Broad-index daily / valuation (V4 tracker) — sina + legulegu, proxy-independent ----
 def _index_prefix(symbol: str) -> str:
     """Broad-index sina prefix: 399xxx (深证, e.g. 创业板指) -> sz; everything else

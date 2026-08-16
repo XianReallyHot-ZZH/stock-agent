@@ -22,8 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from stockagent.config import get_config
 from stockagent.data import Store, DataManager
+from stockagent.pool import universe as pool_universe
 
 PE_STALE_DAYS = 14  # PE is weekly cadence + cninfo-throttle-prone; only refresh if >2wk stale
+INDUSTRY_STALE_DAYS = 45  # 东财行业板块成分月更(候选池策略2 三类分流)
 
 
 def _within_days(d1: str, d2: str, tol: int) -> bool:
@@ -55,7 +57,41 @@ def _fetch(conn, sql, params=()):
     return conn.execute(sql, params).fetchone()
 
 
-def report(conn, cfg, syms) -> dict:
+def _pool_report(store, conn, ref) -> dict:
+    """候选个股池段(V7 第六看板): universe 规模 / 价格新鲜 x/N / 行业快照 / E4 冷启动。"""
+    info: dict = {"universe": [], "universe_n": 0}
+    _, cons = store.get_consensus_snapshot()
+    spot = store.latest_stock_spot()
+    if len(cons) == 0 or len(spot) == 0:
+        print("候选个股池: (未初始化 — python scripts/backfill_stock_pool.py --all 冷启动)")
+        print("  E4 修正动量快照数: 0(个股版同底座,consensus 周度积累)")
+        return info
+    pcfg = (get_config().params.get("stock_pool", {}) or {})
+    ucfg = pcfg.get("universe", {}) or {}
+    u = pool_universe.derive_universe(
+        cons, spot, min_reports=int(ucfg.get("min_reports", 3)),
+        exclude_prefixes=tuple(ucfg.get("exclude_name_prefixes",
+                                        pool_universe.EXCLUDED_NAME_PREFIXES)))
+    codes = [str(c) for c in u.index]
+    info["universe"] = codes
+    info["universe_n"] = len(codes)
+    n_fresh = 0
+    if codes and ref:
+        for c in codes:
+            d = _fetch(conn, "SELECT MAX(date) FROM daily_prices WHERE symbol=?", (c,))[0]
+            n_fresh += d is not None and d >= ref
+    ind_last = store.last_industry_snapshot() or "（无）"
+    ind_n = _fetch(conn, "SELECT COUNT(DISTINCT industry) FROM industry_member")[0]
+    cov = pool_universe.industry_coverage(pool_universe.join_industry(
+        u, store.industry_map(), {}))
+    n_snap = len(store.consensus_snapshot_dates())
+    print(f"候选个股池: universe {len(codes)} 只(consensus {len(cons)} ∩ spot 非 ST)"
+          f" · 价格新鲜 {n_fresh}/{len(codes)} · 行业快照 {ind_last}({ind_n} 板块,"
+          f"映射覆盖 {cov['pct']:.0%}) · E4 快照 {n_snap} 份")
+    return info
+
+
+def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
     """Print coverage + freshness table. Returns summary dict for fix decisions."""
     bench_last = _fetch(conn, "SELECT MAX(date) FROM daily_prices WHERE symbol=?",
                         (cfg.benchmark_symbol,))[0]
@@ -126,11 +162,18 @@ def report(conn, cfg, syms) -> dict:
         d = _fetch(conn, "SELECT MAX(date) FROM index_pe WHERE name=?", (nm,))[0]
         print(f"  {nm:6} PE {str(d):12}")
     d = _fetch(conn, "SELECT MAX(date) FROM market_pb")[0]
-    print(f"  全市场PB {str(d):12}\n")
+    print(f"  全市场PB {str(d):12}")
+
+    # ---- candidate pool (V7 第六看板 · 候选个股池) ----
+    pool_info: dict = {"universe": [], "universe_n": 0}
+    if store is not None:
+        pool_info = _pool_report(store, conn, ref)
     return {"bench_last": bench_last, "target": target, "ref": ref,
             "pe_last": pe_last, "pe_stale": pe_stale,
             "earn_period": earn_period,
-            "rows": rows, "n_shares_zero": n_shares_zero}
+            "rows": rows, "n_shares_zero": n_shares_zero,
+            "pool_universe": pool_info.get("universe", []),
+            "pool_universe_n": pool_info.get("universe_n", 0)}
 
 
 def main():
@@ -145,7 +188,7 @@ def main():
 
     conn = sqlite3.connect(str(cfg.db_path))
     print("=== 数据新鲜度检查 ===")
-    info = report(conn, cfg, syms)
+    info = report(conn, cfg, syms, store=store)
 
     if not args.fix:
         return
@@ -225,8 +268,48 @@ def main():
     dm.update_index_pe()
     dm.update_market_pb()
 
+    # 7) candidate-pool spot (V7 第六看板): daily snapshot — universe 的 ST 过滤 + 展示名来源
+    spot_last = store.get_meta("last_stock_spot_update")
+    if spot_last != datetime.now().strftime("%Y%m%d"):
+        print(f"  候选池现货快照(当前 {spot_last or '无'})...")
+        n = dm.update_stock_spot()
+        print(f"  stock_spot: {n} 只" if n else "  ⚠️ spot 失败(退最后快照,不阻塞)")
+
+    # 8) candidate-pool industry (月更) + dividends (周更;运行时前复权事件源)
+    ind_last = store.last_industry_snapshot()
+    if ind_last is None or (datetime.now() - datetime.strptime(ind_last, "%Y-%m-%d")).days > INDUSTRY_STALE_DAYS:
+        print(f"  候选池行业成分(缺失或>{INDUSTRY_STALE_DAYS}天, 当前 {ind_last or '无'})...")
+        n = dm.update_industry_members()
+        print(f"  industry_member: {n} 行" if n else "  ⚠️ industry 失败(策略2 降级,不阻塞)")
+    if info.get("pool_universe") and store.get_meta("pool_prices_ready") == "1":
+        div_days = int((get_config().params.get("stock_pool", {}) or {})
+                       .get("prices", {}).get("dividend_refresh_days", 7))
+        div_last = store.get_meta("last_pool_dividend_update")  # YYYY-MM-DD
+        stale = div_last is None or (
+            datetime.now() - datetime.strptime(div_last, "%Y-%m-%d")).days > div_days
+        if stale:
+            print(f"  候选池分红明细(当前 {div_last or '无'})...")
+            res = dm.update_pool_dividends(info["pool_universe"])
+            print(f"  stock_dividend: +{sum(res.values())} 行")
+
+    # 9) candidate-pool prices (日更·大头 ~45-75min): gate=冷启动已 ready;只补 universe 内落后者。
+    #    放最后一步——失败/超时不遮蔽其余修复;增量游标次日自愈。
+    if store.get_meta("pool_prices_ready") == "1" and info.get("pool_universe"):
+        years = int((get_config().params.get("stock_pool", {}) or {})
+                    .get("prices", {}).get("history_years", 3))
+        stale_codes = [c for c in info["pool_universe"]
+                       if (store.last_date(c) or "") < (target or "9999-12-31")]
+        if stale_codes:
+            print(f"  候选池日线日更({len(stale_codes)}/{len(info['pool_universe'])} 只落后,"
+                  f"约 {len(stale_codes) * 1.2 / 60:.0f}-{len(stale_codes) * 2 / 60:.0f}min)...")
+            res = dm.update_stock_daily(stale_codes, history_years=years)
+            store.set_meta("last_pool_price_update", datetime.now().strftime("%Y-%m-%d"))
+            print(f"  候选池日线: +{sum(res.values())} 行")
+    elif store.get_meta("pool_prices_ready") != "1":
+        print("  候选池日线: 未冷启动(不阻塞) — python scripts/backfill_stock_pool.py --all")
+
     print("\n=== 补齐后复查 ===")
-    report(conn, cfg, syms)
+    report(conn, cfg, syms, store=store)
 
 
 if __name__ == "__main__":

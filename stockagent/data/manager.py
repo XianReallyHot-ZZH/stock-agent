@@ -38,14 +38,16 @@ class DataManager:
             return 0
 
     # ---- per-symbol ----
-    def _backfill_start(self, symbol: str) -> str:
-        """Start date for fetch: last stored date + 1, or history_years ago."""
+    def _backfill_start(self, symbol: str, history_years: Optional[int] = None) -> str:
+        """Start date for fetch: last stored date + 1, or history_years ago.
+        history_years=None → data.history_years 配置默认(6);候选池价格腿传 3(偏离分位+回撤够用,
+        2800 只省一半冷启动机时)。"""
         last = self.store.last_date(symbol)
         if last:
             # resume from day after last stored
             d = (datetime.strptime(last, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
             return d.replace("-", "")
-        years = int(self.config.params.get("data", {}).get("history_years", 6))
+        years = history_years or int(self.config.params.get("data", {}).get("history_years", 6))
         start = (datetime.now() - timedelta(days=365 * years)).strftime("%Y-%m-%d")
         return start.replace("-", "")
 
@@ -742,16 +744,18 @@ class DataManager:
     }
 
     def update_stock_daily(self, symbols: Optional[list[str]] = None,
-                           adjust: Optional[str] = None) -> dict:
+                           adjust: Optional[str] = None,
+                           history_years: Optional[int] = None) -> dict:
         """个股日线增量 → daily_prices(与 ETF 同表不同 symbol,复用 upsert_prices)。
         增量游标(_backfill_start) + basis 一致性守卫(is_basis_consistent,防 hfq/raw 混)与 ETF 路径同。
+        history_years=None → 配置默认;候选池价格腿传 3(见 _backfill_start 注)。
         Returns {symbol: rows_added}。"""
         syms = symbols or self.STOCK_WATCHLIST
         adjust = adjust or self.config.params.get("data", {}).get("adjust", "hfq")
         results: dict[str, int] = {}
         for i, sym in enumerate(syms):
             existing = self.store.dominant_price_source(sym)
-            start = self._backfill_start(sym)
+            start = self._backfill_start(sym, history_years=history_years)
             end = fetcher.today_str().replace("-", "")
             if i > 0:
                 time.sleep(0.4)
@@ -877,6 +881,69 @@ class DataManager:
             log.info("stock_forecast %s: +%d rows (%d watchlist / %d market)", period, n, len(rows), len(panel))
         if any(results.values()):
             self.store.set_meta("last_stock_forecast_update", fetcher.today_str())
+        return results
+
+    # ---- Candidate-pool feeds (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
+    def update_stock_spot(self) -> int:
+        """全市场现货快照(日更·单调用)→ stock_spot。universe 的 ST/退 过滤 + 展示名唯一来源。
+        主源 push2/clist 被拦时退 consensus 整表名称列兜底(datacenter 端点族,稳定;
+        close=NaN 可接受——仅调试字段)。两路全败返回 0(调用方退最后快照)。"""
+        df, source = None, ""
+        try:
+            df = fetcher.fetch_stock_spot()
+            source = "em_spot"
+        except Exception as e:  # noqa: BLE001
+            log.warning("stock_spot failed (%s), fallback to consensus names", str(e)[:100])
+            try:
+                df = fetcher.fetch_stock_spot_from_consensus()
+                source = "em_profit_forecast_names"
+            except Exception as e2:  # noqa: BLE001
+                log.warning("stock_spot fallback failed: %s", str(e2)[:120])
+                return 0
+        today = fetcher.today_str()
+        n = self.store.upsert_stock_spot(df, date=today, source=source)
+        self.store.set_meta("last_stock_spot_update", today)
+        pruned = self.store.prune_stock_spot(keep_days=90)
+        log.info("stock_spot %s: %d names (src=%s, pruned %d old rows)", today, n, source, pruned)
+        return n
+
+    def update_industry_members(self, sleep: float = 0.3) -> int:
+        """东财行业板块成分(~86 板块逐板块拉,月度节奏)→ industry_member(整帧全量替换)。
+        单板块失败记日志跳过;全部失败 → 0 行不写库。Returns 成分总行数。"""
+        try:
+            boards = fetcher.fetch_industry_list()
+        except Exception as e:  # noqa: BLE001
+            log.warning("industry list failed: %s", str(e)[:120])
+            return 0
+        names = boards["industry"].tolist()
+        today = fetcher.today_str()
+        frames = []
+        for i, board in enumerate(names):
+            if i > 0:
+                time.sleep(sleep)
+            try:
+                df = fetcher.fetch_industry_cons(board)
+            except Exception as e:  # noqa: BLE001
+                log.warning("industry_cons %s failed: %s", board, str(e)[:100])
+                continue
+            df = df.copy()
+            df["industry"] = board
+            frames.append(df)
+        if not frames:
+            log.warning("industry members: all %d boards failed — no write", len(names))
+            return 0
+        panel = pd.concat(frames, ignore_index=True)[["industry", "code", "name"]]
+        n = self.store.upsert_industry_members(panel, snapshot_date=today)
+        self.store.set_meta("last_industry_update", today)
+        log.info("industry_member %s: %d rows, %d/%d boards ok", today, n, len(frames), len(names))
+        return n
+
+    def update_pool_dividends(self, symbols: list[str]) -> dict:
+        """候选池分红明细(薄包装 update_stock_dividend)——运行时前复权(pool/prices.py)的
+        除权事件源。分红季(5-7 月)周更,非季月 meta 门控自然跳过。Returns {symbol: rows}。"""
+        results = self.update_stock_dividend(symbols)
+        if any(results.values()):
+            self.store.set_meta("last_pool_dividend_update", fetcher.today_str())
         return results
 
     # ---- Western-macro series (V6 tracker · 西方宏观预测台账 只读旁路 · ADR-0001) ----

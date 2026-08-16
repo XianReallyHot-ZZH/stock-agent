@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -316,6 +317,24 @@ CREATE TABLE IF NOT EXISTS wm_rules (
     note         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_wm_rules_episode ON wm_rules(episode_date);
+CREATE TABLE IF NOT EXISTS stock_spot (           -- 候选个股池(V7): 全市场现货快照·日更单调用
+    code   TEXT NOT NULL,                        -- 6 位代码
+    date   TEXT NOT NULL,                        -- 快照日 YYYY-MM-DD
+    name   TEXT,                                 -- 最新名称(ST/退 过滤 + 展示名唯一来源)
+    close  REAL,                                 -- 现货最新价(仅调试;筛选一律用 daily_prices 复权序列)
+    source TEXT,
+    PRIMARY KEY (code, date)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_spot_code ON stock_spot(code);
+CREATE TABLE IF NOT EXISTS industry_member (     -- 候选个股池(V7): 东财行业板块成分·月更
+    industry      TEXT NOT NULL,                 -- 板块名(stock_board_industry_name_em 口径)
+    code          TEXT NOT NULL,
+    name          TEXT,
+    snapshot_date TEXT,
+    source        TEXT,
+    PRIMARY KEY (industry, code)
+);
+CREATE INDEX IF NOT EXISTS idx_industry_member_code ON industry_member(code);
 """
 
 
@@ -1702,3 +1721,86 @@ class Store:
             c.row_factory = sqlite3.Row
             rows = c.execute(q, p).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- candidate-pool screening (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
+    def upsert_stock_spot(self, df: pd.DataFrame, date: str, source: str = "em_spot") -> int:
+        """全市场现货快照 upsert keyed by (code, date) — same-day rerun overwrites(幂等)。
+        df indexed by code with [name, close]。名称 = ST/退 过滤与展示名的唯一来源。"""
+        if df is None or len(df) == 0:
+            return 0
+        rows = [
+            (str(code), date,
+             str(r.get("name", "")) if pd.notna(r.get("name")) else "",
+             _num(r.get("close")), source)
+            for code, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO stock_spot(code,date,name,close,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(code,date) DO UPDATE SET "
+                "name=excluded.name,close=excluded.close,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def latest_stock_spot(self) -> pd.DataFrame:
+        """最新快照日整帧 indexed by code [name, close]（空表 → 空帧）。"""
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(date) FROM stock_spot").fetchone()
+            if not row or not row[0]:
+                return pd.DataFrame(columns=["name", "close"])
+            df = pd.read_sql_query(
+                "SELECT code,name,close FROM stock_spot WHERE date=?", c, params=(row[0],))
+        if len(df) == 0:
+            return pd.DataFrame(columns=["name", "close"])
+        return df.set_index("code")
+
+    def prune_stock_spot(self, keep_days: int = 90) -> int:
+        """快照历史只留 keep_days 天(日更防膨胀;universe 只消费最新一份)。"""
+        cutoff = (datetime.now() - timedelta(days=keep_days)).strftime("%Y-%m-%d")
+        with self._conn() as c:
+            cur = c.execute("DELETE FROM stock_spot WHERE date<?", (cutoff,))
+            return cur.rowcount
+
+    def upsert_industry_members(self, df: pd.DataFrame, snapshot_date: str,
+                                source: str = "em_board") -> int:
+        """东财行业板块成分整帧写入。全量替换式:先清非本快照日的旧行再插——月度快照整帧口径,
+        防板块更名/调出成分的残留幽灵。df columns [industry, code, name]。"""
+        if df is None or len(df) == 0:
+            return 0
+        payload = [
+            (str(r["industry"]), str(r["code"]),
+             str(r.get("name", "")) if pd.notna(r.get("name")) else "",
+             snapshot_date, source)
+            for _, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.execute("DELETE FROM industry_member WHERE snapshot_date<>?", (snapshot_date,))
+            c.executemany(
+                "INSERT INTO industry_member(industry,code,name,snapshot_date,source) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(industry,code) DO UPDATE SET "
+                "name=excluded.name,snapshot_date=excluded.snapshot_date,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def industry_map(self) -> pd.DataFrame:
+        """code → industry 映射(indexed by code [industry]；空表 → 空帧)。
+        东财行业板块一股一板块;若数据异常出现多板块,取首个保证 index 唯一。"""
+        with self._conn() as c:
+            df = pd.read_sql_query("SELECT code,industry FROM industry_member", c)
+        if len(df) == 0:
+            return pd.DataFrame(columns=["industry"])
+        return df.drop_duplicates("code", keep="first").set_index("code")
+
+    def industry_boards(self) -> list[str]:
+        """当前快照的板块名清单(升序)——stock_industry.yaml 未映射 diff 用。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT DISTINCT industry FROM industry_member ORDER BY industry").fetchall()
+        return [r[0] for r in rows]
+
+    def last_industry_snapshot(self) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(snapshot_date) FROM industry_member").fetchone()
+            return row[0] if row and row[0] else None

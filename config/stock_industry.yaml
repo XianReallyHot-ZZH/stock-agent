@@ -1,0 +1,104 @@
+# 候选个股池 (V7 pool · 第六看板): 东财行业板块 → 三类粗分 + 周期上游商品映射
+#
+# 维护规则:
+#   · 板块名以 ak.stock_board_industry_name_em() 返回为准(东财偶改名,如 中药→中药Ⅱ);
+#     `python scripts/backfill_stock_pool.py --industry` 跑完会打印「未映射板块」清单(带成分数),
+#     新板块名补进来即可——未映射 = 该板块股票 type=None,不入策略2(策略1/PEAD/变脸不受影响)。
+#   · type: cyclic(周期) / growth(成长) / value(价值)。粗分定位:策略2 的周期腿需要 commodity,
+#     无商品映射的周期板块(中游制造/航运/券商等)诚实不入策略2。
+#   · commodity: 仅 cyclic 上游适用,取 commodity_price 表 13 品种之一
+#     (碳酸锂/铜/铝/锌/螺纹钢/铁矿石/焦煤/黄金/白银/原油/玻璃/纯碱/生猪);
+#     板块级粗映射(如 有色金属→铜,铜/铝/锌混板接受);中游(电池/光伏)价格信号方向不纯,不映射。
+#   · 本清单为 best-effort 初版(2026-08-16 东财端点被拦未能拉 live 名单核对);
+#     名单以未映射 diff 日志为准逐步补齐——错名条目闲置无害,缺名条目诚实降级。
+industry_class:
+  # —— 周期上游(有商品映射 → 策略2 窗口B 候选) ——
+  能源金属:   {type: cyclic, commodity: 碳酸锂}    # 锂钴镍,锂主导
+  贵金属:     {type: cyclic, commodity: 黄金}
+  有色金属:   {type: cyclic, commodity: 铜}        # 工业金属混板,铜代理(粗粒度接受)
+  钢铁行业:   {type: cyclic, commodity: 螺纹钢}
+  煤炭行业:   {type: cyclic, commodity: 焦煤}
+  石油行业:   {type: cyclic, commodity: 原油}
+  玻璃玻纤:   {type: cyclic, commodity: 玻璃}
+  农牧饲渔:   {type: cyclic, commodity: 生猪}      # 猪周期主导(混合板块,粗分)
+  # —— 周期(无商品映射:中游/运价/地产链,策略2 周期腿不适用) ——
+  基础化学:   {type: cyclic}
+  化肥行业:   {type: cyclic}
+  化学原料:   {type: cyclic}
+  化学制品:   {type: cyclic}
+  农药兽药:   {type: cyclic}
+  化纤行业:   {type: cyclic}
+  塑料制品:   {type: cyclic}
+  橡胶制品:   {type: cyclic}
+  水泥建材:   {type: cyclic}
+  装修建材:   {type: cyclic}
+  小金属:     {type: cyclic}      # 稀土/钨钼,无对应品种
+  采掘行业:   {type: cyclic}
+  燃气:       {type: cyclic}
+  光学光电子: {type: cyclic}      # 面板周期
+  光伏设备:   {type: cyclic}      # 硅料价格周期,中游不映射
+  电池:       {type: cyclic}      # 锂电中游,锂价方向不纯,不映射
+  船舶制造:   {type: cyclic}      # 造船周期
+  航运港口:   {type: cyclic}      # 运价周期(BDI/SCFI 无品种)
+  房地产开发: {type: cyclic}
+  装修装饰:   {type: cyclic}
+  造纸印刷:   {type: cyclic}
+  包装材料:   {type: cyclic}
+  包装印刷:   {type: cyclic}      # 别名
+  金属制品:   {type: cyclic}
+  工程机械:   {type: cyclic}      # 挖机周期
+  交运设备:   {type: cyclic}      # 轨交
+  汽车整车:   {type: cyclic}      # 价格战/库存周期
+  证券:       {type: cyclic}      # 市场贝塔周期
+  # —— 成长(策略2 成长腿:前瞻g分位+4周上修+已报增速加速) ——
+  半导体:     {type: growth}
+  电子元件:   {type: growth}
+  消费电子:   {type: growth}
+  电子化学品: {type: growth}
+  通信设备:   {type: growth}
+  计算机设备: {type: growth}
+  软件开发:   {type: growth}
+  互联网服务: {type: growth}
+  互联网电商: {type: growth}
+  游戏:       {type: growth}
+  文化传媒:   {type: growth}
+  教育:       {type: growth}
+  航天航空:   {type: growth}      # 军工
+  汽车零部件: {type: growth}      # 智能化/零部件成长
+  美容护理:   {type: growth}
+  医疗器械:   {type: growth}
+  化学制药:   {type: growth}      # 创新药
+  生物制品:   {type: growth}
+  医疗服务:   {type: growth}
+  仪器仪表:   {type: growth}
+  通用设备:   {type: growth}
+  专用设备:   {type: growth}
+  电网设备:   {type: growth}
+  电源设备:   {type: growth}
+  电机Ⅱ:     {type: growth}
+  电机:       {type: growth}      # 别名(无Ⅱ)
+  # —— 价值(v1 无「猛」概念,不入策略2;S1/PEAD/变脸照常) ——
+  银行:       {type: value}
+  保险:       {type: value}
+  多元金融:   {type: value}
+  电力行业:   {type: value}
+  通信服务:   {type: value}
+  家电行业:   {type: value}
+  食品饮料:   {type: value}
+  酿酒行业:   {type: value}
+  纺织服装:   {type: value}
+  医药商业:   {type: value}
+  中药Ⅱ:     {type: value}
+  中药:       {type: value}       # 别名
+  商业百货:   {type: value}
+  超市零售:   {type: value}
+  超市连锁:   {type: value}       # 别名
+  贸易行业:   {type: value}
+  物流行业:   {type: value}
+  铁路公路:   {type: value}
+  航空机场:   {type: value}
+  房地产服务: {type: value}
+  工程建设:   {type: value}
+  环保行业:   {type: value}
+  专业服务:   {type: value}
+  汽车服务:   {type: value}

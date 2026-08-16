@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
 PARAMS_FILE = CONFIG_DIR / "params.yaml"
 POOL_FILE = CONFIG_DIR / "etf_pool.yaml"
+INDUSTRY_FILE = CONFIG_DIR / "stock_industry.yaml"  # 候选个股池(V7): 东财板块→三类+商品映射
 ENV_FILE = PROJECT_ROOT / ".env"
 
 
@@ -27,6 +28,7 @@ class Config:
     params: dict
     pool: dict
     env: dict
+    industry: dict = field(default_factory=dict)  # stock_industry.yaml(缺文件 → {} 容错)
 
     @property
     def db_path(self) -> Path:
@@ -81,6 +83,11 @@ class Config:
                 s.append(extra)
         return s
 
+    def industry_class(self) -> dict[str, dict]:
+        """东财行业板块 → {type: cyclic/growth/value, commodity: 品种|缺} 映射。
+        未列出的板块 = 未映射(候选池 join_industry 诚实降级为 type=None)。"""
+        return self.industry.get("industry_class", {}) or {}
+
 
 @lru_cache(maxsize=1)
 def get_config() -> Config:
@@ -89,4 +96,5 @@ def get_config() -> Config:
     env = dict(os.environ)
     params = _load_yaml(PARAMS_FILE)
     pool = _load_yaml(POOL_FILE)
-    return Config(params=params, pool=pool, env=env)
+    industry = _load_yaml(INDUSTRY_FILE) if INDUSTRY_FILE.exists() else {}
+    return Config(params=params, pool=pool, env=env, industry=industry)

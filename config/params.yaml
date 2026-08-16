@@ -222,3 +222,57 @@ position_plan:
     mid:   {equity_min: 0.40, equity_max: 0.60}
     split: {equity_min: 0.40, equity_max: 0.60}
     high:  {equity_min: 0.10, equity_max: 0.30}
+
+# ---- 候选个股池 (V7 pool · 第六看板 · 只读筛选旁路 · 不喂引擎 · ADR-0001) ----
+# 宇宙 = 研报覆盖池(consensus ~2800) ∩ 现货快照非ST(~2300)。六张策略表见 stockagent/pool/。
+# 行业→三类粗分 + 周期商品映射在 config/stock_industry.yaml(板块名以东财端点为准)。
+stock_pool:
+  universe:
+    min_reports: 3              # 研报数门(consensus 覆盖偏差防护,E2 同款)
+    exclude_name_prefixes: ["ST", "*ST", "S*ST", "SST", "退"]
+  prices:
+    ma_period: 60               # 偏离均线(S1 触发器)
+    history_years: 3            # 冷启动日线回溯窗(250日回撤+偏离分位深度够用)
+    dividend_refresh_days: 7    # 分红表(运行时前复权事件源)刷新节奏(天)
+    cliff_lo: 0.05              # 除权嫌疑带:孤立单日跌 [lo,hi]+分红户+±5日无记录。
+    cliff_hi: 0.12              # ≤3%除息对MA60偏离分位扰动可忽略(实证:波动周69%池子有孤立1.5%断崖);
+                                # 只抓10转N/巨息级(≥5%,全池~4.7%);>12%多为真崩盘(深跌本就要抓)
+  strategy1:                    # ① 偏离超卖(复合分:触发+护栏+企稳)
+    trigger_pct: 0.05           # 自身历史百分位 ≤5% 触发(非横截面!)
+    depth_weight: 0.6           # 深度因子权重(depth=(trigger−pct)/trigger)
+    stabilize_weight: 0.4       # 企稳因子权重(stabilize_factor 原语义:≥−5%→1.0/−15..−5%→0.6/<−15%→0.25)
+    guard_forecast_loss_types: ["首亏", "续亏", "增亏"]   # 预亏族预告 → 护栏拦截
+    guard_revision_drop_pct: 3.0  # 一致预期4周下修超此% → 护栏拦截
+    new_badge_days: 5           # 事件日距今 ≤N 交易日 → 「新」徽标(零状态,从事件日推)
+    top_n: 50
+  strategy2:                    # ② 业绩预期猛×深跌(独立于 P1;窗口A全类型+B仅周期)
+    drawdown_min: 0.40          # 250日回撤 ≥40% = 深跌(同 P1 口径)
+    drawdown_lookback_days: 250
+    recent_window: 60
+    growth:                     # 成长猛 = 三腿(rank/修正/加速)均值, ≥2 腿才 valid
+      rank_gate: 0.80           # 前瞻 g(eps_fy2/fy1−1) 池内分位 ≥80% 腿满分
+      accel_min_pp: 5.0         # 已报增速加速(同尾二阶差) ≥5pp 腿满分
+    cyclic:                     # 周期猛 = 商品健康×股价落后(alignment) + g 确认
+      min_consensus_g: 0.10     # 一致预期 g ≥10% 才算「确认」(纯商品预期顶防护)
+      lag_scale: 0.20           # alignment 落后度标尺(leading.py 同款)
+    window_b_grace_days: 14     # 窗口B起点=上期正式报截止+grace
+    top_n: 50
+  revision:                     # ③ 一致预期修正动量(个股版 E4)
+    lookback_weeks: 4
+    min_snapshots: 4            # 不足 → 「累积中 N/4」诚实横幅
+    deadband: 0.01              # ±1% 死区外才算方向
+    top_n: 50
+  pead:                         # ④ 预告超预期漂移(surprise=预告yoy−隐含预期)
+    surprise_min_pp: 10.0       # |surprise| ≥10pp 才入表
+    periods_back: 8
+    top_n: 50
+  facechange:                   # ⑤ 业绩变脸监测(同尾比较,累计口径防御)
+    gear_down_pp: 20.0          # 跳档:最新同尾 − 上年同期 ≤−20pp 且上年同期 ≥0
+    consec_neg_min: 3           # 连亏:连续 ≥3 报告期 np_yoy<0
+    turn_up_pp: 10.0            # 拐头向上:≥2步下行后回升 ≥10pp
+    top_n: 50
+  stage2:                       # 入围候选深挖(诊断卡/双击/含金量腿)
+    top_n: 30
+    weekly_refresh_days: 7
+  display:
+    table_rows_default: 50
