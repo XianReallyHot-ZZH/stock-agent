@@ -363,3 +363,68 @@ def earnings_chain(constituents: Optional[pd.DataFrame],
                 "optimistic": float(pairs.loc[d < -10, "weight"].sum() / w),
             }
     return out
+
+
+# ---------------- 修正动量 (E4, docs/EXECUTION_PLAN-ETF业绩预期.md §6) ----------------
+# 一致预期的「变化」比「水平」更有信息量(调研§2.1.3: 变化有效水平无效)。东财免费口径无修正
+# 历史 → 靠自建周度整表快照差分。冷启动 4 周(min_snapshots), 激活前看板诚实显示「累积中」。
+
+def _empty_revision() -> dict:
+    return {"weighted_rev": float("nan"), "n_up": 0, "n_dn": 0,
+            "coverage": 0.0, "n_names": 0}
+
+
+def revision_momentum(snap_now: Optional[pd.DataFrame],
+                      snap_then: Optional[pd.DataFrame],
+                      constituents: Optional[pd.DataFrame],
+                      min_reports: int = 3) -> dict:
+    """两份周度快照的同财年 forward-EPS 差分 → 修正动量（pure, no I/O）.
+
+    年末翻滚防护: 两份快照的 fy1_year 不一致 → 空信号——否则会把「2026列 vs 2027列」的
+    差当修正(假信号; 12月-1月切换期差分诚实不可算, 等新财年攒满窗口).
+
+    Data contracts: snap_now/snap_then = stock_consensus 快照(indexed by code,
+    [n_reports, eps_fy1, fy1_year, ...]); constituents DataFrame[code, weight].
+    Returns {weighted_rev, n_up, n_dn, coverage, n_names}:
+      weighted_rev = Σ(w·(eps_now/eps_then−1))/Σw over 两期皆有且达标的成分(研报数门+正基数)
+      n_up/n_dn    = 上修/下修家数(±1% 带宽外才算, 微动是噪音)
+      coverage     = 可差分权重 / 成分总权重
+    """
+    empty = _empty_revision()
+    if (snap_now is None or snap_then is None
+            or constituents is None or not len(constituents)
+            or not len(snap_now) or not len(snap_then)):
+        return empty
+    try:
+        fy_now = int(snap_now["fy1_year"].iloc[0])
+        fy_then = int(snap_then["fy1_year"].iloc[0])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return empty
+    if fy_now != fy_then:
+        return empty                                  # 财年翻滚期, 差分无意义
+
+    h = constituents[["code", "weight"]].copy()
+    h["code"] = h["code"].astype(str).str.zfill(6)
+    h["weight"] = pd.to_numeric(h["weight"], errors="coerce").fillna(0.0)
+    total_w = float(h["weight"].sum())
+    if total_w <= 0:
+        return empty
+
+    a = snap_now[["n_reports", "eps_fy1"]].rename_axis("code").rename(columns={"eps_fy1": "eps_now"})
+    b = snap_then[["eps_fy1"]].rename_axis("code").rename(columns={"eps_fy1": "eps_then"})
+    m = (h.merge(a.reset_index(), on="code", how="inner")
+          .merge(b.reset_index(), on="code", how="inner"))
+    m = m[(m["n_reports"] >= min_reports) & m["eps_then"].notna() & (m["eps_then"] > 0)
+          & m["eps_now"].notna()]
+    if not len(m):
+        return empty
+
+    rev = m["eps_now"] / m["eps_then"] - 1.0
+    uw = float(m["weight"].sum())
+    return {
+        "weighted_rev": float((rev * m["weight"]).sum() / uw),
+        "n_up": int((rev > 0.01).sum()),
+        "n_dn": int((rev < -0.01).sum()),
+        "coverage": uw / total_w,
+        "n_names": int(len(m)),
+    }

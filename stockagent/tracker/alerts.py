@@ -12,6 +12,7 @@ evaluate 接收 ETF snapshots + 指数层 diagnose,返回 alert 列表。
   C1/C2 周期 PB 触底/顶 —— 当前跳过:板块 PB 无数据源(cyclic 不估值),待 Phase 2
   B1  价值股息率偏高(>5%)→ 买入窗口
   A1/A2 业绩预告承压/恶化 → 抱着颗雷/戴维斯双杀前兆
+  A5  一致预期4周下修(E4修正动量·超3%且覆盖≥40%) → 分析师集体转谨慎(温度计·非买卖信号)
   F1  沪深300 在60日线下且均线向下 → 风险开关
 """
 from __future__ import annotations
@@ -60,6 +61,7 @@ _D_PHASE_MSG = {
 }
 # 业绩预告 → A1/A2 告警
 _EARN_BEAR = {"业绩承压", "业绩恶化"}
+_A5_DROP_PCT = 3.0  # A5: 一致预期4周加权下修超此%告警(对齐 params research.earnings.revision.alert_drop_pct; 改动两处同步)
 
 
 def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
@@ -155,6 +157,16 @@ def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
             yoy_s = f"(yoy {yoy:+.0f}%)" if not _nan(yoy) else ""
             alerts.append({"level": "warn", "scope": nm, "rule": "A1/A2",
                            "msg": f"业绩预告「{elabel}」{yoy_s} → 抱着颗雷/戴维斯双杀前兆"})
+        # A5: 一致预期下修 (E4·修正动量): 4周加权 forward EPS 下修超阈值且覆盖达标。
+        # 只提醒不交易(温度计非开关); 下调的信息量大于上调(调研§2.1.4 Womack 1996)。
+        rev = snap.get("revision_w")
+        if (isinstance(rev, (int, float)) and not _nan(rev)
+                and rev * 100 < -_A5_DROP_PCT
+                and (snap.get("revision_cov") or 0) >= 0.40):
+            alerts.append({"level": "warn", "scope": nm, "rule": "A5",
+                           "msg": f"一致预期4周下修 {rev:+.1%}"
+                                  f"(上调{snap.get('revision_up', 0)}家/下调{snap.get('revision_dn', 0)}家)"
+                                  f" → 分析师集体转谨慎; 与预告/偏离度交叉看·温度计非买卖信号"})
         # R1: 周期反转候选(cyclic 高业绩×深回撤×新鲜财报 → 综合分;下个业绩窗口前须兑现)
         if snap.get("style") == "cyclic":
             rsc = snap.get("reversal_score")

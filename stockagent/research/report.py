@@ -269,9 +269,10 @@ _CONS_CLASS = {"预期高增": "en-hi", "预期改善": "en-up", "预期平稳":
 
 
 def _consensus_line(snap: dict) -> str:
-    """一致预期行（E2 双 chip 的下半）: 加权预期增速 g + 覆盖 + 评级结构 + 财年·快照日.
+    """一致预期行（E2 双 chip 的下半）: 加权预期增速 g + 覆盖 + 评级结构 + 财年·快照日
+    + 4周修正（E4；冷启动期显示「累积中 N/4」诚实降级）.
 
-    无快照/覆盖不足 → ""（cell 只剩预告层, 优雅降级）。水平值口径（非变化量, 修正动量 E4 另计）。
+    无快照/覆盖不足 → ""（cell 只剩预告层, 优雅降级）。水平值口径（非变化量, 修正另示）。
     """
     g = snap.get("consensus_g")
     if not isinstance(g, (int, float)) or _nan(g):
@@ -282,6 +283,14 @@ def _consensus_line(snap: dict) -> str:
     cls = _CONS_CLASS.get(lab, "")
     buy = snap.get("consensus_buy")
     buy_s = (f" · 买入{buy:.0%}" if isinstance(buy, (int, float)) and not _nan(buy) else "")
+    rev = snap.get("revision_w")
+    if isinstance(rev, (int, float)) and not _nan(rev):
+        rcls = "en-dn" if rev < 0 else "en-up"
+        buy_s += (f" · 修正<b class='{rcls}'>{rev:+.1%}</b>"
+                  f"<span class='muted'>({snap.get('revision_up', 0)}↑/"
+                  f"{snap.get('revision_dn', 0)}↓)</span>")
+    elif snap.get("revision_status"):
+        buy_s += f" · <span class='muted'>{snap['revision_status']}</span>"
     fy, sd = snap.get("consensus_fy", ""), str(snap.get("consensus_snap", ""))
     snap_s = f"·快照{sd[4:6]}/{sd[6:8]}" if len(sd) == 8 else ""
     fy_s = f" · {fy}{snap_s}" if fy else (f" · {snap_s.strip('·')}" if snap_s else "")
@@ -1447,7 +1456,8 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     earn_guide = ("⑥ <b>业绩预期列（信息层）</b>：上=最新披露窗口的<b>业绩预告</b>聚合（多/空=预喜/预亏类型"
                   "的权重占比·广度口径——强制披露门槛使样本天然偏极端，只看广度不看水平，覆盖=披露进度"
                   "与门槛筛过的混合）；下=<b>一致预期</b> g=Σ(官方权重×成分股 EPS 次年/当年−1)（东财研报"
-                  "摘录口径·研报数≥3·财年滚动对齐·<b>水平值非变化量</b>——修正动量 E4 另计；覆盖权重门"
+                  "摘录口径·研报数≥3·财年滚动对齐·<b>水平值非变化量</b>——4周修正另示于同行：自建周度快照"
+                  "差分·同财年对齐防年末翻滚·冷启动4周显示「累积中」；覆盖权重门"
                   "40%）。两行互补：预告=已披露的区间事实，预期=分析师前瞻（日更·软信息·系统性乐观需"
                   "横向比较）。观察坐标·不喂引擎。<br>")
 

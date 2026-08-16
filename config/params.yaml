@@ -129,6 +129,10 @@ research:
       min_reports: 3        # 个股研报数门（覆盖偏差防护，调研§3.5）
       min_names: 5          # 可用成分 < 5 只 → 数据不足
       min_weight_cov: 0.40  # 覆盖权重 < 40% → 数据不足（调研§5 的 B 级线）
+    revision:               # 修正动量（E4·4周快照差分·同财年对齐防年末翻滚假信号）
+      lookback_weeks: 4     # 差分窗（取 ≤今天-7N天 的最近一份快照）
+      min_snapshots: 4      # 激活门（不足时看板显示「累积中 N/4」诚实降级）
+      alert_drop_pct: 3.0   # A5 告警阈值：4周加权 forward EPS 下修超此% 提醒（只warn不交易）
   cyclical_reversal:        # 周期反转筛子（只读，业绩×前期回撤×财报时效；不喂引擎）
     yoy_scale: 1.0          # weighted_yoy 100% → 业绩因子满分（ETF 加权 yoy 远小于个股，实盘校准）
     drawdown_scale: 0.5     # 50% 回撤 → 回撤因子满分

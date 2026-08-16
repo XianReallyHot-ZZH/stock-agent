@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -90,6 +90,15 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     chain_ex = store.get_stock_express_period(chain_period)
     chain_ac = store.get_stock_report_period(chain_period)
     have_chain = bool(len(chain_fc) or len(chain_ex) or len(chain_ac))
+    # 修正动量 (E4): 差分窗 ~4 周前的最近一份快照; 快照数不足 → 「累积中」诚实降级
+    rev_cfg = ((rp.get("earnings") or {}).get("revision")) or {}
+    rev_lookback_weeks = int(rev_cfg.get("lookback_weeks", 4))
+    rev_min_snapshots = int(rev_cfg.get("min_snapshots", 4))
+    cons_dates = store.consensus_snapshot_dates()
+    snap_then_date, snap_then = "", None
+    if len(cons_dates) >= 2:
+        target = (datetime.now() - timedelta(days=7 * rev_lookback_weeks)).strftime("%Y%m%d")
+        snap_then_date, snap_then = store.get_consensus_snapshot(asof=target)
     snapshots: dict[str, dict] = {}
     series_map: dict[str, dict] = {}
     for sym in symbols:
@@ -153,6 +162,20 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
             snap["chain"] = ern.earnings_chain(cons, chain_fc, chain_ex, chain_ac,
                                                asof=datetime.now())
             snap["chain_period"] = chain_period
+
+        # 修正动量 (E4, informational): 4周快照差分·同财年对齐 — 冷启动期「累积中」
+        if cons is not None and len(cons):
+            if len(cons_dates) < rev_min_snapshots:
+                snap["revision_status"] = f"累积中({len(cons_dates)}/{rev_min_snapshots})"
+            elif snap_then is not None and len(snap_then):
+                rev = ern.revision_momentum(csnap, snap_then, cons,
+                                            min_reports=cons_min_reports)
+                if rev["n_names"] >= 3:
+                    snap["revision_w"] = rev["weighted_rev"]
+                    snap["revision_up"] = rev["n_up"]
+                    snap["revision_dn"] = rev["n_dn"]
+                    snap["revision_cov"] = rev["coverage"]
+                    snap["revision_span"] = f"{snap_then_date}→{csnap_date}"
 
         snapshots[sym] = snap
         series_map[sym] = {"shares": shares_df, "nav": nav_df}
@@ -325,7 +348,10 @@ def main():
                  if sn.get("consensus_label") and sn["consensus_label"] != "数据不足")
     if n_cons:
         csnap_date = store.get_consensus_snapshot()[0]
-        print(f"   📊 一致预期: {n_cons}/{len(snapshots)} 只出数（快照 {csnap_date}·周度积累中, E4 修正动量待冷启动）")
+        n_rev = sum(1 for sn in snapshots.values() if isinstance(sn.get("revision_w"), (int, float)))
+        rev_s = (f"，修正动量 {n_rev} 只出数" if n_rev
+                 else f"，修正动量冷启动(快照 {len(store.consensus_snapshot_dates())}/4)")
+        print(f"   📊 一致预期: {n_cons}/{len(snapshots)} 只出数（快照 {csnap_date}{rev_s}）")
     if flow_payload and flow_payload["state"].get("label_key") != "insufficient":
         st = flow_payload["state"]
         print(f"   💰 板块资金流向[{st['label']}] 近{flow_payload['window']}日全池净流入 "
