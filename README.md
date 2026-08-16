@@ -2,13 +2,13 @@
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Tests](https://img.shields.io/badge/tests-715%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-754%20passing-brightgreen.svg)
 ![Data](https://img.shields.io/badge/data-AkShare-orange.svg)
 ![Status](https://img.shields.io/badge/status-shadow%20only-lightgrey.svg)
 
-> 一个 **A股** 板块轮动 ETF 决策助手：规则引擎出决策、大模型出解释、每日微信报告；并带四套只读诊断看板（ETF 行业研究 / 指数择时 / 个股诊断 / 宏观框架）。
+> 一个 **A股** 板块轮动 ETF 决策助手：规则引擎出决策、大模型出解释、每日微信报告；并带五套只读诊断看板（ETF 行业研究 / 指数择时 / 个股诊断 / 宏观框架 / 仓位管理）。
 
-**决策归规则引擎，解释归大模型**——模型不发明数字，只解释引擎已算出的结果。五套模块共用同一数据底座（AkShare 多源 → SQLite），其中后四套是**只读诊断旁路**，不参与交易引擎。
+**决策归规则引擎，解释归大模型**——模型不发明数字，只解释引擎已算出的结果。六套模块共用同一数据底座（AkShare 多源 → SQLite），其中后五套是**只读诊断旁路**，不参与交易引擎。
 
 > 📐 设计溯源见 [`DESIGN.md`](./DESIGN.md)（16 项决策、架构图、路线图）；
 > 🔧 开发规范见 [`CLAUDE.md`](./CLAUDE.md)（快速命令、架构、代码风格、数据质量注意）。
@@ -21,7 +21,7 @@
 - [🧭 设计哲学](#-设计哲学)
 - [🏗️ 架构](#️-架构)
 - [🚀 快速开始](#-快速开始)
-- [📊 五大模块](#-五大模块)
+- [📊 六大模块](#-六大模块)
 - [🗓️ 日常使用](#️-日常使用)
 - [🔧 配置](#-配置)
 - [📡 数据源](#-数据源)
@@ -42,15 +42,16 @@
 - **指数择时层看板**：沪深 300 估值开关（同口径 PE+PB 四档）、大小盘温差、蓝筹 vs 成长、60 日线趋势 / 真穿越突破跌破 / 偏离极值；另含 ⑦ 相对周期律、⑧ 成交量地量、⑨ 恐惧贪婪指数（5 成分 0-100 温度计）、⑩ 关键位监测（规则选位支撑测试状态机；实证：破位后 20 日波动抬升）。
 - **个股诊断看板**：三类自动判定 + S07 利润归因 + S10 戴维斯 + S08 避坑 + **A 类商品价领先信号**（碳酸锂/铜/螺纹钢/黄金/原油 → alignment 商品健康×股价落后度 → 埋伏分）+ **按类型分 tab**（周期含商品面板/时序图/埋伏表子 tab）+ 十一条信号提醒 + 🤖AI 评估（点击实时生成，周期打法含商品驱动逻辑）。
 - **宏观框架看板**：沿 JZ 因果链（利率→曲线→美元→金属→能源→权益）做纯数据跟踪与分析；🥇**黄金阶段定位器**（价格结构+微观紧缺+利率美元驱动→阶段+驱动三栏+置信度+操作建议）；🔬黄金微观紧缺（COMEX 库存/CFTC 投机+商业持仓/央行购金/实际利率/期限溢价）；📰经济日历（美国高重要性事件·数据真伪 surprise+催化剂·对黄金影响）。
+- **仓位管理看板**：估值档 × 预案表对照器——沪深300 PE+PB 10 年滚动分位四档逐日回放（2005 起，与指数看板 ④ 同口径）+ 档位统计（历史占比/前向 1y·3y 收益中位/年化波动）+ 切换事件台账 + 环境注记（恐贪/地量/关键位）；预案表 = `params.yaml position_plan` 用户自定义的档位→权益仓位%区间，看板只对照「现在在哪格」，温度计非开关·不喂引擎。
 - **自律度对账**：记录目标持仓 vs 实际执行，量化自己的纪律。
-- **纯函数 + 配置驱动 + 全测试覆盖**（715 个 pytest），回测与实盘共用同一引擎函数。
+- **纯函数 + 配置驱动 + 全测试覆盖**（754 个 pytest），回测与实盘共用同一引擎函数。
 
 ---
 
 ## 🧭 设计哲学
 
 1. **决策归规则引擎，解释归大模型**——模型零预测，只翻译引擎输出。避免 LLM 幻觉造数。
-2. **四套诊断看板是只读旁路**——研究/择时/个股诊断/宏观框架**不喂交易引擎**，只帮你「看清」，决策仍归引擎。
+2. **五套诊断看板是只读旁路**——研究/择时/个股诊断/宏观框架/仓位管理**不喂交易引擎**，只帮你「看清」，决策仍归引擎。
 3. **大部分早晨的报告是「维持持有，无需操作」**——挡住交易欲，这本身就是核心价值。
 4. **优先级硬规则**：止损 > 轮动 > 择时。
 5. **T+1**：信号 T 收盘生成、T+1 开盘成交。
@@ -71,7 +72,8 @@
   │   大盘择时(RegimeFilter A+B)        │   │   • ETF 行业研究 (research/)  │
   │   × 6 可插拔信号                    │   │   • 指数择时    (tracker/)    │
   │   × 双层止损(ATR/entry_stop)        │   │   • 个股诊断    (tracker/)    │
-  │   → 组合决策 → Engine 编排           │   │   → 4 套交互式 HTML 看板      │
+  │                                    │   │   • 仓位管理     (tracker/)    │
+  │   → 组合决策 → Engine 编排           │   │   → 5 套交互式 HTML 看板      │
   └──────────────────┬─────────────────┘   └─────────────────────────────┘
                      ▼
   ┌────────────────────────────────────┐
@@ -106,7 +108,7 @@ python scripts/update_data.py                         # 日线（幂等，~1 分
 python scripts/backfill_scale.py --start 2021-01-01   # ETF 份额历史（~10 分钟）
 python scripts/fix_splits.py                          # 修拆分（运行一次）
 
-# 四套看板所需（首次较久，之后增量）
+# 五套看板所需（首次较久，之后增量；仓位管理看板零新增回填，直接用 backfill_index 的沪深300 PE/PB）
 python scripts/setup_research_dashboard.py --skip-pe  # ETF 研究看板一键（价格+份额+净值+业绩预期底座+渲染；--skip-pe 省PE ~30min）
 python scripts/backfill_index.py                      # 7 宽基日线(含上证综指·中证1000) + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 上交所融资融券(⑨恐惧贪婪)
 python scripts/backfill_stock_data.py                 # 观察池个股 日线/估值/财报/分红/预告
@@ -123,12 +125,12 @@ python scripts/backfill_economic_calendar.py           # 经济日历(美国高�
 ### 验证安装
 
 ```bash
-python -m pytest tests/ -q          # 715 个测试全过即环境 OK
+python -m pytest tests/ -q          # 754 个测试全过即环境 OK
 ```
 
 ---
 
-## 📊 五大模块
+## 📊 六大模块
 
 ### 1. ETF 轮动决策引擎（核心）
 
@@ -183,7 +185,15 @@ python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1
 ```bash
 python scripts/macro_framework_report.py          # 生成 data/macro_framework.html（纯数据·无LLM·深浅色可切）
 # 只刷宏观一个看板（~3 分钟）：详见 .claude/skills/macro-dashboard/SKILL.md
-# 或全刷 4 个看板：python /dashboards（详见 .claude/skills/dashboards/SKILL.md）
+# 或全刷 5 个看板：python /dashboards（详见 .claude/skills/dashboards/SKILL.md）
+```
+
+### 6. 仓位管理看板（第五看板 · 只读对照）
+
+**估值档 × 预案表对照器**：沪深300 同口径 PE+PB 10 年滚动分位 → 四档（低位·可激进 / 中位·中性 / 结构分化·宜观望 / 高位·宜保守，与指数看板 ④ 估值开关同口径、parity 锁死）**逐日回放**（2005 年起，原 ④ 只有当前快照）+ 档位统计（历史占比 / 前向 1y·3y 收益中位 / 年化波动，逐日样本·末端不足窗口丢弃）+ 档位切换事件台账（只记事实不做涨跌复盘）+ 环境注记 chips（⑨恐贪/⑧地量/⑩关键位，只参照不改档）。**预案表 = 你在 `config/params.yaml` 的 `position_plan` 自定义的档位→权益仓位%区间**——看板只回答「现在在哪格、离哪条线多远」，不发明买卖建议（思想来源《股市仓位管理》主仓/超配分仓；温度计非开关·不喂引擎）。层级=大资产配置层（权益 vs 现金总比例），权益内轮动择时归引擎 RegimeFilter，两层不混。
+
+```bash
+python scripts/position_report.py               # 生成 data/position.html（数据腿=backfill_index.py 的 index_pe/pb，零新增回填）
 ```
 
 ---
@@ -195,7 +205,7 @@ python scripts/macro_framework_report.py          # 生成 data/macro_framework.
 | 每日 15:30 | `python scripts/run_eod.py` | 收盘数据更新（幂等自愈） |
 | 每日 08:30 | `python scripts/run_morning_report.py` | 生成 + 推送晨报（基于前日收盘） |
 | 每周 | `python scripts/record_actual.py --executed` | 对账自律度 |
-| 按需 | `python scripts/research_report.py` 等 | 刷新四套诊断看板（`/dashboards` 全刷 或 `/macro-dashboard` 只刷宏观） |
+| 按需 | `python scripts/research_report.py` 等 | 刷新五套诊断看板（`/dashboards` 全刷 或 `/macro-dashboard` 只刷宏观） |
 
 > A 股交易日 9:30–11:30 / 13:00–15:00；报告 8:30 前基于前日收盘。Windows 可用「任务计划程序」设这两个定时任务。
 
@@ -215,7 +225,7 @@ python scripts/macro_framework_report.py          # 生成 data/macro_framework.
 
 ## 📡 数据源
 
-python -m pytest tests/ -q          # 715 个
+python -m pytest tests/ -q          # 754 个
 
 数据为**不复权**原始价，需 `fix_splits.py` 修拆分后用于价格序列（真 NAV 不受影响）。
 
@@ -224,7 +234,7 @@ python -m pytest tests/ -q          # 715 个
 ## 🧪 测试
 
 ```bash
-python -m pytest tests/ -q          # 715 个
+python -m pytest tests/ -q          # 754 个
 ```
 
 - **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值。
@@ -256,7 +266,7 @@ stock-agent/
 ├── scripts/           update_data · run_eod · run_morning_report · run_backtest ·
 │                      sweep_params · walk_forward · backfill_scale · fix_splits ·
 │                      research_report · index_timing_report · stock_report · ...
-├── tests/             单测(715)
+├── tests/             单测(754)
 ├── docs/              PRD · 执行计划 · 课程笔记 · Phase 交接
 ├── DESIGN.md          产品设计(16 决策 + 架构 + 路线图 + 回测结论)
 ├── CLAUDE.md          开发规范(命令 + 架构 + 代码风格 + 数据质量)

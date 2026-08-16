@@ -1,7 +1,7 @@
 """五看板总入口壳页 (iframe 导航 · 只读 · 无数据依赖)。
 
-data/index.html: 左侧导航 + 右侧 iframe 装载四个现有看板 HTML, 切换不重载(保留滚动/状态)。
-四个看板生成器零改动——壳只负责导航/记忆上次选择/as_of(mtime) 标注; 缺哪个看板就提示生成命令。
+data/index.html: 左侧导航 + 右侧 iframe 装载五个现有看板 HTML, 切换不重载(保留滚动/状态)。
+五个看板生成器零改动——壳只负责导航/记忆上次选择/as_of(mtime) 标注; 缺哪个看板就提示生成命令。
 """
 from __future__ import annotations
 

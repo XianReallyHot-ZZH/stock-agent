@@ -1,6 +1,6 @@
-"""生成四看板总入口壳页 data/index.html (左侧导航 + iframe 装载, 无数据依赖·秒级)。
+"""生成五看板总入口壳页 data/index.html (左侧导航 + iframe 装载, 无数据依赖·秒级)。
 
-四个看板 HTML 各自生成后, 刷新壳页即可见(mtime 重读); 未生成的看板在壳内提示生成命令。
+五个看板 HTML 各自生成后, 刷新壳页即可见(mtime 重读); 未生成的看板在壳内提示生成命令。
 
 Usage:
   python scripts/dashboard_home.py              # 生成 + 开浏览器
@@ -24,7 +24,7 @@ from stockagent.dashboard_home import render_home
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="生成四看板总入口 data/index.html (iframe 导航壳)")
+    ap = argparse.ArgumentParser(description="生成五看板总入口 data/index.html (iframe 导航壳)")
     ap.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
     args = ap.parse_args()
 
