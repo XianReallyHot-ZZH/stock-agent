@@ -356,6 +356,16 @@ class Store:
                 (key, str(value)),
             )
 
+    def forecast_period_counts(self, min_rows: int = 100, limit: int = 8) -> list[tuple]:
+        """全市场级预告报告期清单 [(report_period, n_rows)..]，期新在前。
+        窗口台账回放用它挑有全市场数据的期（个股观察池的零星期 <min_rows 被滤掉）。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT report_period, COUNT(*) n FROM stock_forecast "
+                "GROUP BY report_period HAVING n >= ? "
+                "ORDER BY report_period DESC LIMIT ?", (min_rows, limit)).fetchall()
+        return [(str(r[0]), int(r[1])) for r in rows]
+
     def last_date(self, symbol: str) -> Optional[str]:
         with self._conn() as c:
             row = c.execute(

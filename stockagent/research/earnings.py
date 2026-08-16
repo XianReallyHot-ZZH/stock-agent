@@ -13,7 +13,7 @@ Data shape contract:
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -65,6 +65,66 @@ def latest_report_period(now: datetime) -> str:
     if md >= (7, 1):      return f"{y}0630"   # 半年报预告窗口(7/15 截止, 高峰即纳入)
     if md >= (4, 15):     return f"{y}0331"   # 一季报预告窗口(4/15~4/30)
     return f"{y - 1}1231"                      # 年报预告窗口(1/31 截止)
+
+
+# 披露窗口时钟（预告×偏离交叉横幅的季节门控）：预告数据季度一跳，窗口关闭后广度不再
+# 变化，条目钉在顶部只会壁纸化 → 只在 [开窗日, 截止日+grace] 内出交叉条目。
+# 开窗日与 latest_report_period 的窗口切换日一致；grace 覆盖截止后迟到披露+数据管道。
+_DISCLOSURE_WINDOWS = {          # period_tail → ((开窗月,日), (截止月,日)); 年报窗在次年1月
+    "1231": ((1, 1), (1, 31)),   # 年报预告: 1/1 开窗 → 1/31 强制披露截止
+    "0331": ((4, 15), (4, 30)),  # 一季报预告: 4/15 开窗(截止日) → 4/30 窗口收
+    "0630": ((7, 1), (7, 15)),   # 中报预告: 7/1 开窗 → 7/15 截止
+    "0930": ((10, 1), (10, 15)), # 三季报预告: 10/1 开窗 → 10/15 截止
+}
+
+
+def disclosure_window(now: datetime, grace_days: int = 14) -> dict:
+    """业绩预告披露窗口时钟（pure, no I/O）。
+
+    Returns {period, label, open, window_note, next_label, next_open}:
+      open=True  → 正处窗口内；period/label = 该窗口，window_note = "7/1开窗·7/15截止"
+      open=False → period/label = 刚关闭的窗口，next_* = 下一个开窗（"三季报预告", "10/1"）
+    边界：开窗日当天即 open；截止+grace 当天仍 open（闭区间）；次日关闭。全年无缝覆盖
+    （1-2月属上年年报窗的尾部/刚关闭态）。
+    """
+    d = now.date() if isinstance(now, datetime) else now
+    y = d.year
+    cands = [f"{y}{tail}" for tail in _DISCLOSURE_WINDOWS] + [f"{y - 1}1231"]
+    wins = [(p, *window_dates(p, grace_days)) for p in cands]
+    nxt_o = min((o for _p, o, _c in wins if o > d), default=None)
+    nxt = {"next_label": "", "next_open": ""}
+    if nxt_o is not None:
+        nxt_p = next(p for p, o, _c in wins if o == nxt_o)
+        nxt = {"next_label": period_label(nxt_p), "next_open": f"{nxt_o.month}/{nxt_o.day}"}
+    for period, o, c in wins:
+        if o <= d <= c:
+            return {"period": period, "label": period_label(period), "open": True,
+                    "window_note": _window_note(o, c, grace_days), **nxt}
+    # 全窗口皆不含今天 → 关闭态：报刚过的窗口 + 下一个开窗
+    closed = [w for w in wins if w[2] < d]
+    if closed:
+        period, o, c = max(closed, key=lambda w: w[2])   # 关闭最晚的 = 刚过的窗口
+        return {"period": period, "label": period_label(period), "open": False,
+                "window_note": _window_note(o, c, grace_days), **nxt}
+    return {"period": "", "label": "", "open": False, "window_note": "", **nxt}
+
+
+def window_dates(period: str, grace_days: int = 14) -> tuple[date, date]:
+    """某报告期预告窗口的 [开窗日, 截止+grace]（pure）。年报(1231)窗在次年 1 月；
+    供历史回放按窗口裁日历（台账只统计窗口内命中）。未知/畸形期 → ValueError。"""
+    if not isinstance(period, str) or len(period) != 8 or not period.isdigit():
+        raise ValueError(f"bad report_period {period!r}")
+    y, tail = int(period[:4]), period[4:]
+    if tail not in _DISCLOSURE_WINDOWS:
+        raise ValueError(f"unknown period tail {tail!r}")
+    (om, od), (cm, cd) = _DISCLOSURE_WINDOWS[tail]
+    wy = y + 1 if tail == "1231" else y
+    return date(wy, om, od), date(wy, cm, cd) + timedelta(days=grace_days)
+
+
+def _window_note(o: date, c: date, grace_days: int) -> str:
+    cut = c - timedelta(days=grace_days)
+    return f"{o.month}/{o.day}开窗·{cut.month}/{cut.day}截止"
 
 
 def _empty_signal(n_holdings: int) -> dict:
@@ -428,3 +488,84 @@ def revision_momentum(snap_now: Optional[pd.DataFrame],
         "coverage": uw / total_w,
         "n_names": int(len(m)),
     }
+
+
+# ---------------- 窗口交叉回放（历史台账 · 2026-08） ----------------
+# 横幅是"当前态"，台账回答"上一窗口提醒了什么"。与 report.py 横幅同门控（常量归一本处，
+# report.py 引用），逐日 point-in-time：预告按 announce_date ≤ 当日 截断（无前视）。
+# 边界约定：台账只记事实（命中区间/天数/广度），不带后续涨跌——横幅不做荐股复盘。
+
+CROSS_BEAR_FLOOR = 0.05                 # 交叉风险侧空广度地板（单家小权重预亏=噪音）
+CROSS_BULL_LABELS = (LABEL_HIGH, LABEL_UP)   # 交叉机会侧预喜 label（已过 earnings_score 覆盖门）
+
+
+def cross_hit_spans(nav_map: dict, fc: pd.DataFrame, cons_map: dict, days: list,
+                    params: dict, bear_floor: float = CROSS_BEAR_FLOOR,
+                    oversold: float = 0.05, overbought: float = 0.95,
+                    ma_period: int = 60) -> dict:
+    """逐日重放「偏离度极端 × 预告广度」交叉 → 每ETF命中区间（pure, no I/O）。
+
+    Data contracts:
+      nav_map  : sym → NAV Series（acc_nav 优先，调用方选好列；index 与 days 同型可比）
+      fc       : 一期全市场预告帧 indexed by code [yoy, type, announce_date]
+                 （store.get_stock_forecast_period 契约）
+      cons_map : sym → constituents DataFrame[code, weight]（可缺/空 → 跳过该 ETF）
+      days     : 升序回放日列表（窗口开窗日..截止+grace 由调用方用 window_dates 裁好）
+    门控与横幅一致：risk = 分位≥overbought × 空广度≥bear_floor；opp = 分位≤oversold ×
+    预喜label（label 非数据不足 = 已过覆盖门 0.30/5只）。分位=deviation_extremes 全历史口径。
+    Returns {sym: {"opp": [span..], "risk": [span..]}}，span = {"first","last","n","detail"}
+    （连续命中日按 days 相邻合并；detail = 末日广度描述，如 "高增·多97%" / "空8%"）。
+    """
+    from . import timing as _tm                    # 惰性：earnings 被 DataManager 引，避免模块级耦合
+    ad = fc["announce_date"].astype(str).str[:10] if "announce_date" in fc.columns else None
+    fc_cols = fc[["yoy", "type"]]
+    # 命中日收集：{sym: {side: [(day, detail)..]}}
+    raw: dict[str, dict[str, list]] = {}
+    for D in days:
+        ds = str(D)[:10]
+        fc_d = fc_cols[ad.values <= ds] if ad is not None else fc_cols
+        for sym, nav in nav_map.items():
+            cons = cons_map.get(sym)
+            if nav is None or len(nav) < ma_period + 20 or cons is None or not len(cons):
+                continue
+            ext = _tm.deviation_extremes(nav[nav.index <= D], ma_period)
+            if not ext["valid"]:
+                continue
+            p = ext["pct"]
+            sig = aggregate_earnings(cons, fc_d)
+            _sc, label = earnings_score(sig, params)
+            if label == LABEL_INSUFF:
+                continue
+            bear = sig["bear_ratio"]
+            side = None
+            detail = ""
+            if p >= overbought and bear == bear and bear >= bear_floor:
+                side, detail = "risk", f"空{bear:.0%}"
+            elif p <= oversold and label in CROSS_BULL_LABELS:
+                side, detail = "opp", f"{label}·多{sig['bull_ratio']:.0%}"
+            if side:
+                raw.setdefault(sym, {"opp": [], "risk": []})[side].append((ds, detail))
+    # 连续日合并成区间（按 days 顺序相邻）
+    order = {str(d)[:10]: i for i, d in enumerate(days)}
+    out: dict[str, dict[str, list]] = {}
+    for sym, sides in raw.items():
+        res = {}
+        for side, seq in sides.items():
+            if not seq:                               # 未命中的另一侧是空表，跳过
+                continue
+            spans = []
+            start = prev = seq[0][0]
+            detail = seq[0][1]
+            for d, det in seq[1:]:
+                if order.get(d, -1) == order.get(prev, -2) + 1:
+                    prev, detail = d, det
+                else:
+                    spans.append({"first": start, "last": prev,
+                                  "n": order[prev] - order[start] + 1, "detail": detail})
+                    start = prev = d
+            spans.append({"first": start, "last": prev,
+                          "n": order[prev] - order[start] + 1, "detail": detail})
+            res[side] = spans
+        if res:
+            out[sym] = res
+    return out

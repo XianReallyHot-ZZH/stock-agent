@@ -454,3 +454,158 @@ def test_flow_lines_window_unit_buttons():
     aser = base["aum_series"]["大金融"]
     exp = float((roll["大金融"] * 0.5).iloc[0]) / float(aser.iloc[0]) * 100.0
     assert menu.buttons[1].args[0]["y"][0][0] == pytest.approx(exp, rel=1e-9)
+
+
+# ---------------- 业绩预期提醒横幅（A5 + 偏离×预告广度交叉） ----------------
+
+def _earn_win(open_=True, period="20260630"):
+    return ({"period": period, "label": "2026中报预告", "open": True,
+             "window_note": "7/1开窗·7/15截止", "next_label": "2026三季报预告", "next_open": "10/1"}
+            if open_ else
+            {"period": period, "label": "2026中报预告", "open": False,
+             "window_note": "7/1开窗·7/15截止", "next_label": "2026三季报预告", "next_open": "10/1"})
+
+
+def _esnap(pct, cur, label="业绩高增", bear=0.0, bull=1.0, period="20260630", **kw):
+    s = _snap(pct, cur)
+    s.update({"earnings_label": label, "earnings_bear": bear, "earnings_bull": bull,
+              "earnings_yoy": 0.30, "earnings_cov": 0.6, "earnings_period": period})
+    s.update(kw)
+    return s
+
+
+def test_earn_alert_items_gates():
+    win = _earn_win()
+    snaps = {
+        # A5 命中：下修 -4.2% 且覆盖 55%
+        "a": _esnap(0.5, 0.0, revision_w=-0.042, revision_cov=0.55,
+                    revision_up=2, revision_dn=8),
+        # 下修够深但覆盖不足 → 不进
+        "b": _esnap(0.5, 0.0, revision_w=-0.05, revision_cov=0.30),
+        # 下修不足阈值 → 不进
+        "c": _esnap(0.5, 0.0, revision_w=-0.02, revision_cov=0.60),
+    }
+    out = rep._earn_alert_items(snaps, win)
+    assert [s for s, _ in out["a5"]] == ["a"]
+    # data_sufficient=False 一律不进
+    snaps["d"] = _esnap(0.5, 0.0, revision_w=-0.09, revision_cov=0.9, data_sufficient=False)
+    out = rep._earn_alert_items(snaps, win)
+    assert "d" not in [s for s, _ in out["a5"]]
+
+
+def test_earn_alert_items_cross_gates():
+    win = _earn_win()
+    snaps = {
+        # 超买×空广度≥5% → 风险
+        "r1": _esnap(0.96, 0.10, label="业绩改善", bear=0.08, bull=0.92),
+        # 超买但空广度 3% < 5% 地板 → 不进（单家小权重预亏=噪音）
+        "r2": _esnap(0.97, 0.12, bear=0.03, bull=0.97),
+        # 超卖×预喜 label → 机会
+        "o1": _esnap(0.03, -0.15, label="业绩高增"),
+        # 超卖但 label 承压 → 不进
+        "o2": _esnap(0.04, -0.12, label="业绩承压"),
+        # 超卖×预喜 但 earnings_period 是旧窗口 → 不进（陈旧数据）
+        "o3": _esnap(0.02, -0.18, label="业绩高增", period="20260331"),
+        # label=数据不足（覆盖门未过）→ 不进
+        "o4": _esnap(0.01, -0.20, label="数据不足"),
+    }
+    out = rep._earn_alert_items(snaps, win)
+    assert [s for s, _ in out["risk"]] == ["r1"]
+    assert [s for s, _ in out["opp"]] == ["o1"]
+    # 窗口关闭 → 交叉全空（A5 不受窗口门控）
+    closed = _earn_win(open_=False)
+    snaps["a"] = _esnap(0.5, 0.0, revision_w=-0.06, revision_cov=0.5)
+    out2 = rep._earn_alert_items(snaps, closed)
+    assert out2["risk"] == [] and out2["opp"] == []
+    assert [s for s, _ in out2["a5"]] == ["a"]
+
+
+def test_earn_alert_items_sort():
+    # a5 按下修最深在前；交叉按偏离极值程度（|pct-0.5|）降序
+    win = _earn_win()
+    snaps = {
+        "a": _esnap(0.5, 0.0, revision_w=-0.031, revision_cov=0.5),
+        "b": _esnap(0.5, 0.0, revision_w=-0.08, revision_cov=0.5),
+        "r1": _esnap(0.96, 0.1, bear=0.2, bull=0.8),
+        "r2": _esnap(0.99, 0.2, bear=0.3, bull=0.7),
+    }
+    out = rep._earn_alert_items(snaps, win)
+    assert [s for s, _ in out["a5"]] == ["b", "a"]
+    assert [s for s, _ in out["risk"]] == ["r2", "r1"]
+
+
+def test_earnings_alert_banner_placeholders():
+    meta = {"512010": {"name": "医药ETF"}}
+    # A5 冷启动占位（含 还需N周）+ 窗口关闭占位（下窗口时点）
+    s = {"512010": {"data_sufficient": True, "revision_status": "累积中(1/4)"}}
+    h = rep._earnings_alert_banner(s, meta, "2026-08-14")
+    assert "累积中 1/4" in h and "约还需 3 周" in h
+    assert "窗口已关闭" in h and "三季报预告 10/1 开窗" in h
+    assert "窗口外不出条目" in h
+    # A5 激活无命中占位
+    s2 = {"512010": {"data_sufficient": True, "revision_w": -0.01, "revision_cov": 0.5}}
+    h2 = rep._earnings_alert_banner(s2, meta, "2026-08-14")
+    assert "已激活 · 当前无下修告警" in h2
+    # 无修正动量数据占位
+    h3 = rep._earnings_alert_banner({"512010": {"data_sufficient": True}}, meta, "2026-08-14")
+    assert "无修正动量数据" in h3
+
+
+def test_earnings_alert_banner_entries_and_window_gate():
+    meta = {"512010": {"name": "医药ETF"}, "159992": {"name": "创新药ETF"}}
+    snaps = {
+        "512010": _esnap(0.03, -0.15, revision_w=-0.042, revision_cov=0.55,
+                         revision_up=2, revision_dn=8, revision_span="20260719→20260816"),
+        "159992": _esnap(0.96, 0.128, label="业绩改善", bear=0.10, bull=0.90),
+    }
+    # 窗口内（as_of=7/10）→ 双向交叉条目 + A5 条目 + 可点跳转
+    h = rep._earnings_alert_banner(snaps, meta, "2026-07-10")
+    assert "超买×预亏" in h and "空广度 10%" in h and 'href="#159992"' in h
+    assert "超卖×预喜" in h and 'href="#512010"' in h
+    assert "下修 -4.2%" in h and "下调8家/上调2家" in h
+    # 窗口外（as_of=8/14）→ A5 条目仍在（不受窗口门控），交叉只报下窗口
+    h2 = rep._earnings_alert_banner(snaps, meta, "2026-08-14")
+    assert "下修 -4.2%" in h2
+    assert 'href="#159992"' not in h2 and "空广度 10%" not in h2
+
+
+def test_render_earnings_alert_banner_wired():
+    # render 集成：横幅常驻（四象限之后、申赎异动之前），读图说明含 ④' 段
+    html = _render_mini()
+    i_quad = html.index("四象限提醒")
+    i_earn = html.index("📈 业绩预期提醒")
+    assert i_quad < i_earn < html.index("择时跟踪排名")
+    assert "A5 一致预期下修" in html and "事件进横幅·状态留表格" in html
+    assert "预期g水平值是状态" in html          # 读图说明 ④'
+    # _render_mini 的 snaps 无业绩字段 → 走占位（无修正动量数据 + 窗口关闭）
+    assert "无修正动量数据" in html or "累积中" in html
+    assert "窗口已关闭" in html or "暂无交叉命中" in html
+
+
+def test_earnings_alert_banner_history_block():
+    meta = {"512010": {"name": "医药ETF"}, "515220": {"name": "煤炭ETF"}}
+    hist = {"windows": [
+        {"period": "20260630", "label": "2026中报预告", "state": "closed",
+         "hits": {"512010": {"opp": [{"first": "2026-07-15", "last": "2026-07-29",
+                                      "n": 11, "detail": "业绩高增·多92%"}]}},
+         },
+        {"period": "20251231", "label": "2025年报预告", "state": "closed",
+         "hits": {"515220": {"risk": [{"first": "2026-01-27", "last": "2026-01-30",
+                                       "n": 4, "detail": "空9%"}]}},
+         },
+    ]}
+    snaps = {"512010": {"data_sufficient": True, "revision_status": "累积中(1/4)"}}
+    h = rep._earnings_alert_banner(snaps, meta, "2026-08-14", history=hist)
+    # 关闭态行带「上窗口摘要」（只数去重 ETF，不数 span）
+    assert "上窗口(2026中报预告)命中：🟢1只·医药ETF11天 · 🟠0只" in h
+    # 折叠台账：窗口行 + span 事实 + 不含涨跌边界注记（名字在 <a> 内，拆开断言）
+    assert "历史窗口台账 · 交叉命中记录（2 窗口" in h
+    assert "2026-07-15~2026-07-29·11天 业绩高增·多92%" in h
+    assert "2026-01-27~2026-01-30·4天 空9%" in h
+    assert "不含后续涨跌" in h and "无前视" in h
+    assert 'href="#512010"' in h and 'href="#515220"' in h  # 台账条目可点跳转
+    # history=None → 无台账不崩（优雅降级）；空 windows → 同
+    h2 = rep._earnings_alert_banner(snaps, meta, "2026-08-14")
+    assert "历史窗口台账" not in h2 and "上窗口" not in h2
+    h3 = rep._earnings_alert_banner(snaps, meta, "2026-08-14", history={"windows": []})
+    assert "历史窗口台账" not in h3

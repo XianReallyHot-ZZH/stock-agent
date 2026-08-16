@@ -198,6 +198,73 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     return snapshots, series_map, meta
 
 
+def build_earn_history(store: Store, cfg, series_map: dict, meta: dict,
+                       as_of: str | None, max_windows: int = 8) -> dict:
+    """📈 业绩预期提醒的历史窗口台账（偏离×预告广度交叉回放）。
+
+    逐窗口 ern.cross_hit_spans 逐日重放（point-in-time·announce_date 截断）；**已关闭窗口
+    结果落 meta kv 缓存**（NAV/预告对旧窗口不可变，回放冻结），开窗中的窗口实时算（"进行中"）。
+    只记事实（命中区间/天数/广度），不带后续涨跌——横幅不做荐股复盘（边界约定 2026-08）。
+    Returns {"windows": [{period,label,state,range_note,hits:{sym:{opp/risk:[span]}}}..]}；
+    无全市场预告的旧窗口不进台账（数据缺口由渲染端一句话说明）。"""
+    import json as _json
+
+    from stockagent.research import earnings as ern
+    rows = store.forecast_period_counts(min_rows=100, limit=max_windows)
+    if not rows:
+        return {"windows": []}
+    as_of_d = str(as_of or datetime.now().strftime("%Y-%m-%d"))[:10]
+    ma_period = int(cfg.params["research"]["ma_period"])
+    nav_map = {}
+    for sym, sm in series_map.items():
+        d = sm.get("nav")
+        if d is None or not len(d):
+            continue
+        for col in ("acc_nav", "unit_nav"):
+            if col in d.columns:
+                s = pd.to_numeric(d[col], errors="coerce").dropna()
+                if len(s):
+                    nav_map[sym] = s
+                    break
+    cons_cache = {s: store.get_constituents(str(m.get("index_code") or ""))
+                  for s, m in meta.items()}
+    all_days = sorted({str(i)[:10] for s in nav_map.values() for i in s.index})
+    windows = []
+    for r in rows:
+        period = r[0] if not hasattr(r, "keys") else r["report_period"]
+        period = str(period)
+        try:
+            open_d, close_d = ern.window_dates(period)
+        except ValueError:
+            continue
+        if open_d.strftime("%Y-%m-%d") > as_of_d:
+            continue                                    # 未来窗口不进台账
+        end_d = min(close_d.strftime("%Y-%m-%d"), as_of_d)
+        state = "open" if as_of_d <= close_d.strftime("%Y-%m-%d") else "closed"
+        key = f"earn_cross_replay_{period}"
+        cached = None
+        if state == "closed":
+            raw = store.get_meta(key)
+            if raw:
+                try:
+                    cached = _json.loads(raw).get("hits")
+                except (ValueError, TypeError):
+                    cached = None
+        hits = cached
+        if hits is None:
+            days = [d for d in all_days if open_d.strftime("%Y-%m-%d") <= d <= end_d]
+            fc = store.get_stock_forecast_period(period)
+            hits = ern.cross_hit_spans(nav_map, fc, cons_cache, days,
+                                       cfg.params, ma_period=ma_period) if days else {}
+            if state == "closed":                       # 关闭窗冻结（旧窗口数据不可变）
+                store.set_meta(key, _json.dumps(
+                    {"period": period, "computed_at": as_of_d, "hits": hits},
+                    ensure_ascii=False))
+        windows.append({"period": period, "label": ern.period_label(period),
+                        "state": state, "hits": hits})
+    return {"windows": windows}
+
+
 def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
                        as_of: str | None) -> dict | None:
     """组装「板块资金流向」payload（research/flow.py 纯函数）。
@@ -254,7 +321,8 @@ def main():
                     choices=("nav", "pe", "scale", "earnings", "consensus", "chain", "all"),
                     default=None, help="run historical backfill instead of rendering")
     ap.add_argument("--period", default=None,
-                    help="earnings backfill report period YYYYMMDD (default: latest complete FY)")
+                    help="earnings backfill report period YYYYMMDD, comma-separated for multi "
+                         "(default: latest complete FY). e.g. 20251231,20260331")
     ap.add_argument("--start", default="2021-01-01")
     ap.add_argument("--end", default=None)
     ap.add_argument("--step", type=int, default=1, help="backfill sampling step (days); 5=weekly, 30=monthly")
@@ -290,8 +358,11 @@ def main():
             if args.backfill == "chain":
                 return
         if args.backfill in ("earnings", "all"):
-            n = dm.update_etf_earnings(report_period=args.period)
-            print(f"  earnings backfill: {n} ETFs updated")
+            # --period 支持逗号分隔多期（历史回填：台账/回放需要旧窗口全市场预告）
+            periods = [p.strip() for p in (args.period or "").split(",") if p.strip()] or [None]
+            for p in periods:
+                n = dm.update_etf_earnings(report_period=p)
+                print(f"  earnings backfill{f' {p}' if p else ''}: {n} ETFs updated")
             if args.backfill == "earnings":
                 return
         do_backfill(dm, args.backfill, args.start, end, args.step, args.sleep, args.source)
@@ -312,11 +383,12 @@ def main():
         as_of = max(dates) if dates else end
 
     flow_payload = build_flow_payload(cfg, series_map, meta, symbols, as_of)
+    earn_history = build_earn_history(store, cfg, series_map, meta, as_of)
     html = rep.render(snapshots, series_map, meta, as_of=as_of,
                       signal_note="纯跟踪·无LLM解读",
                       ma_period=int(cfg.params["research"]["ma_period"]),
                       pinned=list(cfg.params["research"].get("pinned_etfs", [])),
-                      flow=flow_payload)
+                      flow=flow_payload, earn_history=earn_history)
     out = rep.write_html(html, args.output)
 
     if args.push_alerts:

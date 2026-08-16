@@ -18,6 +18,8 @@ engine (pure f-string HTML).
 from __future__ import annotations
 
 import math
+import re
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -340,6 +342,15 @@ def _order_detail(ranked: dict, excluded: dict, pinned, meta: dict) -> list:
 _OVERSOLD_PCT = 0.05      # 超卖：净值大幅低于均线，分位 ≤5%
 _OVERBOUGHT_PCT = 0.95    # 超买：净值大幅高于均线，分位 ≥95%
 
+# ---- 业绩预期提醒横幅（A5 下修 + 偏离×预告广度交叉 · 常驻占位） ----
+_A5_DROP_PCT = 3.0        # A5: 4周加权 forward-EPS 下修超此%告警。对齐 params
+                          # research.earnings.revision.alert_drop_pct 与
+                          # tracker/alerts.py _A5_DROP_PCT —— 三处同步
+_A5_MIN_COV = 0.40        # A5 覆盖门（对齐 params research.earnings.consensus.min_weight_cov）
+_EARN_BEAR_FLOOR = ern.CROSS_BEAR_FLOOR        # 交叉门控常量归一 earnings.py（回放同源）
+_EARN_BULL_LABELS = ern.CROSS_BULL_LABELS
+_EARN_WINDOW_GRACE_DAYS = 14   # 披露窗扫尾天数（截止后仍算开窗，覆盖迟到披露+数据管道）
+
 
 def _extreme_rank(snap: dict) -> int | None:
     """当前偏离在「同侧历史极端事件」里的排名（与图里 ▲▼ 第N 标记同源）。不在 top-N 内 → None。"""
@@ -500,6 +511,190 @@ def _quadrant_banner(snapshots: dict, meta: dict) -> str:
         '<span class="xb-note">仅列偏离度进入自身历史 5%/95% 极端分位的 ETF · '
         '筹码=份额申赎方向·机构行为代理（主体不可辨） · 观察·非买卖建议</span></div>'
         f'<div class="quad-grid">{cells}</div></div>'
+    )
+
+
+# ---- 业绩预期提醒横幅（A5 一致预期下修 + 偏离度×预告广度交叉 · 2026-08） ----
+# 提醒区收「事件」不收「状态」：A5=4周快照差分跳变；交叉=偏离极端分位×预告广度。
+# 一致预期 g 水平值是状态（系统性乐观·只有横截面排序有意义，排序键已覆盖）→ 不进横幅。
+
+def _earn_alert_items(snapshots: dict, win: dict) -> dict:
+    """业绩预期提醒条目分组（pure）：{"a5": [(sym,snap)..], "risk": [...], "opp": [...]}。
+
+    a5   = E4 修正动量 4周加权下修 < -3% 且覆盖 ≥ 40%（与 tracker/alerts.py A5 同口径）
+    risk = 窗口开 且 偏离超买(≥95%) × 预告空广度 ≥ 5%（价格跑前面·成分已有预亏）
+    opp  = 窗口开 且 偏离超卖(≤5%) × 预告 label ∈ {业绩高增,业绩改善}（深跌·成分预喜）
+    交叉条目另需 earnings_period 落在本窗口（旧窗口数据不提醒）且 label≠数据不足
+    （= 已过 earnings_score 覆盖门 0.30/5只）。排序：a5 按下修最深在前，交叉按偏离极值。"""
+    a5, risk, opp = [], [], []
+    in_window = bool(win.get("open"))
+    wperiod = str(win.get("period") or "")
+    for sym, snap in snapshots.items():
+        if not snap.get("data_sufficient", True):
+            continue
+        rev = snap.get("revision_w")
+        if (isinstance(rev, (int, float)) and not _nan(rev)
+                and rev * 100 < -_A5_DROP_PCT
+                and (snap.get("revision_cov") or 0) >= _A5_MIN_COV):
+            a5.append((sym, snap))
+        if not in_window:
+            continue
+        if str(snap.get("earnings_period") or "") != wperiod:
+            continue
+        p = snap.get("nav_dev_pct")
+        label = snap.get("earnings_label") or ""
+        if _nan(p) or label == ern.LABEL_INSUFF:
+            continue
+        bear = snap.get("earnings_bear")
+        if (p >= _OVERBOUGHT_PCT and isinstance(bear, (int, float))
+                and not _nan(bear) and bear >= _EARN_BEAR_FLOOR):
+            risk.append((sym, snap))
+        elif p <= _OVERSOLD_PCT and label in _EARN_BULL_LABELS:
+            opp.append((sym, snap))
+    a5.sort(key=lambda kv: kv[1].get("revision_w"))
+    for rows in (risk, opp):
+        rows.sort(key=lambda kv: abs(kv[1].get("nav_dev_pct") - 0.5), reverse=True)
+    return {"a5": a5, "risk": risk, "opp": opp}
+
+
+def _earn_ledger_span(snap: dict, sym: str) -> str:
+    """台账单条 span 摘要：首尾日·天数·广度（事实，无涨跌）。"""
+    return (f"{snap['first']}~{snap['last']}·{snap['n']}天 {snap['detail']}")
+
+
+def _earn_ledger_html(history: dict | None, meta: dict) -> str:
+    """📖 历史窗口台账（折叠·默认收起）：逐窗口交叉命中区间。只记事实不带后续涨跌。"""
+    wins = (history or {}).get("windows") or []
+    if not wins:
+        return ""
+    rows = []
+    for w in wins:
+        opp, risk = [], []
+        for sym, sides in (w.get("hits") or {}).items():
+            nm = meta.get(sym, {}).get("name", sym)
+            for sp in sides.get("opp") or []:
+                opp.append(f'<a href="#{sym}" class="xb-link">{nm}</a> {_earn_ledger_span(sp, sym)}')
+            for sp in sides.get("risk") or []:
+                risk.append(f'<a href="#{sym}" class="xb-link">{nm}</a> {_earn_ledger_span(sp, sym)}')
+        state_s = "进行中" if w.get("state") == "open" else "已关闭"
+        def _side(entries):
+            return " ｜ ".join(entries) if entries else '<span class="muted">无</span>'
+        rows.append(f'<div style="margin:3px 0"><b>{w["label"]}</b>'
+                    f'<span class="xb-sub">（{state_s}）</span>：'
+                    f'🟢 {_side(opp)} ｜ 🟠 {_side(risk)}</div>')
+    note = ('<p class="sub" style="margin:6px 0 0">逐日 point-in-time 重放（预告按公告日截断·无前视）；'
+            '命中消失=价格脱离极端区（信号兑现的出口）。只记事实·不含后续涨跌——横幅不做荐股复盘。'
+            '更早窗口预告未回填（`--backfill earnings --period` 可扩）；成分用当前快照（月度漂移近似）。</p>')
+    return ('<details class="guide" style="margin:6px 0 0">'
+            f'<summary>📖 历史窗口台账 · 交叉命中记录（{len(wins)} 窗口 · 点开）</summary>'
+            f'<div class="guide-body">{"".join(rows)}{note}</div></details>')
+
+
+def _earnings_alert_banner(snapshots: dict, meta: dict, as_of: str,
+                           history: dict | None = None) -> str:
+    """📈 业绩预期提醒横幅（常驻占位）：A5 一致预期下修 + 偏离度×预告广度交叉。
+
+    两行各有占位态——A5 行：冷启动「累积中N/4」/ 激活后无命中「无下修告警」；
+    交叉行：披露窗口门控（窗口外只报下窗口时点 + 上窗口命中摘要；预告数据季度一跳，
+    非披露季钉在顶部=壁纸化）。history（scripts 组装的窗口回放）→ 底部折叠台账。
+    只用现成字段/入参，不做新数据计算；纯观察·非买卖建议。"""
+    try:
+        now = datetime.strptime(str(as_of)[:10], "%Y-%m-%d")
+    except ValueError:
+        now = datetime.now()
+    win = ern.disclosure_window(now, grace_days=_EARN_WINDOW_GRACE_DAYS)
+    items = _earn_alert_items(snapshots, win)
+
+    def _a5_entry(sym: str, snap: dict) -> str:
+        nm = meta.get(sym, {}).get("name", sym)
+        cov = snap.get("revision_cov") or 0
+        return (f'<span class="xb-item"><a href="#{sym}" class="xb-link">{nm}</a> '
+                f'<b class="c-neg">下修 {snap["revision_w"]:+.1%}</b> '
+                f'<span class="xb-sub">下调{snap.get("revision_dn", 0)}家/'
+                f'上调{snap.get("revision_up", 0)}家 · 覆盖{cov:.0%}'
+                f' · 4周（{snap.get("revision_span", "")}）</span></span>')
+
+    def _x_entry(sym: str, snap: dict, side: str) -> str:
+        nm = meta.get(sym, {}).get("name", sym)
+        cur, p = snap.get("nav_dev_cur"), snap.get("nav_dev_pct")
+        pos = "c-pos" if (not _nan(cur) and cur > 0) else "c-neg"
+        if side == "risk":
+            x = f'空广度 {snap["earnings_bear"]:.0%}'
+            if not _nan(snap.get("earnings_yoy")):
+                x += f'（归母YoY {snap["earnings_yoy"]:+.0%}）'
+        else:
+            x = (f'{snap["earnings_label"]} · 多{snap.get("earnings_bull", 0):.0%}/'
+                 f'空{snap.get("earnings_bear", 0):.0%}')
+        return (f'<span class="xb-item"><a href="#{sym}" class="xb-link">{nm}</a> '
+                f'<b class="{pos}">{cur:+.1%}</b> '
+                f'<span class="xb-sub">分位 {p:.0%} × {x}</span></span>')
+
+    # --- A5 行（常驻）：条目 / 冷启动 / 激活无命中 / 无数据 ---
+    if items["a5"]:
+        a5_html = "".join(_a5_entry(s, sn) for s, sn in items["a5"])
+    else:
+        cold = next((sn.get("revision_status") for sn in snapshots.values()
+                     if sn.get("revision_status")), None)
+        m = re.search(r"\((\d+)/(\d+)\)", cold or "")
+        if m:
+            left = max(int(m.group(2)) - int(m.group(1)), 0)
+            a5_html = (f'<span class="xb-sub muted">修正动量冷启动 · 快照累积中 '
+                       f'{m.group(1)}/{m.group(2)}（约还需 {left} 周，每周 --backfill '
+                       f'consensus 攒一份后自动激活）</span>')
+        elif any(isinstance(sn.get("revision_w"), (int, float))
+                 and not _nan(sn.get("revision_w")) for sn in snapshots.values()):
+            a5_html = (f'<span class="xb-sub muted">已激活 · 当前无下修告警'
+                       f'（阈值 4周加权 &lt; -{_A5_DROP_PCT:.0f}% 且覆盖 ≥ '
+                       f'{_A5_MIN_COV:.0%}；下调信息量大于上调，只看下修侧）</span>')
+        else:
+            a5_html = ('<span class="xb-sub muted">无修正动量数据'
+                       '（需 --backfill consensus 周度快照）</span>')
+
+    # --- 交叉行（窗口门控）：条目 / 窗口内无命中 / 窗口已关闭 ---
+    if win["open"]:
+        x_head = (f'偏离 × 预告广度交叉（{win["label"]} · {win["window_note"]}）')
+        if items["risk"] or items["opp"]:
+            rk = ("".join(_x_entry(s, sn, "risk") for s, sn in items["risk"])
+                  or '<span class="xb-sub muted">无</span>')
+            op = ("".join(_x_entry(s, sn, "opp") for s, sn in items["opp"])
+                  or '<span class="xb-sub muted">无</span>')
+            x_html = (f'<div style="margin:2px 0"><span class="xb-sub">🟠 超买×预亏：'
+                      f'</span>{rk}</div>'
+                      f'<div style="margin:2px 0"><span class="xb-sub">🟢 超卖×预喜：'
+                      f'</span>{op}</div>')
+        else:
+            x_html = ('<span class="xb-sub muted">本窗口暂无交叉命中'
+                      '（超买分位≥95%×空广度≥5% / 超卖分位≤5%×预喜label 均无）</span>')
+    else:
+        x_head = '偏离 × 预告广度交叉'
+        # 上窗口摘要（台账最新关闭窗）：🟢/🟠 命中只数 + top3 天数——占位行也承载信息
+        prev_s = ""
+        prevs = [w for w in ((history or {}).get("windows") or [])
+                 if w.get("state") == "closed" and w.get("hits")]
+        if prevs:
+            w0 = prevs[0]
+            opp_n = sum(1 for s in w0["hits"].values() if s.get("opp"))
+            rk_n = sum(1 for s in w0["hits"].values() if s.get("risk"))
+            tops = sorted(((sym, sp) for sym, s in w0["hits"].items()
+                           for sp in (s.get("opp") or [])), key=lambda t: -t[1]["n"])[:3]
+            tops_s = ("·" + "·".join(
+                f"{meta.get(sym, {}).get('name', sym)}{sp['n']}天" for sym, sp in tops)
+                      if tops else "")
+            prev_s = (f' · 上窗口({w0["label"]})命中：🟢{opp_n}只{tops_s} · 🟠{rk_n}只')
+        x_html = (f'<span class="xb-sub muted">{win["label"]}窗口已关闭'
+                  f'（{win["window_note"]}）{prev_s} · 下窗口：{win["next_label"]} '
+                  f'{win["next_open"]} 开窗 —— 窗口外不出条目'
+                  '（预告数据季度一跳·非披露季钉顶部=壁纸化）</span>')
+
+    return (
+        '<div class="extreme-banner">'
+        '<div class="extreme-title">📈 业绩预期提醒 · A5 一致预期下修 + 偏离度 × 预告广度交叉 '
+        '<span class="xb-note">事件进横幅·状态留表格（预期g水平值不进） · 观察 · 非买卖建议 · '
+        '信息层不喂引擎</span></div>'
+        f'<div class="xb-list"><b>A5 一致预期下修</b>（E4 修正动量·4周快照差分）：{a5_html}</div>'
+        f'<div class="xb-list"><b>{x_head}</b>：{x_html}</div>'
+        + _earn_ledger_html(history, meta)
+        + '</div>'
     )
 
 
@@ -1350,12 +1545,15 @@ window.addEventListener('load', _openTarget);
 
 def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
            signal_note: str = "", ma_period: int = 60, pool_summary: str = "",
-           pinned: list[str] | None = None, flow: dict | None = None) -> str:
+           pinned: list[str] | None = None, flow: dict | None = None,
+           earn_history: dict | None = None) -> str:
     """Build the full HTML. series_map[symbol] = {close, shares, nav}。
 
     flow: research/flow.py 的 payload（{window, state, group_roll, rolls, aum, aum_series,
     groups, excluded, as_of}），由 scripts/research_report.py 组装；None/数据不足 →
-    section 整体省略（优雅降级）。"""
+    section 整体省略（优雅降级）。
+    earn_history: 业绩预期提醒的窗口回放台账（scripts build_earn_history 组装），
+    None/空 → 横幅不带台账（优雅降级）。"""
     # data_sufficient ETFs 参与排名；不足者（NAV 历史不够算偏离度）保留明细图、不进排名。
     ranked = {s: sn for s, sn in snapshots.items() if sn.get("data_sufficient", True)}
     excluded = {s: sn for s, sn in snapshots.items() if not sn.get("data_sufficient", True)}
@@ -1366,7 +1564,6 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     # 懒渲染：图数据 to_json 嵌入 CHARTS dict，页内只放占位 div；IntersectionObserver
     # 滚入视口才 Plotly.newPlot、离开 purge 释放——把同时在画的图从 66 张压到 ~3-5 张。
     # 明细改折叠面板（details 默认收起、置顶展开）：收起=零渲染，展开即触发 IO 渲染。
-    import re
     from plotly.offline import get_plotlyjs
     charts_json: dict[str, list[str]] = {}
     chart_blocks = []
@@ -1444,6 +1641,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
 
     extreme_banner_html = _extreme_banner(snapshots, meta)
     quadrant_banner_html = _quadrant_banner(snapshots, meta)
+    earnings_alert_html = _earnings_alert_banner(snapshots, meta, as_of, history=earn_history)
     flow_guide = ("" if not flow_html else
                   "④ <b>板块资金流向（份额视角）</b>：ETF份额=净申赎（配置盘的脚印，比主力资金流干净——"
                   "真实现金进出·非逐笔推断）；份额流入≠看好（A股常有越跌越买的逆势申购，须与偏离度交叉看）；"
@@ -1459,7 +1657,12 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                   "摘录口径·研报数≥3·财年滚动对齐·<b>水平值非变化量</b>——4周修正另示于同行：自建周度快照"
                   "差分·同财年对齐防年末翻滚·冷启动4周显示「累积中」；覆盖权重门"
                   "40%）。两行互补：预告=已披露的区间事实，预期=分析师前瞻（日更·软信息·系统性乐观需"
-                  "横向比较）。观察坐标·不喂引擎。<br>")
+                  "横向比较）。观察坐标·不喂引擎。<br>"
+                  "④' <b>📈 业绩预期提醒横幅</b>（提醒区只收事件不收状态）：A5=一致预期4周加权下修"
+                  "&lt;-3%且覆盖≥40%（变化量才有信息·Womack 1996 下调>上调）；交叉=偏离极端分位×预告"
+                  "广度（🟠超买×空≥5% 价格跑前面成分已有预亏 / 🟢超卖×预喜label 深跌基本面预喜），"
+                  "只在披露窗口内出条目（开窗~截止+14天·非披露季只报下窗口时点——预告季度一跳防壁纸化）。"
+                  "预期g水平值是状态（横截面排序才有意义·排序键已覆盖）→ 不进横幅。<br>")
 
     return f"""<html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1476,6 +1679,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
 {summary_html}
 {extreme_banner_html}
 {quadrant_banner_html}
+{earnings_alert_html}
 {flow_events_html}
 {flow_html}
 <h3>📊 择时跟踪排名 · 三类分页（{n_ranked} 只参与{n_excluded and f"，{n_excluded} 只 NAV 历史不足未参与" or ""}）</h3>

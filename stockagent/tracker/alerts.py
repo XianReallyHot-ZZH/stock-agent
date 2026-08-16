@@ -61,7 +61,7 @@ _D_PHASE_MSG = {
 }
 # 业绩预告 → A1/A2 告警
 _EARN_BEAR = {"业绩承压", "业绩恶化"}
-_A5_DROP_PCT = 3.0  # A5: 一致预期4周加权下修超此%告警(对齐 params research.earnings.revision.alert_drop_pct; 改动两处同步)
+_A5_DROP_PCT = 3.0  # A5: 一致预期4周加权下修超此%告警(对齐 params research.earnings.revision.alert_drop_pct 与 research/report.py _A5_DROP_PCT; 改动三处同步)
 
 
 def evaluate(etf_snapshots: dict, index_diag: dict | None = None) -> list[dict]:
