@@ -210,3 +210,15 @@ stock:
   leading:                    # A 类领先信号参数
     commodity_yoy_window: 252     # 商品价同比窗口（~1 年交易日）
     commodity_recent_window: 60   # 商品价近期窗口（背离判定/M1 用）
+
+# ---- 仓位管理看板 (V6 position · 只读对照 · 第五看板) ----
+# 预案表:估值档 → 权益仓位%区间(用户自定义;看板只对照「现在在哪格」,不发明建议、不喂引擎)。
+# 档位 = 沪深300 同口径 PE+PB 10年滚动分位四档(阈值同 tracker ③ 估值开关 0.20/0.80)。
+# 层级 = 大资产配置层(权益 vs 现金总比例);权益内轮动择时归引擎 RegimeFilter,两层不混。
+position_plan:
+  note: 示例区间·请按自身风险承受力修改
+  zones:                     # 键→档位 low=低位·可激进 / mid=中位·中性 / split=结构分化·宜观望 / high=高位·宜保守
+    low:   {equity_min: 0.70, equity_max: 0.90}
+    mid:   {equity_min: 0.40, equity_max: 0.60}
+    split: {equity_min: 0.40, equity_max: 0.60}
+    high:  {equity_min: 0.10, equity_max: 0.30}

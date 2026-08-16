@@ -1,4 +1,4 @@
-"""四看板总入口壳页 (iframe 导航 · 只读 · 无数据依赖)。
+"""五看板总入口壳页 (iframe 导航 · 只读 · 无数据依赖)。
 
 data/index.html: 左侧导航 + 右侧 iframe 装载四个现有看板 HTML, 切换不重载(保留滚动/状态)。
 四个看板生成器零改动——壳只负责导航/记忆上次选择/as_of(mtime) 标注; 缺哪个看板就提示生成命令。
@@ -11,14 +11,16 @@ from pathlib import Path
 
 # (key, 文件名, 图标, 名称, 一行描述, 生成命令)
 DASHBOARDS = [
-    ("research", "research_report.html", "📊", "行业研究",
-     "净值偏离度 + 份额净值剪刀差", "python scripts/research_report.py"),
-    ("index_timing", "index_timing.html", "📈", "指数择时",
-     "估值开关·趋势·相对周期·地量·恐贪", "python scripts/index_timing_report.py"),
-    ("stock", "stock_diagnose.html", "🔍", "个股诊断",
-     "三类分类·归因·戴维斯·避坑·埋伏", "python scripts/stock_report.py"),
     ("macro", "macro_framework.html", "🌍", "宏观框架",
      "因果链·黄金定位器·微观紧缺·日历", "python scripts/macro_framework_report.py"),
+    ("index_timing", "index_timing.html", "📈", "指数择时",
+     "估值开关·趋势·相对周期·地量·恐贪", "python scripts/index_timing_report.py"),
+    ("research", "research_report.html", "📊", "行业研究",
+     "净值偏离度 + 份额净值剪刀差", "python scripts/research_report.py"),
+    ("stock", "stock_diagnose.html", "🔍", "个股诊断",
+     "三类分类·归因·戴维斯·避坑·埋伏", "python scripts/stock_report.py"),
+    ("position", "position.html", "⚖️", "仓位管理",
+     "估值档·预案对照·档位统计", "python scripts/position_report.py"),
 ]
 
 
@@ -44,7 +46,7 @@ _TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>stock-agent · 四看板总入口</title>
+<title>stock-agent · 五看板总入口</title>
 <style>
 :root { --bg:#f7f7f5; --side:#ffffff; --text:#1a1a19; --muted:#6b7280; --line:#e5e7eb;
         --accent:#ea580c; --ok:#16a34a; --warn:#d97706; }
@@ -86,7 +88,7 @@ iframe { width:100%; height:100%; border:none; display:none; background:#fff }
 </head>
 <body>
 <aside>
-  <div class="brand">📈 stock-agent<span class="sub">四看板总入口 · __GEN_AT__</span></div>
+  <div class="brand">📈 stock-agent<span class="sub">五看板总入口 · __GEN_AT__</span></div>
   <nav id="nav"></nav>
   <div class="foot">
     <button id="theme" class="tb">🌙 深色</button>
