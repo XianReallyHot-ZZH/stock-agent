@@ -84,6 +84,12 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     cons_cfg = (rp.get("earnings") or {}).get("consensus") or {}
     cons_min_reports = int(cons_cfg.get("min_reports", 3))
     csnap_date, csnap = store.get_consensus_snapshot()
+    # 三环时效链 (E3): 最新披露窗口期的 预告→快报→正式报 全市场帧取一次
+    chain_period = ern.latest_report_period(datetime.now())
+    chain_fc = store.get_stock_forecast_period(chain_period)
+    chain_ex = store.get_stock_express_period(chain_period)
+    chain_ac = store.get_stock_report_period(chain_period)
+    have_chain = bool(len(chain_fc) or len(chain_ex) or len(chain_ac))
     snapshots: dict[str, dict] = {}
     series_map: dict[str, dict] = {}
     for sym in symbols:
@@ -126,21 +132,27 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
 
         # 一致预期 (E2, informational): 成分官方权重 × 快照 → 加权预期增速 g。
         # 与预告层互补: 预告=已披露区间事实(偏极端样本·广度), 预期=分析师前瞻(覆盖权重~82%)。
-        if len(csnap) and m.get("index_code"):
-            cons = store.get_constituents(str(m["index_code"]))
-            if len(cons):
-                sig = ern.aggregate_consensus(cons, csnap, min_reports=cons_min_reports)
-                cscore, clabel = ern.consensus_score(sig, cfg.params)
-                snap["consensus_label"] = clabel
-                snap["consensus_score"] = cscore
-                snap["consensus_g"] = sig["weighted_g"]
-                snap["consensus_g_median"] = sig["median_g"]
-                snap["consensus_cov"] = sig["coverage"]
-                snap["consensus_n"] = sig["n_names"]
-                snap["consensus_buy"] = sig["buy_ratio"]
-                snap["consensus_fy"] = (f"{sig['fy1_year']}→{sig['fy2_year']}"
-                                        if sig.get("fy1_year") else "")
-                snap["consensus_snap"] = csnap_date
+        cons = (store.get_constituents(str(m["index_code"]))
+                if m.get("index_code") else None)
+        if len(csnap) and cons is not None and len(cons):
+            sig = ern.aggregate_consensus(cons, csnap, min_reports=cons_min_reports)
+            cscore, clabel = ern.consensus_score(sig, cfg.params)
+            snap["consensus_label"] = clabel
+            snap["consensus_score"] = cscore
+            snap["consensus_g"] = sig["weighted_g"]
+            snap["consensus_g_median"] = sig["median_g"]
+            snap["consensus_cov"] = sig["coverage"]
+            snap["consensus_n"] = sig["n_names"]
+            snap["consensus_buy"] = sig["buy_ratio"]
+            snap["consensus_fy"] = (f"{sig['fy1_year']}→{sig['fy2_year']}"
+                                    if sig.get("fy1_year") else "")
+            snap["consensus_snap"] = csnap_date
+
+        # 三环时效链 (E3, informational): 预告→快报→正式报 披露进行到哪(时钟, 温度计非开关)
+        if have_chain and cons is not None and len(cons):
+            snap["chain"] = ern.earnings_chain(cons, chain_fc, chain_ex, chain_ac,
+                                               asof=datetime.now())
+            snap["chain_period"] = chain_period
 
         snapshots[sym] = snap
         series_map[sym] = {"shares": shares_df, "nav": nav_df}
@@ -216,8 +228,8 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
 def main():
     ap = argparse.ArgumentParser(description="ETF 行业研究 · 择时跟踪看板 (read-only)")
     ap.add_argument("--backfill",
-                    choices=("nav", "pe", "scale", "earnings", "consensus", "all"), default=None,
-                    help="run historical backfill instead of rendering")
+                    choices=("nav", "pe", "scale", "earnings", "consensus", "chain", "all"),
+                    default=None, help="run historical backfill instead of rendering")
     ap.add_argument("--period", default=None,
                     help="earnings backfill report period YYYYMMDD (default: latest complete FY)")
     ap.add_argument("--start", default="2021-01-01")
@@ -247,6 +259,12 @@ def main():
             n = dm.update_consensus()
             print(f"  consensus snapshot: {n} stocks")
             if args.backfill == "consensus":
+                return
+        if args.backfill in ("chain", "all"):
+            r1 = dm.update_stock_express()
+            r2 = dm.update_stock_report_actual()
+            print(f"  chain backfill: express {r1} / report {r2}")
+            if args.backfill == "chain":
                 return
         if args.backfill in ("earnings", "all"):
             n = dm.update_etf_earnings(report_period=args.period)

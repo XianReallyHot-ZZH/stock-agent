@@ -638,7 +638,47 @@ def fetch_earnings_forecast(report_period: str, timeout: float = 60.0) -> pd.Dat
     df["type"] = df["预告类型"].astype(str)
     df["_ann"] = pd.to_datetime(df["公告日期"], errors="coerce")
     df = df.sort_values("_ann").drop_duplicates("code", keep="last")  # latest announcement per code
-    return df.set_index("code")[["yoy", "type"]]
+    # announce_date 保留(E3 三环时效链需要); aggregate_earnings 只取 yoy/type, 多列无害
+    df["announce_date"] = df["_ann"].dt.strftime("%Y-%m-%d")
+    return df.set_index("code")[["yoy", "type", "announce_date"]]
+
+
+def fetch_stock_express(report_period: str, timeout: float = 60.0) -> pd.DataFrame:
+    """All A-share 业绩快报 for a report period (YYYYMMDD) → df indexed by code.
+
+    Columns [np_yoy, rev_yoy, announce_date] — 净利润-同比增长 / 营业收入-同比增长 / 公告日期
+    (列名 2026-08-16 实测 16 列). 三环链第二环: 快报=未审计近似值, 深市年报惯例 2 月底前
+    (自愿为主, 中期稀疏——期行数少是常态不是端点问题). 脏行(现值 NaN)落 None, 聚合按 notna 过滤.
+    """
+    df = _run_with_timeout(ak.stock_yjkb_em, timeout, date=report_period)
+    if df is None or len(df) == 0:
+        raise FetchError(f"empty stock_express {report_period}")
+    out = pd.DataFrame({
+        "code": df["股票代码"].astype(str).str.zfill(6),
+        "np_yoy": pd.to_numeric(df.get("净利润-同比增长"), errors="coerce"),
+        "rev_yoy": pd.to_numeric(df.get("营业收入-同比增长"), errors="coerce"),
+        "announce_date": df.get("公告日期", "").astype(str).str.slice(0, 10),
+    })
+    return out.drop_duplicates("code", keep="last").set_index("code")
+
+
+def fetch_stock_report_actual(report_period: str, timeout: float = 60.0) -> pd.DataFrame:
+    """All A-share 定期报告实际值(业绩报表) for a report period → df indexed by code.
+
+    Columns [np_yoy, rev_yoy, announce_date] — 净利润-同比增长 / 营业总收入-同比增长 /
+    最新公告日期(列名 2026-08-16 实测; 营收口径与快报不同: 总收入 vs 营业收入, 同比比较不受影响).
+    三环链第三环: 正式报=审计后硬数据, 披露窗口滞后 45 天-4 个月. 累计口径(勿做单季拆分, 调研§3.4).
+    """
+    df = _run_with_timeout(ak.stock_yjbb_em, timeout, date=report_period)
+    if df is None or len(df) == 0:
+        raise FetchError(f"empty stock_report_actual {report_period}")
+    out = pd.DataFrame({
+        "code": df["股票代码"].astype(str).str.zfill(6),
+        "np_yoy": pd.to_numeric(df.get("净利润-同比增长"), errors="coerce"),
+        "rev_yoy": pd.to_numeric(df.get("营业总收入-同比增长"), errors="coerce"),
+        "announce_date": df.get("最新公告日期", "").astype(str).str.slice(0, 10),
+    })
+    return out.drop_duplicates("code", keep="last").set_index("code")
 
 
 # ---- Analyst-consensus weekly snapshot (E0, docs/RESEARCH-ETF行业业绩预期.md §7.3) ----

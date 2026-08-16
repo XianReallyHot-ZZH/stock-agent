@@ -374,6 +374,13 @@ class DataManager:
             log.warning("earnings_forecast %s too thin (%d rows <%d); skipping (try --period)",
                         period, len(forecast), floor)
             return 0
+        # 全市场预告面板顺手落库(E3 三环链第一环的成分级底座; stock 层 getter 按观察池 symbol
+        # 查询不受影响——多存的非观察池行只是安静躺着, 成分股约1500名字的链聚合才有历史可查)
+        fc = (forecast if forecast.index.name else forecast.rename_axis("code")).reset_index()
+        if "announce_date" in fc.columns:
+            self.store.upsert_stock_forecast(
+                list(zip(fc["code"], [period] * len(fc), fc["yoy"], fc["type"], fc["announce_date"])),
+                source="em_yjyg")
 
         rows = []
         meta = self.config.symbol_meta()
@@ -409,6 +416,44 @@ class DataManager:
         self.store.set_meta("last_earnings_update", period)
         log.info("earnings update %s: %d ETFs", period, n)
         return n
+
+    # ---- 业绩三环链 (E3): 快报 + 正式报 全市场入库 ----
+    def _update_perf_panel(self, fetch_fn, table_tag: str, periods: Optional[list[str]],
+                           floor: int, results_tag: str) -> dict:
+        """共用: 逐期全市场拉取→入库(幂等)。期行数 < floor 跳过不写库(快报中期稀疏属常态,
+        但 <10/500 视为端点半死)。Returns {period: rows_written}."""
+        periods = periods or _recent_report_periods(8)
+        results: dict[str, int] = {p: 0 for p in periods}
+        for i, period in enumerate(periods):
+            if i:
+                time.sleep(0.5)
+            try:
+                df = fetch_fn(period)
+            except Exception as e:  # noqa: BLE001
+                log.warning("%s %s failed: %s", results_tag, period, str(e)[:100])
+                continue
+            if len(df) < floor:
+                log.info("%s %s: %d rows < %d (稀疏期常态, skip write)", results_tag, period, len(df), floor)
+                continue
+            d = (df if df.index.name else df.rename_axis("code")).reset_index()
+            rows = list(zip(d["code"], [period] * len(d), d.get("announce_date"),
+                            d.get("np_yoy"), d.get("rev_yoy")))
+            results[period] = (self.store.upsert_stock_express(rows, source="em_yjkb")
+                               if table_tag == "express"
+                               else self.store.upsert_stock_report_actual(rows, source="em_yjbb"))
+            log.info("%s %s: %d rows", results_tag, period, results[period])
+        if any(results.values()):
+            self.store.set_meta(f"last_{table_tag}_update", fetcher.today_str())
+        return results
+
+    def update_stock_express(self, periods: Optional[list[str]] = None) -> dict:
+        """业绩快报(stock_yjkb_em)全市场 → stock_express。快报集中年报期(深市2月底惯例),
+        中期稀疏。Returns {period: rows}。"""
+        return self._update_perf_panel(fetcher.fetch_stock_express, "express", periods, 10, "stock_express")
+
+    def update_stock_report_actual(self, periods: Optional[list[str]] = None) -> dict:
+        """定期报告实际值(stock_yjbb_em)全市场 → stock_report_actual。季度全量(数千行)。"""
+        return self._update_perf_panel(fetcher.fetch_stock_report_actual, "report", periods, 500, "stock_report")
 
     def update_consensus(self, min_rows: int = 1000) -> int:
         """Whole-market analyst-consensus weekly snapshot (E0, 周度节奏).

@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import shutil
 import subprocess
 import sys
@@ -109,11 +110,14 @@ def main():
         _stage(4, "行业 PE (cninfo，周度·限流)", f"({pe_start}..{end}, ~30min)")
         dm.backfill_industry_pe(pe_start, end, step_days=7, sleep=8)
 
-    # stage 4.5: 业绩预期底座 (E0/E1 — 成分+一致预期快照 + 重算 etf_earnings, ~2min)
-    _stage(4.5, "指数成分 + 一致预期快照 + 业绩预期重算 (E0/E1)", "(~2min)")
+    # stage 4.5: 业绩预期底座 (E0/E1/E3 — 成分+一致预期快照+三环链 + 重算 etf_earnings, ~4min)
+    _stage(4.5, "指数成分 + 一致预期快照 + 业绩三环链 + 业绩预期重算 (E0/E1/E3)", "(~4min)")
     dm.update_constituents()
     dm.update_consensus()
+    dm.update_stock_express()
+    dm.update_stock_report_actual()
     dm.update_etf_earnings()
+    store.set_meta("last_chain_update", _dt.datetime.now().strftime("%Y%m%d"))
 
     # stage 5: render
     _stage(5, "生成看板")

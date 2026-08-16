@@ -122,6 +122,24 @@ CREATE TABLE IF NOT EXISTS index_constituents (
     PRIMARY KEY (index_code, code)
 );
 CREATE INDEX IF NOT EXISTS idx_constituents_idx ON index_constituents(index_code);
+CREATE TABLE IF NOT EXISTS stock_express (
+    symbol        TEXT NOT NULL,   -- 业绩快报(三环第二环, E3): 未审计近似值·深市年报惯例2月底
+    report_period TEXT NOT NULL,
+    announce_date TEXT,
+    np_yoy        REAL,            -- 净利润同比%
+    rev_yoy       REAL,            -- 营业收入同比%
+    source        TEXT,
+    PRIMARY KEY (symbol, report_period)
+);
+CREATE TABLE IF NOT EXISTS stock_report_actual (
+    symbol        TEXT NOT NULL,   -- 定期报告实际值(三环第三环, E3): 审计后·披露滞后45天-4个月
+    report_period TEXT NOT NULL,
+    announce_date TEXT,
+    np_yoy        REAL,
+    rev_yoy       REAL,
+    source        TEXT,
+    PRIMARY KEY (symbol, report_period)
+);
 CREATE TABLE IF NOT EXISTS index_daily (
     symbol TEXT NOT NULL,
     date   TEXT NOT NULL,
@@ -799,6 +817,61 @@ class Store:
                 "SELECT MAX(snapshot_date) FROM index_constituents WHERE index_code=?",
                 (index_code,)).fetchone()
         return row[0] if row and row[0] else None
+
+    # ---- 业绩三环链 (E3, docs/EXECUTION_PLAN-ETF业绩预期.md §5) ----
+    def _upsert_perf_table(self, table: str, rows: list, source: str = "") -> int:
+        """rows: (symbol, report_period, announce_date, np_yoy, rev_yoy). 幂等 (symbol, report_period)."""
+        if not rows:
+            return 0
+
+        def _s(x):
+            if x is None or x == "" or (isinstance(x, float) and pd.isna(x)):
+                return None
+            return str(x)[:10]
+
+        payload = [(str(s), str(rp), _s(a), _num(n), _num(r), source)
+                   for (s, rp, a, n, r) in rows]
+        with self._conn() as c:
+            c.executemany(
+                f"INSERT INTO {table}(symbol,report_period,announce_date,np_yoy,rev_yoy,source) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(symbol,report_period) DO UPDATE SET "
+                "announce_date=excluded.announce_date,np_yoy=excluded.np_yoy,"
+                "rev_yoy=excluded.rev_yoy,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def upsert_stock_express(self, rows: list, source: str = "") -> int:
+        return self._upsert_perf_table("stock_express", rows, source)
+
+    def upsert_stock_report_actual(self, rows: list, source: str = "") -> int:
+        return self._upsert_perf_table("stock_report_actual", rows, source)
+
+    def _get_perf_period(self, table: str, report_period: str) -> pd.DataFrame:
+        """一期全市场帧, indexed by code [np_yoy, rev_yoy, announce_date]（链聚合的输入契约）."""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                f"SELECT symbol,np_yoy,rev_yoy,announce_date FROM {table} "
+                "WHERE report_period=?", c, params=(report_period,))
+        if len(df) == 0:
+            return pd.DataFrame(columns=["np_yoy", "rev_yoy", "announce_date"])
+        return df.rename(columns={"symbol": "code"}).set_index("code")
+
+    def get_stock_express_period(self, report_period: str) -> pd.DataFrame:
+        return self._get_perf_period("stock_express", report_period)
+
+    def get_stock_report_period(self, report_period: str) -> pd.DataFrame:
+        return self._get_perf_period("stock_report_actual", report_period)
+
+    def get_stock_forecast_period(self, report_period: str) -> pd.DataFrame:
+        """一期全市场业绩预告帧, indexed by code [yoy, type, announce_date]（链聚合输入契约）."""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT symbol,yoy,type,announce_date FROM stock_forecast "
+                "WHERE report_period=?", c, params=(report_period,))
+        if len(df) == 0:
+            return pd.DataFrame(columns=["yoy", "type", "announce_date"])
+        return df.rename(columns={"symbol": "code"}).set_index("code")
 
     # ---- broad-index daily / valuation (V4 tracker) ----
     def upsert_index_daily(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:

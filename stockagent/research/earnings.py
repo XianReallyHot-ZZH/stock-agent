@@ -272,3 +272,94 @@ def consensus_score(signal: Optional[dict], params: dict) -> tuple[float, str]:
     med = 0.0 if (med is None or pd.isna(med)) else float(med)
     score = max(0.0, min(100.0, 50.0 + med * 100.0 * 0.4))
     return (score, _clabel(score))
+
+
+# ---------------- 三环时效链 (E3, docs/EXECUTION_PLAN-ETF业绩预期.md §5) ----------------
+# 同一报告期的三次逐步精化: 预告(区间·事前) → 快报(未审计近似) → 正式报(审计·滞后45天-4个月)。
+# 时效与确定性互为代价(调研§1.2); 环可重叠(一个名字可能三环全有)。
+
+_RING_NAMES = ("forecast", "express", "actual")
+_RING_CN = {"forecast": "预告", "express": "快报", "actual": "正式报"}
+
+
+def _empty_chain() -> dict:
+    return {"rings": {}, "n": {}, "latest": {}, "days": {},
+            "bull_ratio": float("nan"), "bear_ratio": float("nan"),
+            "express_check": {"conservative": float("nan"), "hit": float("nan"),
+                              "optimistic": float("nan")}}
+
+
+def earnings_chain(constituents: Optional[pd.DataFrame],
+                   forecast: Optional[pd.DataFrame],
+                   express: Optional[pd.DataFrame],
+                   actual: Optional[pd.DataFrame],
+                   asof=None) -> dict:
+    """三环时效链聚合（pure, no I/O）— ETF 成分权重口径.
+
+    Data contracts: constituents DataFrame[code(str), weight]; forecast indexed by code
+    [yoy, type, announce_date]; express/actual indexed by code [np_yoy, rev_yoy, announce_date]
+    (store.get_stock_forecast_period / get_stock_express_period / get_stock_report_period).
+    Returns:
+      rings  {forecast, express, actual} 各环覆盖权重(占成分总权重; 可重叠)
+      n      各环命中成分数
+      latest 各环最新公告日('YYYY-MM-DD' 或 None) — 披露进行到哪的时钟
+      days   距 asof(datetime) 天数; asof=None → None
+      bull_ratio/bear_ratio 预告类型广度(环内权重口径, 复用 BULL/BEAR)
+      express_check {conservative, hit, optimistic} 快报 np_yoy vs 预告 yoy 的落点
+             (±10pp 带宽; 仅统计两环皆有值的名字的权重占比; 无样本 → NaN)
+    """
+    if constituents is None or not len(constituents):
+        return _empty_chain()
+    h = constituents[["code", "weight"]].copy()
+    h["code"] = h["code"].astype(str).str.zfill(6)
+    h["weight"] = pd.to_numeric(h["weight"], errors="coerce").fillna(0.0)
+    total_w = float(h["weight"].sum())
+    if total_w <= 0:
+        return _empty_chain()
+
+    out = _empty_chain()
+    merged = {}
+    for ring, df in zip(_RING_NAMES, (forecast, express, actual)):
+        if df is None or not len(df):
+            out["rings"][ring], out["n"][ring] = 0.0, 0
+            out["latest"][ring], out["days"][ring] = None, None
+            continue
+        if not df.index.name:
+            df = df.rename_axis("code")                    # 无名 index 归一(merge 契约)
+        m = h.merge(df.reset_index(), on="code", how="inner")
+        merged[ring] = m
+        out["rings"][ring] = float(m["weight"].sum() / total_w)
+        out["n"][ring] = int(len(m))
+        dates = pd.to_datetime(m.get("announce_date"), errors="coerce").dropna()
+        if len(dates):
+            latest = dates.max()
+            out["latest"][ring] = latest.strftime("%Y-%m-%d")
+            out["days"][ring] = ((pd.Timestamp(asof) - latest).days
+                                 if asof is not None else None)
+        else:
+            out["latest"][ring], out["days"][ring] = None, None
+
+    # 预告广度: 环内 BULL/BEAR 类型权重占比(强制门槛使样本偏极端 → 只看广度, 调研§3.1)
+    fc = merged.get("forecast")
+    if fc is not None and len(fc):
+        w = float(fc["weight"].sum())
+        if w > 0:
+            out["bull_ratio"] = float(fc.loc[fc["type"].isin(BULL), "weight"].sum() / w)
+            out["bear_ratio"] = float(fc.loc[fc["type"].isin(BEAR), "weight"].sum() / w)
+
+    # 快报落点 vs 预告(±10pp): 实际好于预告=预告保守 / 命中 / 差于预告=预告激进(落空)
+    ex, pairs = merged.get("express"), None
+    if fc is not None and len(fc) and ex is not None and len(ex):
+        pairs = fc[["code", "weight", "yoy"]].merge(
+            ex[["code", "np_yoy"]], on="code", how="inner")
+        pairs = pairs[pairs["yoy"].notna() & pairs["np_yoy"].notna()]
+    if pairs is not None and len(pairs):
+        w = float(pairs["weight"].sum())
+        if w > 0:
+            d = pairs["np_yoy"] - pairs["yoy"]
+            out["express_check"] = {
+                "conservative": float(pairs.loc[d > 10, "weight"].sum() / w),
+                "hit": float(pairs.loc[d.abs() <= 10, "weight"].sum() / w),
+                "optimistic": float(pairs.loc[d < -10, "weight"].sum() / w),
+            }
+    return out

@@ -812,6 +812,45 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
     return out
 
 
+_RING_CN = {"forecast": "预告", "express": "快报", "actual": "正式报"}
+
+
+def _chain_block(snap: dict) -> str:
+    """业绩预期链状态条 (E3): 预告→快报→正式报 各环覆盖权重+最新披露日+时效
+    + 预告广度 + 快报落点。纯 HTML(无图), 明细面板 summary 之后。空链 → ''。"""
+    ch = snap.get("chain") or {}
+    rings = ch.get("rings") or {}
+    if not rings:
+        return ""
+    plabel = ern.period_label(snap.get("chain_period"))
+
+    def _cell(ring: str) -> str:
+        w = rings.get(ring, 0.0)
+        cn = _RING_CN[ring]
+        if not w:
+            return (f"<div class='chain-cell ghost'><b>{cn} —</b>"
+                    f"<br><span class='sub2'>未披露</span></div>")
+        n = (ch.get("n") or {}).get(ring, 0)
+        d = (ch.get("days") or {}).get(ring)
+        fresh = "" if (d is None or d > 45) else " fresh-ring"
+        d_s = f"{d}天前" if d is not None else ""
+        return (f"<div class='chain-cell{fresh}'><b>{cn} {w:.0%}</b>"
+                f"<br><span class='sub2'>{n}家 · {d_s}</span></div>")
+
+    bull, bear = ch.get("bull_ratio"), ch.get("bear_ratio")
+    bb = (f"多{bull:.0%}/空{bear:.0%}" if isinstance(bull, (int, float)) and not _nan(bull) else "—")
+    ec = ch.get("express_check") or {}
+    def _pct(x):
+        return f"{x:.0%}" if isinstance(x, (int, float)) and not _nan(x) else "—"
+    ec_s = (f"落点 保守{_pct(ec.get('conservative'))}/命中{_pct(ec.get('hit'))}"
+            f"/落空{_pct(ec.get('optimistic'))}")
+    return (f"<div class='chain-strip'><span class='chain-title'>⛓ 业绩预期链 · {plabel}</span>"
+            f"<div class='chain-cells'>{_cell('forecast')}{_cell('express')}{_cell('actual')}"
+            f"<div class='chain-cell'><b>广度</b><br><span class='sub2'>{bb}</span></div>"
+            f"<div class='chain-cell'><b>快报vs预告</b><br><span class='sub2'>{ec_s}</span></div>"
+            f"</div></div>")
+
+
 def _detail_chips(snap: dict) -> str:
     """折叠面板 summary 上的摘要 chips：类型 / 偏离+分位+极端区 / 剪刀差 / 业绩 / 规模。
     收起状态即可横向扫全池，不用展开。"""
@@ -1024,6 +1063,16 @@ table.sortable th[data-key].desc::after { content:" ▼"; }
 .chip-up { color:#16a34a; } body.dark .chip-up { color:#4ade80; }
 .chip-dn { color:#dc2626; } body.dark .chip-dn { color:#f87171; }
 .chip-seq { font-size:10px; color:var(--faint); font-variant-numeric:tabular-nums; white-space:normal; }
+/* 业绩预期链 (E3 明细块) */
+.chain-strip { margin: 10px 14px 4px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg2, rgba(127,127,127,.06)); }
+.chain-title { font-size: 12px; color: var(--text2); font-weight: 600; }
+.chain-cells { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.chain-cell { flex: 1 1 90px; min-width: 90px; text-align: center; padding: 6px 4px;
+  border-radius: 6px; background: rgba(127,127,127,.08); }
+.chain-cell b { font-size: 13px; }
+.chain-cell.fresh-ring { outline: 1px solid #65a30d55; }
+body.dark .chain-cell.fresh-ring { outline-color: #a3e63555; }
 /* 全池格局 / 读图说明 */
 .summary-box { background:var(--sumbg); border-left:4px solid var(--sumline); padding:12px 16px;
                border-radius:6px; font-size:14px; line-height:1.7; color:var(--sumtext); margin:14px 0; }
@@ -1323,6 +1372,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                  f'<summary><span class="etf-title">{star}{nm}</span>'
                  f'<span class="etf-code">{sym}</span>'
                  f'<span class="etf-chips">{_detail_chips(snap)}</span></summary>')
+        block += _chain_block(snap)
         for i, fig in enumerate(figs):
             h = int(fig.layout.height or 460)   # 占位高度匹配图高，避免渲染后跳屏/留白
             block += (f'<div class="chart-block">'

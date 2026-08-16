@@ -199,6 +199,16 @@ def main():
         print(f"  一致预期周度快照(当前 {cs_last or '无'})...")
         dm.update_consensus()
 
+    # 5.6) 业绩三环链 (E3): 快报+正式报 全市场入库, 周度节奏(披露季 Jul/Apr/Oct/Jan-Feb 更新鲜)
+    chain_last = store.get_meta("last_chain_update")
+    chain_stale = chain_last is None or (
+        (datetime.now() - datetime.strptime(chain_last, "%Y%m%d")).days > 7)
+    if chain_stale:
+        print(f"  业绩三环链刷新·快报+正式报(当前 {chain_last or '无'})...")
+        dm.update_stock_express()
+        dm.update_stock_report_actual()
+        store.set_meta("last_chain_update", datetime.now().strftime("%Y%m%d"))
+
     # 6) earnings expectation: refresh if missing, a newer complete report period exists,
     #    or every row is a silent zero (coverage=0 — the 2026-08 dead-endpoint signature).
     #    Quarterly/annual cadence — usually a no-op except around report seasons.

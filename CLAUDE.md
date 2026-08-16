@@ -29,6 +29,7 @@ python scripts/setup_research_dashboard.py --skip-pe  # 一键：依赖+.env+价
 python scripts/dashboard_data_check.py         # 查数据新鲜度（每只ETF的份额/净值是否到最新交易日；PE 行可忽略）
 python scripts/dashboard_data_check.py --fix   # 自动补齐缺口到最新交易日（价格/份额/净值；PE 不必补）
 python scripts/research_report.py --backfill consensus  # 一致预期周度快照（E0·全市场~2300只落 stock_consensus；修正动量 E4 的历史积累，冷启动4周；详见 docs/EXECUTION_PLAN-ETF业绩预期.md）
+python scripts/research_report.py --backfill chain      # 业绩三环链回填（E3·快报+正式报 8期全市场；预告面板随 --backfill earnings 落库；--fix 已周度自动带）
 python scripts/backfill_constituents.py       # 指数成分+官方权重刷新（E1·中证官网月度快照→index_constituents；etf_pool.yaml 的 index_code/index_expect 码表+名称哨兵；月度节奏）
 python scripts/research_report.py              # 生成 ETF 择时跟踪看板（偏离度+剪刀差+四象限提醒+板块资金流向，价值/成长/周期 三类 tab；置顶 research.pinned_etfs）
 # --push-alerts / --no-llm 已退役（仅可视化），保留 flag 向后兼容；改置顶 ETF 在 config/params.yaml 的 research.pinned_etfs
