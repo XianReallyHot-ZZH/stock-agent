@@ -156,3 +156,119 @@ def earnings_score(signal: Optional[dict], params: dict) -> tuple[float, str]:
     be = 0.0 if (be is None or pd.isna(be)) else float(be)
     score = max(0.0, min(100.0, 50.0 + med * 0.4 + (br - be) * 30.0))
     return (score, _label(score))
+
+
+# ---------------- 一致预期聚合 (E2, docs/EXECUTION_PLAN-ETF业绩预期.md §4) ----------------
+# 与预告层互补: 预告=已披露的区间事实(样本偏极端, 只看广度), 一致预期=分析师前瞻(日更软信息,
+# 覆盖权重中位数≈82% vs 预告期≈32%, 调研§5)。均为 INFORMATIONAL, 永不喂引擎。
+
+LABEL_C_HIGH = "预期高增"
+LABEL_C_UP = "预期改善"
+LABEL_C_FLAT = "预期平稳"
+LABEL_C_DOWN = "预期承压"
+LABEL_C_CRASH = "预期负增"
+
+_RATE_COLS = ("rating_buy", "rating_over", "rating_neutral", "rating_reduce", "rating_sell")
+
+
+def _empty_consensus(n_all: int) -> dict:
+    return {"weighted_g": float("nan"), "median_g": float("nan"), "coverage": 0.0,
+            "n_names": 0, "n_all": int(n_all), "buy_ratio": float("nan"),
+            "fy1_year": None, "fy2_year": None}
+
+
+def aggregate_consensus(constituents: Optional[pd.DataFrame],
+                        snapshot: Optional[pd.DataFrame],
+                        min_reports: int = 3) -> dict:
+    """Join 指数成分(官方权重) × 一致预期快照 → 聚合信号 dict (pure, no I/O).
+
+    Data shape contract (both from the E0/E1 data layer):
+      constituents : DataFrame[code(str), weight(float)]  — store.get_constituents()
+      snapshot     : DataFrame indexed by code with [n_reports, rating_*, eps_fy1, eps_fy2,
+                    fy1_year, fy2_year] — store.get_consensus_snapshot()[1]
+    Returns {weighted_g, median_g, coverage, n_names, n_all, buy_ratio, fy1_year, fy2_year}:
+      g_i = eps_fy2/eps_fy1 − 1 (财年滚动对齐由快照列保证, 年末翻滚自动跟上)
+      usable = n_reports ≥ min_reports 且 eps_fy1 > 0 且两年 EPS 齐 — 研报数门挡覆盖偏差
+               (调研§3.5), 负/零基数剔除 (EPS 比值在亏损基数上无意义)
+      weighted_g = Σ(w·g)/Σw over usable · median_g = median(g) (抗单家极值预测, 调研§4.3)
+      coverage = usable weight / total constituents weight
+      buy_ratio = Σ(w·buy)/Σ(w·评级总数) over usable — 评级结构参考, 只展示不进分
+    """
+    if (constituents is None or snapshot is None
+            or not len(constituents) or not len(snapshot)):
+        return _empty_consensus(0 if constituents is None else len(constituents))
+
+    h = constituents[["code", "weight"]].copy()
+    h["code"] = h["code"].astype(str).str.zfill(6)
+    h["weight"] = pd.to_numeric(h["weight"], errors="coerce").fillna(0.0)
+    total_w = float(h["weight"].sum())
+    if total_w <= 0:
+        return _empty_consensus(len(h))
+
+    m = h.merge(snapshot.reset_index(), on="code", how="left")
+    usable = m[(m["n_reports"] >= min_reports) & m["eps_fy1"].notna() & (m["eps_fy1"] > 0)
+               & m["eps_fy2"].notna()].copy()
+    if not len(usable):
+        return _empty_consensus(len(h))
+
+    usable["g"] = usable["eps_fy2"] / usable["eps_fy1"] - 1.0
+    uw = float(usable["weight"].sum())
+
+    rc = [c for c in _RATE_COLS if c in usable.columns]
+    buy_ratio = float("nan")
+    if rc:
+        rated = usable.copy()
+        rated["_rtot"] = rated[rc].sum(axis=1)
+        rated = rated[rated["_rtot"] > 0]
+        if len(rated):
+            rtot = float((rated["weight"] * rated["_rtot"]).sum())
+            buy = float((rated["weight"] * rated["rating_buy"]).sum())
+            buy_ratio = buy / rtot if rtot > 0 else float("nan")
+
+    fy1 = usable["fy1_year"].iloc[0] if "fy1_year" in usable.columns else None
+    fy2 = usable["fy2_year"].iloc[0] if "fy2_year" in usable.columns else None
+    return {
+        "weighted_g": float((usable["g"] * usable["weight"]).sum() / uw),
+        "median_g": float(usable["g"].median()),
+        "coverage": uw / total_w,
+        "n_names": int(len(usable)),
+        "n_all": int(len(h)),
+        "buy_ratio": buy_ratio,
+        "fy1_year": int(fy1) if fy1 == fy1 and fy1 is not None else None,
+        "fy2_year": int(fy2) if fy2 == fy2 and fy2 is not None else None,
+    }
+
+
+def _clabel(score: float) -> str:
+    if score >= 70:
+        return LABEL_C_HIGH
+    if score >= 58:
+        return LABEL_C_UP
+    if score >= 42:
+        return LABEL_C_FLAT
+    if score >= 30:
+        return LABEL_C_DOWN
+    return LABEL_C_CRASH
+
+
+def consensus_score(signal: Optional[dict], params: dict) -> tuple[float, str]:
+    """Map an aggregate_consensus signal to (score 0-100, label).
+
+    score = clamp(50 + median_g%·0.4) — 与 earnings_score 同标度同带宽(水平值口径, 非变化量;
+    修正动量是 E4 的独立信号). Gates: coverage < research.earnings.consensus.min_weight_cov
+    (default 0.40, 调研§5 的 B 级线) 或可用成分 < min_names (default 5) → (NaN, '数据不足').
+    """
+    if signal is None:
+        return (float("nan"), LABEL_INSUFF)
+    cp = ((params.get("research", {}) or {}).get("earnings", {}) or {}).get("consensus", {}) or {}
+    min_cov = float(cp.get("min_weight_cov", 0.40))
+    min_n = int(cp.get("min_names", 5))
+    cov = signal.get("coverage")
+    n = int(signal.get("n_names", 0))
+    if cov is None or cov < min_cov or n < min_n:
+        return (float("nan"), LABEL_INSUFF)
+
+    med = signal.get("median_g")
+    med = 0.0 if (med is None or pd.isna(med)) else float(med)
+    score = max(0.0, min(100.0, 50.0 + med * 100.0 * 0.4))
+    return (score, _clabel(score))

@@ -263,10 +263,39 @@ def _earnings_freshness_line(snap: dict) -> str:
     return (f"<br><span class='fresh {cls}'>{plabel} · 覆盖 {cov_s}{warn}</span>")
 
 
+# 一致预期(E2) label → 色 class（复用业绩预告的 en-* 语义色）
+_CONS_CLASS = {"预期高增": "en-hi", "预期改善": "en-up", "预期平稳": "en-flat",
+               "预期承压": "en-dn", "预期负增": "en-bad"}
+
+
+def _consensus_line(snap: dict) -> str:
+    """一致预期行（E2 双 chip 的下半）: 加权预期增速 g + 覆盖 + 评级结构 + 财年·快照日.
+
+    无快照/覆盖不足 → ""（cell 只剩预告层, 优雅降级）。水平值口径（非变化量, 修正动量 E4 另计）。
+    """
+    g = snap.get("consensus_g")
+    if not isinstance(g, (int, float)) or _nan(g):
+        return ""
+    cov = snap.get("consensus_cov")
+    cov_s = f"{cov:.0%}" if isinstance(cov, (int, float)) and not _nan(cov) else "—"
+    lab = str(snap.get("consensus_label", ""))
+    cls = _CONS_CLASS.get(lab, "")
+    buy = snap.get("consensus_buy")
+    buy_s = (f" · 买入{buy:.0%}" if isinstance(buy, (int, float)) and not _nan(buy) else "")
+    fy, sd = snap.get("consensus_fy", ""), str(snap.get("consensus_snap", ""))
+    snap_s = f"·快照{sd[4:6]}/{sd[6:8]}" if len(sd) == 8 else ""
+    fy_s = f" · {fy}{snap_s}" if fy else (f" · {snap_s.strip('·')}" if snap_s else "")
+    return (f"<br><span class='sub2 {cls}'>预期g {g:+.1%}"
+            f"<br>覆盖 {cov_s}{buy_s}{fy_s}</span>")
+
+
 def _earnings_cell(snap: dict) -> str:
-    """业绩预期 cell — 纯信息列（最新一期业绩预告口径 + 覆盖度）。"""
+    """业绩预期 cell — 纯信息列（上: 业绩预告口径 + 覆盖度; 下: 一致预期增速 E2）。"""
+    cons = _consensus_line(snap)
     label = snap.get("earnings_label")
     if not label:
+        if cons:
+            return f"<td class='c'>{cons}</td>"
         return "<td class='c'><span class='ghost'>—</span></td>"
     cls = _EARN_CLASS.get(label, "en-flat")
     yoy = snap.get("earnings_yoy")
@@ -277,7 +306,7 @@ def _earnings_cell(snap: dict) -> str:
         bb = (f"<br><span class='sub2'>归母YoY {yoy_s}"
               f" · 多{bull:.0%}/空{bear:.0%}</span>")
     fresh = _earnings_freshness_line(snap)
-    return f"<td class='c bold {cls}'>{label}{bb}{fresh}</td>"
+    return f"<td class='c bold {cls}'>{label}{bb}{fresh}{cons}</td>"
 
 
 def _extremeness(sn: dict) -> float:
@@ -771,7 +800,8 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
             f"<tr data-name=\"{nm}\" data-style=\"{style}\" "
             f"data-dev=\"{_num_attr(cur)}\" data-pct=\"{_num_attr(pct)}\" "
             f"data-aum=\"{_num_attr(aum, 1)}\" data-turnover=\"{_num_attr(to, 1)}\" "
-            f"data-chip=\"{_num_attr((snap.get('chip') or {}).get('flow_main'))}\">"
+            f"data-chip=\"{_num_attr((snap.get('chip') or {}).get('flow_main'))}\" "
+            f"data-earn=\"{_num_attr(snap.get('consensus_g'))}\">"
             f"<td><b><a href='#{sym}' class='etf-link'>{nm}</a></b>"
             f"<br><span class='sub2 muted'>{sym}</span>{aum_html}</td>"
             f"<td class='c bold {style_cls}'>{style_cn}{group_html}</td>"
@@ -811,6 +841,11 @@ def _detail_chips(snap: dict) -> str:
     label = snap.get("earnings_label")
     if label:
         chips.append(f'<span class="chip {_EARN_CLASS.get(label, "en-flat")}">{label}</span>')
+    g = snap.get("consensus_g")
+    if isinstance(g, (int, float)) and not _nan(g):
+        clab = str(snap.get("consensus_label", ""))
+        chips.append(f'<span class="chip {_CONS_CLASS.get(clab, "en-flat")}">'
+                     f'预期g {g:+.0%}·{clab or "—"}·覆盖{snap.get("consensus_cov", 0):.0%}</span>')
     aum = snap.get("aum_yi")
     if not _nan(aum):
         chips.append(f'<span class="chip">规模 {aum:.0f}亿</span>')
@@ -1325,7 +1360,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                     f'<th data-key="dev" data-type="num">净值MA{ma_period}偏离<sup style="font-size:9px">分位</sup></th>'
                     '<th>份额/净值剪刀差</th>'
                     '<th data-key="chip" data-type="num">筹码<sub style="font-size:9px">20日</sub></th>'
-                    '<th>业绩预期<sup style="font-size:9px">信息</sup></th>'
+                    '<th data-key="earn" data-type="num">业绩预期<sup style="font-size:9px">信息·预期g</sup></th>'
                     '<th data-key="turnover" data-type="num">成交<sub style="font-size:9px">5日</sub></th></tr>')
     tabs_html = (
         '<div class="rank-tabs">'
@@ -1359,6 +1394,12 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                   + ("⑤ <b>申赎异动台账</b>：近1年扫描 |日增减%| 进入自身历史99%分位 且 ≥1亿 的单日大额"
                      "申赎事件，最新8条滚动展示（新事件顶旧事件·供回检）；全历史分位·纯观察不防前视；"
                      "流入≠看好。点击条目跳该ETF的日度净申赎图看事件细节。<br>" if flow_events_html else ""))
+    earn_guide = ("⑥ <b>业绩预期列（信息层）</b>：上=最新披露窗口的<b>业绩预告</b>聚合（多/空=预喜/预亏类型"
+                  "的权重占比·广度口径——强制披露门槛使样本天然偏极端，只看广度不看水平，覆盖=披露进度"
+                  "与门槛筛过的混合）；下=<b>一致预期</b> g=Σ(官方权重×成分股 EPS 次年/当年−1)（东财研报"
+                  "摘录口径·研报数≥3·财年滚动对齐·<b>水平值非变化量</b>——修正动量 E4 另计；覆盖权重门"
+                  "40%）。两行互补：预告=已披露的区间事实，预期=分析师前瞻（日更·软信息·系统性乐观需"
+                  "横向比较）。观察坐标·不喂引擎。<br>")
 
     return f"""<html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1371,7 +1412,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
 <div class="guide-body">本看板跟踪三件事——① <b>净值-MA{ma_period}偏离度</b>：净值相对自身均线的偏离 + 历史百分位分位（0=最负/超卖…1=最正/超买），副图标历史极值「第几低/高」（1=史上最极端，纯观察）。
 ② <b>份额-净值剪刀差</b>：份额与净值走向分化（一升一降）时置灰标注漂移幅度与窗口天数；检不出干净分化则只画原始双线。
 ③ <b>偏离度×筹码 四象限提醒</b>：偏离度进入自身历史 5%/95% 极端分位 × 筹码方向（份额申赎 5/10/20/30/60 日近端等差加权投票·±1% 死区·阈值2，机构行为代理·主体不可辨）交叉——超卖+筹码增=🟢机会（深跌有承接）/超买+筹码减=🟠风险（高位兑现）/超卖+筹码减=🔴严重警告（深跌无承接）/超买+筹码增=🔵关注（惯性未死）。筹码多窗口值（5/10/20/30/60 日净变化率）在排名表第二行与四象限条目下直接展示，一眼看申赎节奏。观察坐标·非买卖建议。<br>
-{flow_guide}表格点击表头可排序；逐标的明细默认折叠，点击行展开，或用右侧下拉快速跳转。</div></details>
+{flow_guide}{earn_guide}表格点击表头可排序；逐标的明细默认折叠，点击行展开，或用右侧下拉快速跳转。</div></details>
 {summary_html}
 {extreme_banner_html}
 {quadrant_banner_html}

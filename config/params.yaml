@@ -125,6 +125,10 @@ research:
   earnings:                 # 业绩预期信号（V3.2，INFORMATIONAL 不计入 composite）
     min_coverage: 0.30      # 持仓权重覆盖 < 30% → 数据不足
     min_matched: 5          # 匹配到的持仓股票 < 5 只 → 数据不足
+    consensus:              # 一致预期聚合（E2·周度快照×成分官方权重；水平值口径非变化量）
+      min_reports: 3        # 个股研报数门（覆盖偏差防护，调研§3.5）
+      min_names: 5          # 可用成分 < 5 只 → 数据不足
+      min_weight_cov: 0.40  # 覆盖权重 < 40% → 数据不足（调研§5 的 B 级线）
   cyclical_reversal:        # 周期反转筛子（只读，业绩×前期回撤×财报时效；不喂引擎）
     yoy_scale: 1.0          # weighted_yoy 100% → 业绩因子满分（ETF 加权 yoy 远小于个股，实盘校准）
     drawdown_scale: 0.5     # 50% 回撤 → 回撤因子满分

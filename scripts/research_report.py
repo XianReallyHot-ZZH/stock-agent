@@ -80,6 +80,10 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
     chip_windows = tuple(rp.get("chip_windows", [5, 10, 20, 30, 60]))
     chip_deadzone = float(rp.get("chip_deadzone", 0.01))
     chip_vote_threshold = int(rp.get("chip_vote_threshold", 2))
+    # 一致预期 (E2): 最新整表快照取一次, 逐 ETF 与成分官方权重聚合
+    cons_cfg = (rp.get("earnings") or {}).get("consensus") or {}
+    cons_min_reports = int(cons_cfg.get("min_reports", 3))
+    csnap_date, csnap = store.get_consensus_snapshot()
     snapshots: dict[str, dict] = {}
     series_map: dict[str, dict] = {}
     for sym in symbols:
@@ -119,6 +123,24 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
             snap["earnings_bear"] = earn["bear_ratio"]
             snap["earnings_cov"] = earn["coverage"]
             snap["earnings_period"] = earn["report_period"]
+
+        # 一致预期 (E2, informational): 成分官方权重 × 快照 → 加权预期增速 g。
+        # 与预告层互补: 预告=已披露区间事实(偏极端样本·广度), 预期=分析师前瞻(覆盖权重~82%)。
+        if len(csnap) and m.get("index_code"):
+            cons = store.get_constituents(str(m["index_code"]))
+            if len(cons):
+                sig = ern.aggregate_consensus(cons, csnap, min_reports=cons_min_reports)
+                cscore, clabel = ern.consensus_score(sig, cfg.params)
+                snap["consensus_label"] = clabel
+                snap["consensus_score"] = cscore
+                snap["consensus_g"] = sig["weighted_g"]
+                snap["consensus_g_median"] = sig["median_g"]
+                snap["consensus_cov"] = sig["coverage"]
+                snap["consensus_n"] = sig["n_names"]
+                snap["consensus_buy"] = sig["buy_ratio"]
+                snap["consensus_fy"] = (f"{sig['fy1_year']}→{sig['fy2_year']}"
+                                        if sig.get("fy1_year") else "")
+                snap["consensus_snap"] = csnap_date
 
         snapshots[sym] = snap
         series_map[sym] = {"shares": shares_df, "nav": nav_df}
@@ -281,6 +303,11 @@ def main():
     if excluded:
         names = "、".join(f"{sn['name']}({s})" for s, sn in excluded)
         print(f"\n   ⚠ NAV 历史不足未参与排名({len(excluded)}): {names}")
+    n_cons = sum(1 for sn in snapshots.values()
+                 if sn.get("consensus_label") and sn["consensus_label"] != "数据不足")
+    if n_cons:
+        csnap_date = store.get_consensus_snapshot()[0]
+        print(f"   📊 一致预期: {n_cons}/{len(snapshots)} 只出数（快照 {csnap_date}·周度积累中, E4 修正动量待冷启动）")
     if flow_payload and flow_payload["state"].get("label_key") != "insufficient":
         st = flow_payload["state"]
         print(f"   💰 板块资金流向[{st['label']}] 近{flow_payload['window']}日全池净流入 "
