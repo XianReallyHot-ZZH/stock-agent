@@ -109,6 +109,12 @@ def main():
         _stage(4, "行业 PE (cninfo，周度·限流)", f"({pe_start}..{end}, ~30min)")
         dm.backfill_industry_pe(pe_start, end, step_days=7, sleep=8)
 
+    # stage 4.5: 业绩预期底座 (E0/E1 — 成分+一致预期快照 + 重算 etf_earnings, ~2min)
+    _stage(4.5, "指数成分 + 一致预期快照 + 业绩预期重算 (E0/E1)", "(~2min)")
+    dm.update_constituents()
+    dm.update_consensus()
+    dm.update_etf_earnings()
+
     # stage 5: render
     _stage(5, "生成看板")
     cmd = [sys.executable, str(ROOT / "scripts" / "research_report.py")]

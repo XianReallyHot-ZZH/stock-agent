@@ -106,7 +106,13 @@ def report(conn, cfg, syms) -> dict:
     print(f"PE新鲜: {'旧(>' + str(PE_STALE_DAYS) + '天)' if pe_stale else 'OK'}")
     earn_period = _fetch(conn, "SELECT MAX(report_period) FROM etf_earnings")[0] or "（无）"
     earn_n = _fetch(conn, "SELECT COUNT(DISTINCT symbol) FROM etf_earnings")[0]
-    print(f"业绩预期: 报告期 {earn_period}（{earn_n} 只ETF有信号）")
+    earn_cov = _fetch(conn, "SELECT COUNT(DISTINCT symbol) FROM etf_earnings WHERE coverage>0")[0]
+    print(f"业绩预期: 报告期 {earn_period}（{earn_n} 行 / {earn_cov} 只有效信号 coverage>0）")
+    cons_n = _fetch(conn, "SELECT COUNT(DISTINCT index_code) FROM index_constituents")[0]
+    cons_last = _fetch(conn, "SELECT MAX(snapshot_date) FROM index_constituents")[0] or "（无）"
+    print(f"指数成分: {cons_n} 个指数 · 快照 {cons_last}")
+    csnap_row = _fetch(conn, "SELECT value FROM meta WHERE key='last_consensus_update'")
+    print(f"一致预期快照: {csnap_row[0] if csnap_row and csnap_row[0] else '（无）'}")
 
     # ---- index layer (V4 tracker — 指数择时层) ----
     idx_names = [("000016", "上证50"), ("000300", "沪深300"), ("000905", "中证500"),
@@ -177,12 +183,30 @@ def main():
         print(f"  行业PE补缺 {start}..{target} (step=7 sleep=8) ...")
         dm.backfill_industry_pe(start, target, step_days=7, sleep=8)
 
-    # 5) earnings expectation: refresh if missing or a newer complete report period exists.
+    # 5) constituents (E1): refresh if missing or snapshot >45 days old (月度节奏)
+    cons_last = _fetch(conn, "SELECT MAX(snapshot_date) FROM index_constituents")[0]
+    cons_stale = cons_last is None or (
+        (datetime.now() - datetime.strptime(cons_last, "%Y-%m-%d")).days > 45)
+    if cons_stale:
+        print(f"  指数成分刷新(缺失或>45天, 当前 {cons_last or '无'})...")
+        dm.update_constituents()
+
+    # 5.5) consensus weekly snapshot (E0): refresh if >9 days old — 修正动量(E4)历史积累
+    cs_last = store.get_meta("last_consensus_update")
+    cs_stale = cs_last is None or (
+        (datetime.now() - datetime.strptime(cs_last, "%Y%m%d")).days > 9)
+    if cs_stale:
+        print(f"  一致预期周度快照(当前 {cs_last or '无'})...")
+        dm.update_consensus()
+
+    # 6) earnings expectation: refresh if missing, a newer complete report period exists,
+    #    or every row is a silent zero (coverage=0 — the 2026-08 dead-endpoint signature).
     #    Quarterly/annual cadence — usually a no-op except around report seasons.
     want_period = dm._latest_report_period()
     have_period = store.last_earnings_period()
-    if have_period != want_period:
-        print(f"  业绩预期更新 ({have_period or '无'} → {want_period}) ...")
+    earn_cov = _fetch(conn, "SELECT COUNT(DISTINCT symbol) FROM etf_earnings WHERE coverage>0")[0]
+    if have_period != want_period or earn_cov == 0:
+        print(f"  业绩预期更新 ({have_period or '无'} → {want_period}, 有效信号 {earn_cov}) ...")
         dm.update_etf_earnings(report_period=want_period)
 
     # 6) index layer (V4 tracker): broad-index daily + PE + market PB — full refresh (idempotent)

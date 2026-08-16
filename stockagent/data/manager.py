@@ -376,13 +376,26 @@ class DataManager:
             return 0
 
         rows = []
-        for i, sym in enumerate(symbols):
-            if i > 0:
-                time.sleep(0.4)  # be gentle to data.eastmoney
-            try:
-                holdings = fetcher.fetch_etf_holdings(sym)
-            except Exception as e:  # noqa: BLE001
-                log.warning("holdings %s failed: %s", sym, str(e)[:80])
+        meta = self.config.symbol_meta()
+        for sym in symbols:
+            entry = meta.get(sym) or {}
+            idx = entry.get("index_code")
+            holdings = None
+            if idx:
+                cons = self.store.get_constituents(str(idx))
+                if len(cons):
+                    holdings = cons  # B 路线: 指数官方全成分×权重(update_constituents 落库)
+            if holdings is None:
+                # A 路线 fallback: top-10 重仓 — fund_portfolio_hold_em 端点 2026-08 已死
+                # (JSONDecodeError, probe P1), 多半拿不到; 拿到也只覆盖 25-85% 权重(调研§5).
+                try:
+                    holdings = fetcher.fetch_etf_holdings(sym)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("holdings %s failed: %s", sym, str(e)[:80])
+                    holdings = None
+            if holdings is None or not len(holdings):
+                # 断点教训(调研§6.2): 空持仓绝不写零行 — 静默全零表曾掩盖端点死亡两个月
+                log.warning("holdings %s unavailable (成分未拉取且 top-10 端点死) — skip", sym)
                 continue
             sig = earnings.aggregate_earnings(holdings, forecast)
             rows.append((sym, period, sig["weighted_yoy"], sig["median_yoy"],
@@ -392,7 +405,7 @@ class DataManager:
             log.info("earnings %s: cov=%.0f%% n=%d w_yoy=%+.0f%%",
                      sym, sig["coverage"] * 100, sig["n_matched"],
                      wy if not pd.isna(wy) else 0.0)
-        n = self.store.upsert_etf_earnings(rows, source="em_yjyg")
+        n = self.store.upsert_etf_earnings(rows, source="csindex_cons")
         self.store.set_meta("last_earnings_update", period)
         log.info("earnings update %s: %d ETFs", period, n)
         return n
@@ -414,6 +427,40 @@ class DataManager:
         self.store.set_meta("last_consensus_update", today)
         log.info("consensus snapshot %s: %d stocks", today, n)
         return n
+
+    def update_constituents(self, symbols: Optional[list[str]] = None) -> int:
+        """Refresh index constituents+official weights for pool ETFs (E1 B 路线, 月度节奏).
+
+        index_code/index_expect 来自 etf_pool.yaml(调研§5码表). 空结果/名称哨兵不符 →
+        warn + 跳过不写库(防猜错代码与端点串台). QDII/无免费成分源标的(index_code 缺省)
+        自然跳过. Returns number of indices refreshed.
+        """
+        meta = self.config.symbol_meta()
+        symbols = symbols or self.config.rotation_symbols()
+        n_ok = 0
+        for i, sym in enumerate(symbols):
+            entry = meta.get(sym) or {}
+            idx = entry.get("index_code")
+            if not idx:
+                continue
+            expect = str(entry.get("index_expect", "") or "")
+            if i:
+                time.sleep(0.3)  # be gentle to csindex
+            df = fetcher.fetch_index_constituents(str(idx))
+            if not len(df):
+                log.warning("constituents %s(%s) empty — skipped (no write)", sym, idx)
+                continue
+            iname = str(df.attrs.get("index_name", ""))
+            if expect and expect not in iname:
+                log.warning("constituents %s(%s) sentinel mismatch: got '%s' expect '%s' — skipped",
+                            sym, idx, iname, expect)
+                continue
+            self.store.upsert_constituents(str(idx), df)
+            n_ok += 1
+            log.info("constituents %s %s(%s): %d names, snapshot %s",
+                     sym, iname, idx, len(df), df["snapshot_date"].iloc[0])
+        log.info("constituents refresh: %d indices ok", n_ok)
+        return n_ok
 
     # ---- Broad-index daily / valuation (V4 tracker) — 指数择时层数据 ----
     # 7 broad indices, order = 看板展示序(与 tracker.diagnose.BROAD_INDICES 同步)。

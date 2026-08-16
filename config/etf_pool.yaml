@@ -11,6 +11,14 @@
 # 有色与煤炭分开（商品周期不同源）；新能源=电力设备同族；中游材料=钢铁+建材+化工）。
 # 仅驱动 research 看板「板块资金流向」section 的份额净申赎聚合(research/flow.py)，
 # 不参与交易引擎。
+#
+# index_code / index_expect (E1 成分股底座, 2026-08): 跟踪指数代码(中证体系) + 名称哨兵关键词。
+# 用途: index_stock_cons_weight_csindex 拉官方全成分+权重(月度快照) → index_constituents 表 →
+# etf_earnings 聚合的持仓底座(B 路线, 替代已死的 top-10 重仓端点 fund_portfolio_hold_em)。
+# 拉取时校验返回的指数名称含 index_expect, 不符即拒——防猜错代码/端点串台(调研期靠它抓到
+# 930999=SHS大湾区 的错配)。码表来源: docs/RESEARCH-ETF行业业绩预期.md §5(2026-08-16 实测)。
+# 缺 index_code = 无免费成分源(QDII 跨境 4 只 / 512480 CES半导体·中华交易服务体系 /
+# 159915 创业板指·国证系) → 该 ETF 走降级(不参与成分聚合, 看板显示数据不足)。
 
 # Functional roles (not part of rotation ranking):
 benchmark:
@@ -26,48 +34,48 @@ risk_off:
 # Rotation candidates (distinct sectors, one ETF each):
 rotation_pool:
   # 银行 / 券商保险
-  - {symbol: "512800", name: "银行ETF",     sector: "银行",     csrc_industry: "货币金融服务",                      group: "银行", style: "value",  style_alt: []}
-  - {symbol: "512880", name: "证券ETF",     sector: "券商",     csrc_industry: "资本市场服务",                      group: "券商保险", style: "cyclic", style_alt: []}
-  - {symbol: "512070", name: "证券保险ETF", sector: "证券保险", group: "券商保险",       style: "value",  style_alt: []}  # 易方达中证800证券保险;含券商+保险混合,无纯行业PE→走无PE路径(像宽基)
+  - {symbol: "512800", name: "银行ETF",     sector: "银行",     csrc_industry: "货币金融服务",                      group: "银行", style: "value",  style_alt: [], index_code: "399986", index_expect: "银行"}
+  - {symbol: "512880", name: "证券ETF",     sector: "券商",     csrc_industry: "资本市场服务",                      group: "券商保险", style: "cyclic", style_alt: [], index_code: "399975", index_expect: "证券"}
+  - {symbol: "512070", name: "证券保险ETF", sector: "证券保险", group: "券商保险",       style: "value",  style_alt: [], index_code: "399966", index_expect: "证保"}  # 易方达中证800证券保险;含券商+保险混合,无纯行业PE→走无PE路径(像宽基)
   # 医药 / 恒生医疗（跨境与大A资金面不同，独立成组）
-  - {symbol: "512010", name: "医药ETF",     sector: "医药",     csrc_industry: "医药制造业",                        group: "医药", style: "growth", style_alt: ["value"]}
-  - {symbol: "159992", name: "创新药ETF",   sector: "创新药",   csrc_industry: "医药制造业",                        group: "医药", style: "growth", style_alt: []}  # 与512010同属医药制造业→PE分位相同（行业粒度上限）
-  - {symbol: "513060", name: "恒生医疗ETF", sector: "恒生医疗", group: "恒生医疗",       style: "growth", style_alt: []}  # 跨境医药;资金面与大A医药不同(QDII额度/汇率),独立成组
+  - {symbol: "512010", name: "医药ETF",     sector: "医药",     csrc_industry: "医药制造业",                        group: "医药", style: "growth", style_alt: ["value"], index_code: "000913", index_expect: "医药"}
+  - {symbol: "159992", name: "创新药ETF",   sector: "创新药",   csrc_industry: "医药制造业",                        group: "医药", style: "growth", style_alt: [], index_code: "931152", index_expect: "创新药"}  # 与512010同属医药制造业→PE分位相同（行业粒度上限）
+  - {symbol: "513060", name: "恒生医疗ETF", sector: "恒生医疗", group: "恒生医疗",       style: "growth", style_alt: []}  # 跨境医药;资金面与大A医药不同(QDII额度/汇率),独立成组;无免费成分源
   # 酒 / 农业 / 家电
-  - {symbol: "512690", name: "酒ETF",         sector: "酒",         csrc_industry: "酒、饮料和精制茶制造业",    group: "酒", style: "value",  style_alt: ["growth"]}  # 鹏华中证酒(白酒龙头茅五泸在此),原名"食品饮料"系误标
-  - {symbol: "159865", name: "养殖ETF",     sector: "养殖",     csrc_industry: "畜牧业",                            group: "农业", style: "cyclic", style_alt: []}  # 猪周期(S11)
-  - {symbol: "159825", name: "农业ETF",     sector: "农业",     csrc_industry: "畜牧业",                            group: "农业", style: "cyclic", style_alt: []}  # 申万农林牧渔行业级(中证农业:养殖+种植+饲料),养殖159865的口径升级
-  - {symbol: "159996", name: "家电ETF",     sector: "家电",     csrc_industry: "电气机械和器材制造业",              group: "家电", style: "value",  style_alt: ["growth"]}
+  - {symbol: "512690", name: "酒ETF",         sector: "酒",         csrc_industry: "酒、饮料和精制茶制造业",    group: "酒", style: "value",  style_alt: ["growth"], index_code: "399987", index_expect: "酒"}  # 鹏华中证酒(白酒龙头茅五泸在此),原名"食品饮料"系误标
+  - {symbol: "159865", name: "养殖ETF",     sector: "养殖",     csrc_industry: "畜牧业",                            group: "农业", style: "cyclic", style_alt: [], index_code: "931946", index_expect: "畜牧养殖"}  # 猪周期(S11)
+  - {symbol: "159825", name: "农业ETF",     sector: "农业",     csrc_industry: "畜牧业",                            group: "农业", style: "cyclic", style_alt: [], index_code: "000949", index_expect: "农业"}  # 中证农业(养殖+种植+饲料),养殖159865的口径升级
+  - {symbol: "159996", name: "家电ETF",     sector: "家电",     csrc_industry: "电气机械和器材制造业",              group: "家电", style: "value",  style_alt: ["growth"], index_code: "930697", index_expect: "家用电器"}
   # 电子 / 软件AI / 通信 / 传媒 / 机器人
-  - {symbol: "512480", name: "半导体ETF",   sector: "半导体",   csrc_industry: "计算机、通信和其他电子设备制造业",  group: "电子", style: "growth", style_alt: []}
-  - {symbol: "159732", name: "消费电子ETF", sector: "消费电子", csrc_industry: "计算机、通信和其他电子设备制造业",  group: "电子", style: "growth", style_alt: ["cyclic"]}  # 申万电子行业级(果链/面板/元件),打破"电子=半导体"口径偏差;换机/面板周期性强→次标周期
-  - {symbol: "159819", name: "人工智能ETF", sector: "人工智能", csrc_industry: "软件和信息技术服务业",              group: "软件AI", style: "growth", style_alt: []}
-  - {symbol: "159852", name: "软件ETF",     sector: "软件",     csrc_industry: "软件和信息技术服务业",              group: "软件AI", style: "growth", style_alt: []}
-  - {symbol: "515880", name: "通信ETF",     sector: "通信",     csrc_industry: "电信、广播电视和卫星传输服务",      group: "通信", style: "growth", style_alt: []}
-  - {symbol: "512980", name: "传媒ETF",     sector: "传媒",     csrc_industry: "广播、电视、电影和影视录音制作业",  group: "传媒", style: "growth", style_alt: []}
-  - {symbol: "159530", name: "机器人ETF",   sector: "机器人",   csrc_industry: "通用设备制造业",                    group: "机器人", style: "growth", style_alt: []}
+  - {symbol: "512480", name: "半导体ETF",   sector: "半导体",   csrc_industry: "计算机、通信和其他电子设备制造业",  group: "电子", style: "growth", style_alt: []}  # 国泰CES半导体芯片;中华交易服务体系无免费成分接口→E1 降级待人工
+  - {symbol: "159732", name: "消费电子ETF", sector: "消费电子", csrc_industry: "计算机、通信和其他电子设备制造业",  group: "电子", style: "growth", style_alt: ["cyclic"], index_code: "931494", index_expect: "消费电子"}  # 申万电子行业级(果链/面板/元件),打破"电子=半导体"口径偏差;换机/面板周期性强→次标周期
+  - {symbol: "159819", name: "人工智能ETF", sector: "人工智能", csrc_industry: "软件和信息技术服务业",              group: "软件AI", style: "growth", style_alt: [], index_code: "931071", index_expect: "人工智能"}
+  - {symbol: "159852", name: "软件ETF",     sector: "软件",     csrc_industry: "软件和信息技术服务业",              group: "软件AI", style: "growth", style_alt: [], index_code: "H30202", index_expect: "软件"}
+  - {symbol: "515880", name: "通信ETF",     sector: "通信",     csrc_industry: "电信、广播电视和卫星传输服务",      group: "通信", style: "growth", style_alt: [], index_code: "931160", index_expect: "通信设备"}
+  - {symbol: "512980", name: "传媒ETF",     sector: "传媒",     csrc_industry: "广播、电视、电影和影视录音制作业",  group: "传媒", style: "growth", style_alt: [], index_code: "399971", index_expect: "传媒"}
+  - {symbol: "159530", name: "机器人ETF",   sector: "机器人",   csrc_industry: "通用设备制造业",                    group: "机器人", style: "growth", style_alt: [], index_code: "H30590", index_expect: "机器人"}
   # 新能源（电力设备同族：车/光伏/电网）
-  - {symbol: "515030", name: "新能源车ETF", sector: "新能源车", csrc_industry: "汽车制造业",                        group: "新能源", style: "growth", style_alt: []}
-  - {symbol: "515790", name: "光伏ETF",     sector: "光伏",     csrc_industry: "电气机械和器材制造业",              group: "新能源", style: "growth", style_alt: ["cyclic"]}  # 产能周期强,次标周期
-  - {symbol: "159326", name: "电网设备ETF", sector: "电网设备", csrc_industry: "电气机械和器材制造业",              group: "新能源", style: "cyclic", style_alt: ["growth"]}  # 申万电力设备第三子类(特高压/电网改造投资周期,与光伏/车不同源);219亿规模流动性顶格;次标成长(出海逻辑)
+  - {symbol: "515030", name: "新能源车ETF", sector: "新能源车", csrc_industry: "汽车制造业",                        group: "新能源", style: "growth", style_alt: [], index_code: "399976", index_expect: "新能车"}
+  - {symbol: "515790", name: "光伏ETF",     sector: "光伏",     csrc_industry: "电气机械和器材制造业",              group: "新能源", style: "growth", style_alt: ["cyclic"], index_code: "931151", index_expect: "光伏产业"}  # 产能周期强,次标周期
+  - {symbol: "159326", name: "电网设备ETF", sector: "电网设备", csrc_industry: "电气机械和器材制造业",              group: "新能源", style: "cyclic", style_alt: ["growth"], index_code: "931994", index_expect: "电网设备"}  # 申万电力设备第三子类(特高压/电网改造投资周期,与光伏/车不同源);219亿规模流动性顶格;次标成长(出海逻辑);指数代码=华夏官网申赎清单页标注
   # 有色 / 煤炭（商品周期不同源，各自独立）/ 中游材料 / 电力
-  - {symbol: "512400", name: "有色金属ETF", sector: "有色金属", csrc_industry: "有色金属冶炼和压延加工业",          group: "有色", style: "cyclic", style_alt: []}
-  - {symbol: "515220", name: "煤炭ETF",     sector: "煤炭",     csrc_industry: "煤炭开采和洗选业",                  group: "煤炭", style: "cyclic", style_alt: []}
-  - {symbol: "515210", name: "钢铁ETF",     sector: "钢铁",     csrc_industry: "黑色金属冶炼和压延加工业",          group: "中游材料", style: "cyclic", style_alt: []}
-  - {symbol: "159745", name: "建材ETF",     sector: "建材",     csrc_industry: "非金属矿物制品业",                  group: "中游材料", style: "cyclic", style_alt: []}
-  - {symbol: "159870", name: "化工ETF",     sector: "化工",     csrc_industry: "化学原料和化学制品制造业",          group: "中游材料", style: "cyclic", style_alt: []}
-  - {symbol: "159611", name: "电力ETF",     sector: "电力",     csrc_industry: "电力、热力生产和供应业",            group: "电力", style: "cyclic", style_alt: []}
+  - {symbol: "512400", name: "有色金属ETF", sector: "有色金属", csrc_industry: "有色金属冶炼和压延加工业",          group: "有色", style: "cyclic", style_alt: [], index_code: "000819", index_expect: "有色金属"}
+  - {symbol: "515220", name: "煤炭ETF",     sector: "煤炭",     csrc_industry: "煤炭开采和洗选业",                  group: "煤炭", style: "cyclic", style_alt: [], index_code: "399998", index_expect: "煤炭"}
+  - {symbol: "515210", name: "钢铁ETF",     sector: "钢铁",     csrc_industry: "黑色金属冶炼和压延加工业",          group: "中游材料", style: "cyclic", style_alt: [], index_code: "930606", index_expect: "钢铁"}
+  - {symbol: "159745", name: "建材ETF",     sector: "建材",     csrc_industry: "非金属矿物制品业",                  group: "中游材料", style: "cyclic", style_alt: [], index_code: "931009", index_expect: "建筑材料"}
+  - {symbol: "159870", name: "化工ETF",     sector: "化工",     csrc_industry: "化学原料和化学制品制造业",          group: "中游材料", style: "cyclic", style_alt: [], index_code: "000813", index_expect: "细分化工"}
+  - {symbol: "159611", name: "电力ETF",     sector: "电力",     csrc_industry: "电力、热力生产和供应业",            group: "电力", style: "cyclic", style_alt: [], index_code: "H30199", index_expect: "电力"}
   # 工程机械 / 军工 / 房地产 / 汽车
-  - {symbol: "560280", name: "工程机械ETF", sector: "工程机械", csrc_industry: "专用设备制造业",                    group: "工程机械", style: "cyclic", style_alt: []}  # 申万机械设备行业级(挖机销量=教科书级强周期),与机器人(成长主题)属性互补
-  - {symbol: "512660", name: "军工ETF",     sector: "军工",     csrc_industry: "铁路、船舶、航空航天和其他运输设备制造业", group: "军工", style: "growth", style_alt: []}
-  - {symbol: "512200", name: "房地产ETF",   sector: "房地产",   csrc_industry: "房地产业",                          group: "房地产", style: "cyclic", style_alt: []}
-  - {symbol: "516110", name: "汽车ETF",     sector: "汽车",     csrc_industry: "汽车制造业",                        group: "汽车", style: "cyclic", style_alt: []}
+  - {symbol: "560280", name: "工程机械ETF", sector: "工程机械", csrc_industry: "专用设备制造业",                    group: "工程机械", style: "cyclic", style_alt: [], index_code: "931752", index_expect: "工程机械"}  # 申万机械设备行业级(挖机销量=教科书级强周期),与机器人(成长主题)属性互补
+  - {symbol: "512660", name: "军工ETF",     sector: "军工",     csrc_industry: "铁路、船舶、航空航天和其他运输设备制造业", group: "军工", style: "growth", style_alt: [], index_code: "399967", index_expect: "军工"}
+  - {symbol: "512200", name: "房地产ETF",   sector: "房地产",   csrc_industry: "房地产业",                          group: "房地产", style: "cyclic", style_alt: [], index_code: "931775", index_expect: "房地产"}
+  - {symbol: "516110", name: "汽车ETF",     sector: "汽车",     csrc_industry: "汽车制造业",                        group: "汽车", style: "cyclic", style_alt: [], index_code: "931008", index_expect: "汽车"}
   # 成长宽基/风格（宽基无单一证监会行业，不走估值因子）
-  - {symbol: "159915", name: "创业板ETF",   sector: "创业板",   group: "成长宽基", style: "growth", style_alt: []}
-  - {symbol: "588000", name: "科创50ETF",   sector: "科创",     group: "成长宽基", style: "growth", style_alt: []}
+  - {symbol: "159915", name: "创业板ETF",   sector: "创业板",   group: "成长宽基", style: "growth", style_alt: []}  # 创业板指399006=国证系,无免费成分接口→E1 降级待人工
+  - {symbol: "588000", name: "科创50ETF",   sector: "科创",     group: "成长宽基", style: "growth", style_alt: [], index_code: "000688", index_expect: "科创50"}
   # 港股科技 / 纳指 QDII（美股与港股资金面不同，各自独立；cninfo无A股行业PE，不走估值因子）
-  - {symbol: "513180", name: "恒生科技ETF", sector: "恒生科技", group: "港股科技", style: "growth", style_alt: []}
-  - {symbol: "513050", name: "中概互联ETF", sector: "中概互联", group: "港股科技", style: "growth", style_alt: []}
-  - {symbol: "159941", name: "纳指ETF",     sector: "纳指",     group: "纳指", style: "growth", style_alt: []}
+  - {symbol: "513180", name: "恒生科技ETF", sector: "恒生科技", group: "港股科技", style: "growth", style_alt: []}  # 恒生系指数无免费成分源
+  - {symbol: "513050", name: "中概互联ETF", sector: "中概互联", group: "港股科技", style: "growth", style_alt: []}  # 恒生系指数无免费成分源
+  - {symbol: "159941", name: "纳指ETF",     sector: "纳指",     group: "纳指", style: "growth", style_alt: []}  # 美股源+汇率+ADR,彻底放弃(调研§3.6)
   # 防御/收益（策略宽基，无单一行业，不走估值因子）
-  - {symbol: "512890", name: "红利低波ETF", sector: "红利",     group: "红利", style: "value",  style_alt: []}
+  - {symbol: "512890", name: "红利低波ETF", sector: "红利",     group: "红利", style: "value",  style_alt: [], index_code: "H30269", index_expect: "红利低波"}

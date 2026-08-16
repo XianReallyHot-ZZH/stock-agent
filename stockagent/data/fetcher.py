@@ -697,6 +697,35 @@ def fetch_consensus_snapshot(min_rows: int = 1000, timeout: float = 90.0) -> pd.
     return parse_consensus_table(df)
 
 
+def fetch_index_constituents(index_code: str, timeout: float = 40.0) -> pd.DataFrame:
+    """Index constituents with OFFICIAL weights (中证指数官网, 月度快照) — B 路线主源.
+
+    ak.index_stock_cons_weight_csindex — 全成分+官方权重, 一次一指数(~0.1-0.2s). Returns
+    DataFrame with columns [code(6-digit str), name, weight, snapshot_date] and
+    attrs["index_name"] = 官方指数名称 — 调用方用 expect 关键词做名称哨兵, 不符即拒
+    (防猜错代码/端点串台; 调研期靠它抓到 930999=SHS大湾区 错配). Empty DataFrame when
+    the index is unknown to csindex (国证/中华交易服务系指数, e.g. 创业板指/CES半导体) —
+    caller must treat empty as skip, never write empty aggregates.
+    """
+    empty = pd.DataFrame(columns=["code", "name", "weight", "snapshot_date"])
+    try:
+        df = _run_with_timeout(ak.index_stock_cons_weight_csindex, timeout, symbol=index_code)
+    except Exception as e:  # noqa: BLE001
+        log.warning("index_stock_cons_weight_csindex(%s) failed: %s", index_code, str(e)[:80])
+        return empty
+    if df is None or not len(df):
+        return empty
+    out = pd.DataFrame({
+        "code": df["成分券代码"].astype(str).str.zfill(6),
+        "name": df["成分券名称"].astype(str) if "成分券名称" in df.columns else "",
+        "weight": pd.to_numeric(df["权重"], errors="coerce").fillna(0.0),
+        "snapshot_date": str(df["日期"].iloc[0]),
+    })
+    if "指数名称" in df.columns:
+        out.attrs["index_name"] = str(df["指数名称"].iloc[0])
+    return out
+
+
 # ---- Broad-index daily / valuation (V4 tracker) — sina + legulegu, proxy-independent ----
 def _index_prefix(symbol: str) -> str:
     """Broad-index sina prefix: 399xxx (深证, e.g. 创业板指) -> sz; everything else

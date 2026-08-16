@@ -113,6 +113,15 @@ CREATE TABLE IF NOT EXISTS stock_consensus (
     PRIMARY KEY (code, fetch_date)
 );
 CREATE INDEX IF NOT EXISTS idx_consensus_code ON stock_consensus(code);
+CREATE TABLE IF NOT EXISTS index_constituents (
+    index_code    TEXT NOT NULL,   -- 中证指数代码(etf_pool.yaml index_code, 调研§5码表)
+    code          TEXT NOT NULL,
+    name          TEXT,
+    weight        REAL,            -- 官方权重(%NAV, csindex 月度快照)
+    snapshot_date TEXT,
+    PRIMARY KEY (index_code, code)
+);
+CREATE INDEX IF NOT EXISTS idx_constituents_idx ON index_constituents(index_code);
 CREATE TABLE IF NOT EXISTS index_daily (
     symbol TEXT NOT NULL,
     date   TEXT NOT NULL,
@@ -751,6 +760,45 @@ class Store:
         if not rows:
             return date, pd.DataFrame(columns=self._CONS_COLS)
         return date, pd.DataFrame(rows, columns=["code"] + self._CONS_COLS).set_index("code")
+
+    # ---- index constituents (E1, docs/EXECUTION_PLAN-ETF业绩预期.md §3) ----
+    def upsert_constituents(self, index_code: str, df: pd.DataFrame) -> int:
+        """Official constituents+weights snapshot upsert, keyed by (index_code, code) —
+        monthly refresh cadence, same-snapshot rerun overwrites. df columns:
+        [code, name, weight, snapshot_date]."""
+        if df is None or len(df) == 0:
+            return 0
+        rows = [
+            (index_code, str(r["code"]), str(r.get("name", "")),
+             _num(r.get("weight")), str(r.get("snapshot_date", "")))
+            for _, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO index_constituents(index_code,code,name,weight,snapshot_date) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(index_code,code) DO UPDATE SET "
+                "name=excluded.name,weight=excluded.weight,snapshot_date=excluded.snapshot_date",
+                rows,
+            )
+        return len(rows)
+
+    def get_constituents(self, index_code: str) -> pd.DataFrame:
+        """DataFrame[code(str), weight(float)] for an index — the aggregate_earnings
+        holdings contract. Empty frame when this index has no stored constituents."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT code,weight FROM index_constituents WHERE index_code=?",
+                (index_code,)).fetchall()
+        if not rows:
+            return pd.DataFrame(columns=["code", "weight"])
+        return pd.DataFrame(rows, columns=["code", "weight"])
+
+    def last_constituent_snapshot(self, index_code: str) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT MAX(snapshot_date) FROM index_constituents WHERE index_code=?",
+                (index_code,)).fetchone()
+        return row[0] if row and row[0] else None
 
     # ---- broad-index daily / valuation (V4 tracker) ----
     def upsert_index_daily(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:
