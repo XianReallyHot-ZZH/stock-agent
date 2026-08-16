@@ -641,6 +641,62 @@ def fetch_earnings_forecast(report_period: str, timeout: float = 60.0) -> pd.Dat
     return df.set_index("code")[["yoy", "type"]]
 
 
+# ---- Analyst-consensus weekly snapshot (E0, docs/RESEARCH-ETF行业业绩预期.md §7.3) ----
+def parse_consensus_table(df: pd.DataFrame, now: Optional[datetime] = None) -> pd.DataFrame:
+    """Tidy-parse ak.stock_profit_forecast_em(symbol='') output → snapshot frame.
+
+    Pure function (no I/O) — the testable core of fetch_consensus_snapshot. Input is the
+    东财 13 列整表: 代码/名称/研报数/机构投资评级(近六个月)-买入..卖出/「YYYY预测每股收益」×4.
+    Output: DataFrame indexed by code(6-digit str) with columns [n_reports, rating_buy,
+    rating_over, rating_neutral, rating_reduce, rating_sell, eps_fy1, eps_fy2, fy1_year, fy2_year].
+    财年滚动对齐: fy1=当年, fy2=次年 — EPS 列按年份前缀匹配, 年末列名翻滚时自动跟上
+    (fy2 无列时为 NaN, E2 聚合按 coverage 门自然降级). Raises FetchError when no
+    forecast-year column ≥ now.year exists.
+    """
+    now = now or datetime.now()
+    eps_cols: dict[int, str] = {}
+    for c in df.columns:
+        m = re.match(r"^(\d{4})预测每股收益$", str(c).strip())
+        if m:
+            eps_cols[int(m.group(1))] = c
+    yrs = sorted(y for y in eps_cols if y >= now.year)[:2]
+    if not yrs:
+        raise FetchError(f"no forecast-EPS year columns >= {now.year} in {list(df.columns)[:14]}")
+
+    def _col(name: str):
+        return pd.to_numeric(df[name], errors="coerce") if name in df.columns else float("nan")
+
+    out = pd.DataFrame({
+        "code": df["代码"].astype(str).str.zfill(6),
+        "n_reports": _col("研报数"),
+        "rating_buy": _col("机构投资评级(近六个月)-买入"),
+        "rating_over": _col("机构投资评级(近六个月)-增持"),
+        "rating_neutral": _col("机构投资评级(近六个月)-中性"),
+        "rating_reduce": _col("机构投资评级(近六个月)-减持"),
+        "rating_sell": _col("机构投资评级(近六个月)-卖出"),
+        "eps_fy1": _col(eps_cols[yrs[0]]),
+        "eps_fy2": _col(eps_cols[yrs[1]]) if len(yrs) > 1 else float("nan"),
+        "fy1_year": yrs[0],
+        "fy2_year": yrs[1] if len(yrs) > 1 else None,
+    })
+    return out.drop_duplicates("code", keep="last").set_index("code")
+
+
+def fetch_consensus_snapshot(min_rows: int = 1000, timeout: float = 90.0) -> pd.DataFrame:
+    """Whole-market analyst-consensus snapshot (东财盈利预测整表, E0 周度节奏).
+
+    ak.stock_profit_forecast_em(symbol='') — 整表一次 ~1.4s / ~2800 行. 按股查询
+    (symbol='<code>') 已 endpoint-rot 死掉(NoneType; probe_earnings_sources P4, 2026-08-16),
+    只能整表取. Thin-guard: 行数 < min_rows 视为端点半死, 抛 FetchError 而非返回垃圾 —
+    etf_earnings 层 2026-08 静默写零行的教训(调研报告 §6.2), 空结果绝不落库.
+    """
+    df = _run_with_timeout(ak.stock_profit_forecast_em, timeout, symbol="")
+    n = 0 if df is None else len(df)
+    if n < min_rows:
+        raise FetchError(f"consensus table too thin ({n} rows < {min_rows})")
+    return parse_consensus_table(df)
+
+
 # ---- Broad-index daily / valuation (V4 tracker) — sina + legulegu, proxy-independent ----
 def _index_prefix(symbol: str) -> str:
     """Broad-index sina prefix: 399xxx (深证, e.g. 创业板指) -> sz; everything else

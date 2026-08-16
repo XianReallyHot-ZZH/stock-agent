@@ -100,6 +100,19 @@ CREATE INDEX IF NOT EXISTS idx_scale_symbol ON etf_scale(symbol);
 CREATE INDEX IF NOT EXISTS idx_nav_symbol ON etf_nav(symbol);
 CREATE INDEX IF NOT EXISTS idx_industry_pe ON industry_pe(industry);
 CREATE INDEX IF NOT EXISTS idx_etf_earnings_symbol ON etf_earnings(symbol);
+CREATE TABLE IF NOT EXISTS stock_consensus (
+    code       TEXT NOT NULL,
+    fetch_date TEXT NOT NULL,   -- 周度快照日(YYYYMMDD); E0 起积累, E4 修正动量的差分底座
+    n_reports  REAL,
+    rating_buy REAL, rating_over REAL, rating_neutral REAL, rating_reduce REAL, rating_sell REAL,
+    eps_fy1    REAL,
+    eps_fy2    REAL,
+    fy1_year   INTEGER,
+    fy2_year   INTEGER,
+    source     TEXT,
+    PRIMARY KEY (code, fetch_date)
+);
+CREATE INDEX IF NOT EXISTS idx_consensus_code ON stock_consensus(code);
 CREATE TABLE IF NOT EXISTS index_daily (
     symbol TEXT NOT NULL,
     date   TEXT NOT NULL,
@@ -679,6 +692,65 @@ class Store:
         with self._conn() as c:
             row = c.execute("SELECT MAX(report_period) FROM etf_earnings").fetchone()
             return row[0] if row and row[0] else None
+
+    # ---- analyst-consensus weekly snapshots (E0, docs/RESEARCH-ETF行业业绩预期.md) ----
+    _CONS_COLS = ["n_reports", "rating_buy", "rating_over", "rating_neutral",
+                  "rating_reduce", "rating_sell", "eps_fy1", "eps_fy2", "fy1_year", "fy2_year"]
+
+    def upsert_consensus(self, df: pd.DataFrame, fetch_date: str,
+                         source: str = "em_profit_forecast") -> int:
+        """Snapshot upsert keyed by (code, fetch_date) — same-day rerun overwrites, weekly cadence.
+        df indexed by code with columns [n_reports, rating_*, eps_fy1, eps_fy2, fy1_year, fy2_year]."""
+        if df is None or len(df) == 0:
+            return 0
+        rows = [
+            (str(code), fetch_date, *(_num(r.get(c)) for c in self._CONS_COLS), source)
+            for code, r in df.iterrows()
+        ]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO stock_consensus(code,fetch_date,n_reports,rating_buy,rating_over,"
+                "rating_neutral,rating_reduce,rating_sell,eps_fy1,eps_fy2,fy1_year,fy2_year,source) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(code,fetch_date) DO UPDATE SET "
+                "n_reports=excluded.n_reports,rating_buy=excluded.rating_buy,"
+                "rating_over=excluded.rating_over,rating_neutral=excluded.rating_neutral,"
+                "rating_reduce=excluded.rating_reduce,rating_sell=excluded.rating_sell,"
+                "eps_fy1=excluded.eps_fy1,eps_fy2=excluded.eps_fy2,fy1_year=excluded.fy1_year,"
+                "fy2_year=excluded.fy2_year,source=excluded.source",
+                rows,
+            )
+        return len(rows)
+
+    def consensus_snapshot_dates(self) -> list:
+        """All snapshot dates present, ascending — E0 验证 + E4 修正窗挑选."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT DISTINCT fetch_date FROM stock_consensus ORDER BY fetch_date").fetchall()
+        return [r[0] for r in rows]
+
+    def get_consensus_snapshot(self, asof: Optional[str] = None) -> tuple:
+        """Latest snapshot at/before `asof` (YYYYMMDD; None = newest).
+
+        Returns (fetch_date, DataFrame indexed by code with _CONS_COLS) —
+        ("", empty frame) when no snapshot exists yet (E0 冷启动期).
+        """
+        with self._conn() as c:
+            if asof:
+                row = c.execute("SELECT MAX(fetch_date) FROM stock_consensus WHERE fetch_date<=?",
+                                (asof,)).fetchone()
+            else:
+                row = c.execute("SELECT MAX(fetch_date) FROM stock_consensus").fetchone()
+            date = row[0] if row and row[0] else None
+            if not date:
+                return "", pd.DataFrame(columns=self._CONS_COLS)
+            rows = c.execute(
+                "SELECT code,n_reports,rating_buy,rating_over,rating_neutral,rating_reduce,"
+                "rating_sell,eps_fy1,eps_fy2,fy1_year,fy2_year FROM stock_consensus "
+                "WHERE fetch_date=?", (date,)).fetchall()
+        if not rows:
+            return date, pd.DataFrame(columns=self._CONS_COLS)
+        return date, pd.DataFrame(rows, columns=["code"] + self._CONS_COLS).set_index("code")
 
     # ---- broad-index daily / valuation (V4 tracker) ----
     def upsert_index_daily(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:

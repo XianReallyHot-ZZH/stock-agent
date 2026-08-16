@@ -193,7 +193,8 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
 
 def main():
     ap = argparse.ArgumentParser(description="ETF 行业研究 · 择时跟踪看板 (read-only)")
-    ap.add_argument("--backfill", choices=("nav", "pe", "scale", "earnings", "all"), default=None,
+    ap.add_argument("--backfill",
+                    choices=("nav", "pe", "scale", "earnings", "consensus", "all"), default=None,
                     help="run historical backfill instead of rendering")
     ap.add_argument("--period", default=None,
                     help="earnings backfill report period YYYYMMDD (default: latest complete FY)")
@@ -220,6 +221,11 @@ def main():
     end = args.end or datetime.now().strftime("%Y-%m-%d")
 
     if args.backfill:
+        if args.backfill in ("consensus", "all"):
+            n = dm.update_consensus()
+            print(f"  consensus snapshot: {n} stocks")
+            if args.backfill == "consensus":
+                return
         if args.backfill in ("earnings", "all"):
             n = dm.update_etf_earnings(report_period=args.period)
             print(f"  earnings backfill: {n} ETFs updated")

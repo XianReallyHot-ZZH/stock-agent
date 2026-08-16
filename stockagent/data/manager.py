@@ -397,6 +397,24 @@ class DataManager:
         log.info("earnings update %s: %d ETFs", period, n)
         return n
 
+    def update_consensus(self, min_rows: int = 1000) -> int:
+        """Whole-market analyst-consensus weekly snapshot (E0, 周度节奏).
+
+        修正动量(E4)的历史靠这里差分积累 — 冷启动 4 周, 所以这个方法独立于 E1-E3 存在并
+        应最先开始跑. Empty/thin fetch 不写库(etf_earnings 静默写零行的教训, 调研报告 §6.2).
+        Same-day rerun overwrites (idempotent upsert keyed by code+fetch_date).
+        """
+        try:
+            df = fetcher.fetch_consensus_snapshot(min_rows=min_rows)
+        except Exception as e:  # noqa: BLE001
+            log.warning("consensus fetch failed: %s", str(e)[:120])
+            return 0
+        today = datetime.now().strftime("%Y%m%d")
+        n = self.store.upsert_consensus(df, fetch_date=today)
+        self.store.set_meta("last_consensus_update", today)
+        log.info("consensus snapshot %s: %d stocks", today, n)
+        return n
+
     # ---- Broad-index daily / valuation (V4 tracker) — 指数择时层数据 ----
     # 7 broad indices, order = 看板展示序(与 tracker.diagnose.BROAD_INDICES 同步)。
     # 000001(上证综指) for ⑦相对周期律; 000852(中证1000) 小盘补充(①偏离极值曲线等)。
