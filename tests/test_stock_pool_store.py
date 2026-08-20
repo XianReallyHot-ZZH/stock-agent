@@ -136,3 +136,20 @@ def test_industry_boards_and_empty():
     assert len(s.industry_map()) == 0
     s.upsert_industry_members(_ind_frame(), "2026-08-01")
     assert s.industry_boards() == ["酿酒行业", "银行"]  # 升序(SQLite 字节序:酿 U+917F < 银 U+94F6)
+
+
+def test_industry_map_picks_most_specific_level():
+    """申万三级口径下一股挂多层级(电子515 + 半导体185):取成分数最小的最深层级,
+    与行写入顺序无关(两帧插入顺序对调结果一致)。"""
+    stock = pd.DataFrame({
+        "industry": ["电子", "半导体", "电子"],   # 电子 2 行(大板) vs 半导体 1 行(叶子)
+        "code": ["002049", "002049", "600519"],
+        "name": ["紫光国微", "紫光国微", "贵州茅台"],
+    })
+    s1, s2 = _store(), _store()
+    s1.upsert_industry_members(stock, "2026-08-17")
+    s2.upsert_industry_members(stock.iloc[::-1], "2026-08-17")  # 逆序插入
+    for s in (s1, s2):
+        m = s.industry_map()
+        assert m.loc["002049", "industry"] == "半导体"
+        assert m.loc["600519", "industry"] == "电子"

@@ -1786,12 +1786,18 @@ class Store:
 
     def industry_map(self) -> pd.DataFrame:
         """code → industry 映射(indexed by code [industry]；空表 → 空帧)。
-        东财行业板块一股一板块;若数据异常出现多板块,取首个保证 index 唯一。"""
+        东财 2026-08 起板块名切申万三级口径,一股挂多层级(一级+二级+三级);
+        取该股票所属板块中成分数最小者(=最深层级,分类最具体)且与拉取顺序无关。"""
         with self._conn() as c:
-            df = pd.read_sql_query("SELECT code,industry FROM industry_member", c)
+            df = pd.read_sql_query(
+                "SELECT m.code AS code, m.industry AS industry, b.n AS n "
+                "FROM industry_member m JOIN "
+                "(SELECT industry, COUNT(*) AS n FROM industry_member GROUP BY industry) b "
+                "ON m.industry = b.industry "
+                "ORDER BY b.n ASC, m.industry", c)
         if len(df) == 0:
             return pd.DataFrame(columns=["industry"])
-        return df.drop_duplicates("code", keep="first").set_index("code")
+        return df.drop_duplicates("code", keep="first").set_index("code")[["industry"]]
 
     def industry_boards(self) -> list[str]:
         """当前快照的板块名清单(升序)——stock_industry.yaml 未映射 diff 用。"""

@@ -70,10 +70,11 @@ def join_industry(universe: pd.DataFrame, industry_map: pd.DataFrame,
         return str(ind), entry.get("type"), entry.get("commodity")
 
     triples = [_classify(ind) for ind in df.get("industry")]
+    # dtype=object: pandas 3 str dtype 会把 None 强转 NaN,下游 is None 契约会破
     df = df.assign(
-        industry=[t[0] or "未映射" for t in triples],
-        type=[t[1] for t in triples],
-        commodity_variety=[t[2] for t in triples],
+        industry=pd.Series([t[0] or "未映射" for t in triples], index=df.index, dtype="object"),
+        type=pd.Series([t[1] for t in triples], index=df.index, dtype="object"),
+        commodity_variety=pd.Series([t[2] for t in triples], index=df.index, dtype="object"),
     )
     return df.drop(columns=[], errors="ignore")
 

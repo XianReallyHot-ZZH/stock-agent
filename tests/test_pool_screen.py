@@ -38,7 +38,7 @@ def _seed(store: Store):
                         index=["002460", "600519"])
     store.upsert_stock_spot(spot, date=now.strftime("%Y-%m-%d"))
     # ---- industry ----
-    ind = pd.DataFrame({"industry": ["能源金属", "酿酒行业"],
+    ind = pd.DataFrame({"industry": ["能源金属", "白酒Ⅱ"],
                         "code": ["002460", "600519"], "name": ["赣锋锂业", "贵州茅台"]})
     store.upsert_industry_members(ind, snapshot_date=now.strftime("%Y-%m-%d"))
     # ---- prices: 002460 涨后深跌(−52%,触发 S1+S2 深跌);600519 稳步上行 ----

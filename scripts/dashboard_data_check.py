@@ -83,7 +83,7 @@ def _pool_report(store, conn, ref) -> dict:
     ind_last = store.last_industry_snapshot() or "（无）"
     ind_n = _fetch(conn, "SELECT COUNT(DISTINCT industry) FROM industry_member")[0]
     cov = pool_universe.industry_coverage(pool_universe.join_industry(
-        u, store.industry_map(), {}))
+        u, store.industry_map(), get_config().industry_class()))
     n_snap = len(store.consensus_snapshot_dates())
     print(f"候选个股池: universe {len(codes)} 只(consensus {len(cons)} ∩ spot 非 ST)"
           f" · 价格新鲜 {n_fresh}/{len(codes)} · 行业快照 {ind_last}({ind_n} 板块,"

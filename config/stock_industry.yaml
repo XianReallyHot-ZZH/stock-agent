@@ -1,104 +1,473 @@
-# 候选个股池 (V7 pool · 第六看板): 东财行业板块 → 三类粗分 + 周期上游商品映射
+# 候选个股池 (V7 pool · 第六看板): 行业板块 → 三类粗分 + 周期上游商品映射
 #
 # 维护规则:
-#   · 板块名以 ak.stock_board_industry_name_em() 返回为准(东财偶改名,如 中药→中药Ⅱ);
-#     `python scripts/backfill_stock_pool.py --industry` 跑完会打印「未映射板块」清单(带成分数),
+#   · 板块名以 industry_member 快照为准。2026-08-17 起东财端点切申万三级口径(457 板块,
+#     一股挂多层级); store.industry_map() 取成分数最小的最深层级,本表按叶子名映射(旧 86 板块
+#     名已全对不上→0% 覆盖,2026-08-19 按新名单重写)。
+#     `python scripts/backfill_stock_pool.py --industry` 跑完打印「未映射板块」清单(带成分数),
 #     新板块名补进来即可——未映射 = 该板块股票 type=None,不入策略2(策略1/PEAD/变脸不受影响)。
 #   · type: cyclic(周期) / growth(成长) / value(价值)。粗分定位:策略2 的周期腿需要 commodity,
 #     无商品映射的周期板块(中游制造/航运/券商等)诚实不入策略2。
 #   · commodity: 仅 cyclic 上游适用,取 commodity_price 表 13 品种之一
 #     (碳酸锂/铜/铝/锌/螺纹钢/铁矿石/焦煤/黄金/白银/原油/玻璃/纯碱/生猪);
-#     板块级粗映射(如 有色金属→铜,铜/铝/锌混板接受);中游(电池/光伏)价格信号方向不纯,不映射。
-#   · 本清单为 best-effort 初版(2026-08-16 东财端点被拦未能拉 live 名单核对);
-#     名单以未映射 diff 日志为准逐步补齐——错名条目闲置无害,缺名条目诚实降级。
+#     板块级粗映射(如 工业金属→铜,铜/铝/锌混板接受);中游(电池/光伏)价格信号方向不纯,不映射。
+#   · 综合类(综合/综合Ⅱ/综合Ⅲ)故意不映射:无法粗分,诚实 type=None。
 industry_class:
   # —— 周期上游(有商品映射 → 策略2 窗口B 候选) ——
   能源金属:   {type: cyclic, commodity: 碳酸锂}    # 锂钴镍,锂主导
+  锂:         {type: cyclic, commodity: 碳酸锂}
+  钴:         {type: cyclic, commodity: 碳酸锂}    # 电池金属族,锂代理(粗粒度)
+  镍:         {type: cyclic, commodity: 碳酸锂}    # 同上,单只板块
   贵金属:     {type: cyclic, commodity: 黄金}
-  有色金属:   {type: cyclic, commodity: 铜}        # 工业金属混板,铜代理(粗粒度接受)
-  钢铁行业:   {type: cyclic, commodity: 螺纹钢}
-  煤炭行业:   {type: cyclic, commodity: 焦煤}
-  石油行业:   {type: cyclic, commodity: 原油}
+  黄金:       {type: cyclic, commodity: 黄金}
+  白银:       {type: cyclic, commodity: 白银}
+  工业金属:   {type: cyclic, commodity: 铜}        # 铜铝铅锌混板,铜代理(粗粒度接受)
+  铜:         {type: cyclic, commodity: 铜}
+  铝:         {type: cyclic, commodity: 铝}
+  铅锌:       {type: cyclic, commodity: 锌}
+  钢铁:       {type: cyclic, commodity: 螺纹钢}
+  普钢:       {type: cyclic, commodity: 螺纹钢}
+  特钢Ⅱ:     {type: cyclic, commodity: 螺纹钢}
+  特钢Ⅲ:     {type: cyclic, commodity: 螺纹钢}
+  长材:       {type: cyclic, commodity: 螺纹钢}
+  板材:       {type: cyclic, commodity: 螺纹钢}
+  钢铁管材:   {type: cyclic, commodity: 螺纹钢}
+  冶钢原料:   {type: cyclic, commodity: 铁矿石}
+  铁矿石:     {type: cyclic, commodity: 铁矿石}
+  煤炭:       {type: cyclic, commodity: 焦煤}
+  煤炭开采:   {type: cyclic, commodity: 焦煤}
+  焦煤:       {type: cyclic, commodity: 焦煤}
+  焦炭Ⅱ:     {type: cyclic, commodity: 焦煤}      # 焦煤强相关
+  焦炭Ⅲ:     {type: cyclic, commodity: 焦煤}
+  石油石化:   {type: cyclic, commodity: 原油}
+  炼化及贸易: {type: cyclic, commodity: 原油}
+  炼油化工:   {type: cyclic, commodity: 原油}
+  油气开采Ⅱ: {type: cyclic, commodity: 原油}
+  油气开采Ⅲ: {type: cyclic, commodity: 原油}
+  油服工程:   {type: cyclic, commodity: 原油}
+  油田服务:   {type: cyclic, commodity: 原油}
+  油气及炼化工程: {type: cyclic, commodity: 原油}
+  油品石化贸易: {type: cyclic, commodity: 原油}
+  其他石化:   {type: cyclic, commodity: 原油}
   玻璃玻纤:   {type: cyclic, commodity: 玻璃}
-  农牧饲渔:   {type: cyclic, commodity: 生猪}      # 猪周期主导(混合板块,粗分)
-  # —— 周期(无商品映射:中游/运价/地产链,策略2 周期腿不适用) ——
-  基础化学:   {type: cyclic}
-  化肥行业:   {type: cyclic}
-  化学原料:   {type: cyclic}
-  化学制品:   {type: cyclic}
-  农药兽药:   {type: cyclic}
-  化纤行业:   {type: cyclic}
-  塑料制品:   {type: cyclic}
-  橡胶制品:   {type: cyclic}
-  水泥建材:   {type: cyclic}
-  装修建材:   {type: cyclic}
+  玻璃制造:   {type: cyclic, commodity: 玻璃}
+  纯碱:       {type: cyclic, commodity: 纯碱}
+  农林牧渔:   {type: cyclic, commodity: 生猪}      # 猪周期主导(混合板块,粗分;SW1 兜底层)
+  养殖业:     {type: cyclic, commodity: 生猪}      # 混合养殖,生猪主导(粗分)
+  生猪养殖:   {type: cyclic, commodity: 生猪}
+  # —— 周期(无商品映射:小金属/中游/运价/地产链,策略2 周期腿不适用) ——
   小金属:     {type: cyclic}      # 稀土/钨钼,无对应品种
-  采掘行业:   {type: cyclic}
-  燃气:       {type: cyclic}
-  光学光电子: {type: cyclic}      # 面板周期
-  光伏设备:   {type: cyclic}      # 硅料价格周期,中游不映射
-  电池:       {type: cyclic}      # 锂电中游,锂价方向不纯,不映射
-  船舶制造:   {type: cyclic}      # 造船周期
-  航运港口:   {type: cyclic}      # 运价周期(BDI/SCFI 无品种)
+  其他小金属: {type: cyclic}
+  钨:         {type: cyclic}
+  钼:         {type: cyclic}
+  稀土:       {type: cyclic}
+  金属新材料: {type: cyclic}
+  其他金属新材料: {type: cyclic}
+  磁性材料:   {type: cyclic}
+  冶钢辅料:   {type: cyclic}
+  钢结构:     {type: cyclic}
+  动力煤:     {type: cyclic}      # 动力煤与焦煤价格分离,诚实不映射
+  煤化工:     {type: cyclic}
+  玻纤制造:   {type: cyclic}      # 玻纤≠玻璃,价格不同源,不映射
+  肉鸡养殖:   {type: cyclic}      # 鸡价无品种
+  其他养殖:   {type: cyclic}
+  饲料:       {type: cyclic}
+  畜禽饲料:   {type: cyclic}
+  水产饲料:   {type: cyclic}
+  渔业:       {type: cyclic}
+  水产养殖:   {type: cyclic}
+  海洋捕捞:   {type: cyclic}
+  种植业:     {type: cyclic}
+  粮食种植:   {type: cyclic}
+  其他种植业: {type: cyclic}
+  种子:       {type: cyclic}
+  林业Ⅱ:     {type: cyclic}
+  林业Ⅲ:     {type: cyclic}
+  农业综合Ⅱ: {type: cyclic}
+  农业综合Ⅲ: {type: cyclic}
+  动物保健Ⅱ: {type: cyclic}
+  动物保健Ⅲ: {type: cyclic}
+  农产品加工: {type: cyclic}
+  其他农产品加工: {type: cyclic}
+  粮油加工:   {type: cyclic}
+  果蔬加工:   {type: cyclic}
+  食用菌:     {type: cyclic}
+  农用机械:   {type: cyclic}
+  农药:       {type: cyclic}
+  农化制品:   {type: cyclic}
+  磷肥及磷化工: {type: cyclic}
+  复合肥:     {type: cyclic}
+  氮肥:       {type: cyclic}
+  化学原料:   {type: cyclic}
+  其他化学原料: {type: cyclic}
+  其他化学制品: {type: cyclic}
+  塑料:       {type: cyclic}
+  其他塑料制品: {type: cyclic}
+  橡胶:       {type: cyclic}
+  其他橡胶制品: {type: cyclic}
+  橡胶助剂:   {type: cyclic}
+  化学纤维:   {type: cyclic}
+  其他化学纤维: {type: cyclic}
+  化学工程:   {type: cyclic}
+  氯碱:       {type: cyclic}
+  聚氨酯:     {type: cyclic}
+  有机硅:     {type: cyclic}
+  氨纶:       {type: cyclic}
+  涤纶:       {type: cyclic}
+  锦纶:       {type: cyclic}
+  粘胶:       {type: cyclic}
+  纺织化学制品: {type: cyclic}
+  涂料油墨:   {type: cyclic}
+  涂料:       {type: cyclic}
+  钛白粉:     {type: cyclic}
+  炭黑:       {type: cyclic}
+  胶黏剂及胶带: {type: cyclic}
+  合成树脂:   {type: cyclic}
+  无机盐:     {type: cyclic}
+  民爆制品:   {type: cyclic}
+  原料药:     {type: cyclic}      # 原料药价格周期
+  食品及饲料添加剂: {type: cyclic}   # 味精/氨基酸等价格周期
+  建筑材料:   {type: cyclic}      # SW1 兜底层
+  水泥:       {type: cyclic}
+  水泥制造:   {type: cyclic}
+  水泥制品:   {type: cyclic}
+  其他建材Ⅲ: {type: cyclic}
+  装修建材:   {type: cyclic}
+  瓷砖地板:   {type: cyclic}
+  管材:       {type: cyclic}
+  防水材料:   {type: cyclic}
+  耐火材料:   {type: cyclic}
+  磨具磨料:   {type: cyclic}
+  非金属材料Ⅱ: {type: cyclic}
+  非金属材料Ⅲ: {type: cyclic}
+  房地产:     {type: cyclic}      # SW1 兜底层
   房地产开发: {type: cyclic}
-  装修装饰:   {type: cyclic}
-  造纸印刷:   {type: cyclic}
-  包装材料:   {type: cyclic}
-  包装印刷:   {type: cyclic}      # 别名
-  金属制品:   {type: cyclic}
+  住宅开发:   {type: cyclic}
+  商业地产:   {type: cyclic}
+  产业地产:   {type: cyclic}
+  装修装饰Ⅱ: {type: cyclic}
+  装修装饰Ⅲ: {type: cyclic}
+  定制家居:   {type: cyclic}
+  成品家居:   {type: cyclic}
+  家居用品:   {type: cyclic}
+  其他家居用品: {type: cyclic}
+  卫浴制品:   {type: cyclic}
+  轻工制造:   {type: cyclic}      # SW1 兜底层(家居/造纸/包装主导)
+  造纸:       {type: cyclic}
+  特种纸:     {type: cyclic}
+  大宗用纸:   {type: cyclic}
+  印刷:       {type: cyclic}
+  印刷包装机械: {type: cyclic}
+  包装印刷:   {type: cyclic}
+  纸包装:     {type: cyclic}
+  塑料包装:   {type: cyclic}
+  金属包装:   {type: cyclic}
+  综合包装:   {type: cyclic}
+  辅料:       {type: cyclic}
+  棉纺:       {type: cyclic}
+  其他纺织:   {type: cyclic}
+  印染:       {type: cyclic}
+  纺织鞋类制造: {type: cyclic}
+  纺织服装设备: {type: cyclic}
+  电力设备:   {type: cyclic}      # SW1 兜底层(光伏/电池/风电主导)
+  光伏设备:   {type: cyclic}      # 硅料价格周期,中游不映射
+  光伏主材:   {type: cyclic}
+  光伏加工设备: {type: cyclic}
+  光伏电池组件: {type: cyclic}
+  光伏辅材:   {type: cyclic}
+  硅料硅片:   {type: cyclic}
+  逆变器:     {type: cyclic}
+  电池:       {type: cyclic}      # 锂电中游,锂价方向不纯,不映射
+  锂电池:     {type: cyclic}
+  电池化学品: {type: cyclic}
+  蓄电池及其他电池: {type: cyclic}
+  风电设备:   {type: cyclic}
+  风电整机:   {type: cyclic}
+  风电零部件: {type: cyclic}
+  机械设备:   {type: cyclic}      # SW1 兜底层(工程机械/轨交周期族)
   工程机械:   {type: cyclic}      # 挖机周期
-  交运设备:   {type: cyclic}      # 轨交
-  汽车整车:   {type: cyclic}      # 价格战/库存周期
-  证券:       {type: cyclic}      # 市场贝塔周期
+  工程机械整机: {type: cyclic}
+  工程机械器件: {type: cyclic}
+  机床工具:   {type: cyclic}
+  制冷空调设备: {type: cyclic}
+  能源及重型设备: {type: cyclic}
+  其他运输设备: {type: cyclic}
+  航运港口:   {type: cyclic}      # 运价周期(BDI/SCFI 无品种)
+  航运:       {type: cyclic}
+  港口:       {type: cyclic}
+  航海装备Ⅱ: {type: cyclic}      # 造船周期
+  航海装备Ⅲ: {type: cyclic}
+  轨交设备Ⅱ: {type: cyclic}
+  轨交设备Ⅲ: {type: cyclic}
+  汽车:       {type: cyclic}      # SW1 兜底层,价格战/库存周期
+  乘用车:     {type: cyclic}
+  商用车:     {type: cyclic}
+  商用载货车: {type: cyclic}
+  摩托车:     {type: cyclic}
+  摩托车及其他: {type: cyclic}
+  轮胎轮毂:   {type: cyclic}
+  证券Ⅱ:     {type: cyclic}      # 市场贝塔周期
+  非银金融:   {type: cyclic}      # SW1 兜底层(证券主导)
+  光学光电子: {type: cyclic}      # 面板周期
+  面板:       {type: cyclic}
+  LED:        {type: cyclic}
+  光学元件:   {type: cyclic}
+  彩电:       {type: cyclic}      # 黑电=面板周期
+  黑色家电:   {type: cyclic}
+  其他黑色家电: {type: cyclic}
+  燃气Ⅱ:     {type: cyclic}
+  燃气Ⅲ:     {type: cyclic}
   # —— 成长(策略2 成长腿:前瞻g分位+4周上修+已报增速加速) ——
+  电子:       {type: growth}      # SW1 兜底层
   半导体:     {type: growth}
-  电子元件:   {type: growth}
+  半导体材料: {type: growth}
+  半导体设备: {type: growth}
+  数字芯片设计: {type: growth}
+  集成电路制造: {type: growth}
+  集成电路封测: {type: growth}
+  分立器件:   {type: growth}
+  元件:       {type: growth}
+  印制电路板: {type: growth}
+  电子化学品Ⅱ: {type: growth}
   消费电子:   {type: growth}
-  电子化学品: {type: growth}
-  通信设备:   {type: growth}
+  消费电子零部件及组装: {type: growth}
+  品牌消费电子: {type: growth}
+  计算机:     {type: growth}      # SW1 兜底层
   计算机设备: {type: growth}
+  其他计算机设备: {type: growth}
   软件开发:   {type: growth}
-  互联网服务: {type: growth}
-  互联网电商: {type: growth}
-  游戏:       {type: growth}
-  文化传媒:   {type: growth}
-  教育:       {type: growth}
-  航天航空:   {type: growth}      # 军工
-  汽车零部件: {type: growth}      # 智能化/零部件成长
-  美容护理:   {type: growth}
-  医疗器械:   {type: growth}
+  垂直应用软件: {type: growth}
+  IT服务Ⅱ:   {type: growth}
+  IT服务Ⅲ:   {type: growth}
+  安防设备:   {type: growth}
+  金融信息服务: {type: growth}
+  通信:       {type: growth}      # SW1 兜底层
+  通信设备:   {type: growth}
+  通信网络设备及器件: {type: growth}
+  通信终端及配件: {type: growth}
+  其他通信设备: {type: growth}
+  通信线缆及配套: {type: growth}
+  通信工程及服务: {type: growth}
+  通信应用增值服务: {type: growth}
+  国防军工:   {type: growth}      # SW1 兜底层
+  航空装备Ⅱ: {type: growth}
+  航空装备Ⅲ: {type: growth}
+  航天装备Ⅱ: {type: growth}
+  军工电子Ⅱ: {type: growth}
+  军工电子Ⅲ: {type: growth}
+  地面兵装Ⅱ: {type: growth}
+  医药生物:   {type: growth}      # SW1 兜底层
   化学制药:   {type: growth}      # 创新药
+  化学制剂:   {type: growth}
   生物制品:   {type: growth}
+  血液制品:   {type: growth}
+  医疗器械:   {type: growth}
+  医疗设备:   {type: growth}
+  医疗耗材:   {type: growth}
+  体外诊断:   {type: growth}
+  诊断服务:   {type: growth}
   医疗服务:   {type: growth}
-  仪器仪表:   {type: growth}
-  通用设备:   {type: growth}
+  医疗研发外包: {type: growth}
+  其他医疗服务: {type: growth}
+  医院:       {type: growth}
   专用设备:   {type: growth}
+  其他专用设备: {type: growth}
+  仪器仪表:   {type: growth}
+  电工仪器仪表: {type: growth}
+  其他通用设备: {type: growth}
+  工控设备:   {type: growth}
+  自动化设备: {type: growth}
+  其他自动化设备: {type: growth}
+  机器人:     {type: growth}
+  锂电专用设备: {type: growth}
+  燃料电池:   {type: growth}
+  激光设备:   {type: growth}
   电网设备:   {type: growth}
-  电源设备:   {type: growth}
+  电网自动化设备: {type: growth}
+  配电设备:   {type: growth}
+  输变电设备: {type: growth}
   电机Ⅱ:     {type: growth}
-  电机:       {type: growth}      # 别名(无Ⅱ)
+  电机Ⅲ:     {type: growth}
+  其他电源设备Ⅱ: {type: growth}
+  其他电源设备Ⅲ: {type: growth}
+  综合电力设备商: {type: growth}
+  汽车零部件: {type: growth}      # 智能化/零部件成长
+  底盘与发动机系统: {type: growth}
+  其他汽车零部件: {type: growth}
+  汽车电子电气系统: {type: growth}
+  线缆部件及其他: {type: growth}
+  电动乘用车: {type: growth}
+  家电零部件Ⅱ: {type: growth}
+  家电零部件Ⅲ: {type: growth}
+  互联网电商: {type: growth}
+  跨境电商:   {type: growth}
+  电商服务:   {type: growth}
+  传媒:       {type: growth}      # SW1 兜底层
+  游戏Ⅱ:     {type: growth}
+  数字媒体:   {type: growth}
+  其他数字媒体: {type: growth}
+  视频媒体:   {type: growth}
+  图片媒体:   {type: growth}
+  影视动漫制作: {type: growth}
+  影视院线:   {type: growth}
+  院线:       {type: growth}
+  广告营销:   {type: growth}
+  广告媒体:   {type: growth}
+  营销代理:   {type: growth}
+  门户网站:   {type: growth}
+  培训教育:   {type: growth}
+  学历教育:   {type: growth}
+  教育运营及其他: {type: growth}
+  体育Ⅱ:     {type: growth}
+  体育Ⅲ:     {type: growth}
+  美容护理:   {type: growth}
+  化妆品:     {type: growth}
+  品牌化妆品: {type: growth}
+  个护用品:   {type: growth}
+  医疗美容:   {type: growth}
+  医美服务:   {type: growth}
+  医美耗材:   {type: growth}
+  宠物食品:   {type: growth}
+  检测服务:   {type: growth}
   # —— 价值(v1 无「猛」概念,不入策略2;S1/PEAD/变脸照常) ——
   银行:       {type: value}
-  保险:       {type: value}
+  银行Ⅱ:     {type: value}
+  国有大型银行Ⅲ: {type: value}
+  股份制银行Ⅲ: {type: value}
+  城商行Ⅲ:   {type: value}
+  农商行Ⅲ:   {type: value}
+  保险Ⅱ:     {type: value}
+  保险Ⅲ:     {type: value}
   多元金融:   {type: value}
-  电力行业:   {type: value}
-  通信服务:   {type: value}
-  家电行业:   {type: value}
-  食品饮料:   {type: value}
-  酿酒行业:   {type: value}
-  纺织服装:   {type: value}
-  医药商业:   {type: value}
+  信托:       {type: value}
+  期货:       {type: value}
+  资产管理:   {type: value}
+  金融控股:   {type: value}
+  公用事业:   {type: value}      # SW1 兜底层
+  电力:       {type: value}
+  火力发电:   {type: value}
+  水力发电:   {type: value}
+  核力发电:   {type: value}
+  风力发电:   {type: value}
+  光伏发电:   {type: value}
+  其他能源发电: {type: value}
+  电能综合服务: {type: value}
+  热力服务:   {type: value}
+  水务及水治理: {type: value}
+  食品饮料:   {type: value}      # SW1 兜底层
+  白酒Ⅱ:     {type: value}
+  白酒Ⅲ:     {type: value}
+  啤酒:       {type: value}
+  非白酒:     {type: value}
+  其他酒类:   {type: value}
+  软饮料:     {type: value}
+  饮料乳品:   {type: value}
+  乳品:       {type: value}
+  休闲食品:   {type: value}
+  零食:       {type: value}
+  烘焙食品:   {type: value}
+  预加工食品: {type: value}
+  食品加工:   {type: value}
+  调味发酵品Ⅱ: {type: value}
+  调味发酵品Ⅲ: {type: value}
+  保健品:     {type: value}
+  肉制品:     {type: value}
+  家用电器:   {type: value}      # SW1 兜底层
+  白色家电:   {type: value}
+  空调:       {type: value}
+  小家电:     {type: value}
+  厨房小家电: {type: value}
+  清洁小家电: {type: value}
+  个护小家电: {type: value}
+  厨房电器:   {type: value}
+  厨卫电器:   {type: value}
+  卫浴电器:   {type: value}
+  其他家电Ⅱ: {type: value}
+  其他家电Ⅲ: {type: value}
+  照明设备Ⅱ: {type: value}
+  照明设备Ⅲ: {type: value}
+  服装家纺:   {type: value}      # SW1 兜底层
+  非运动服装: {type: value}
+  运动服装:   {type: value}
+  家纺:       {type: value}
+  鞋帽及其他: {type: value}
+  洗护用品:   {type: value}
+  文化用品:   {type: value}
+  文娱用品:   {type: value}
+  娱乐用品:   {type: value}
+  钟表珠宝:   {type: value}
+  饰品:       {type: value}
+  其他饰品:   {type: value}
+  生活用纸:   {type: value}
   中药Ⅱ:     {type: value}
-  中药:       {type: value}       # 别名
-  商业百货:   {type: value}
-  超市零售:   {type: value}
-  超市连锁:   {type: value}       # 别名
-  贸易行业:   {type: value}
-  物流行业:   {type: value}
-  铁路公路:   {type: value}
-  航空机场:   {type: value}
-  房地产服务: {type: value}
-  工程建设:   {type: value}
-  环保行业:   {type: value}
+  中药Ⅲ:     {type: value}
+  医药商业:   {type: value}
+  医药流通:   {type: value}
+  线下药店:   {type: value}
+  商贸零售:   {type: value}      # SW1 兜底层
+  一般零售:   {type: value}
+  百货:       {type: value}
+  多业态零售: {type: value}
+  超市:       {type: value}
+  专业连锁Ⅱ: {type: value}
+  专业连锁Ⅲ: {type: value}
+  贸易Ⅱ:     {type: value}
+  贸易Ⅲ:     {type: value}
+  商业物业经营: {type: value}
+  旅游零售Ⅱ: {type: value}
+  旅游零售Ⅲ: {type: value}
   专业服务:   {type: value}
+  人力资源服务: {type: value}
+  会展服务:   {type: value}
+  其他专业服务: {type: value}
+  交通运输:   {type: value}      # SW1 兜底层(物流/铁路/航空主导)
+  物流:       {type: value}
+  仓储物流:   {type: value}
+  跨境物流:   {type: value}
+  端到端供应链服务: {type: value}
+  原材料供应链服务: {type: value}
+  公路货运:   {type: value}
+  铁路公路:   {type: value}
+  高速公路:   {type: value}
+  铁路运输:   {type: value}
+  航空机场:   {type: value}
+  机场:       {type: value}
+  航空运输:   {type: value}
   汽车服务:   {type: value}
+  汽车经销商: {type: value}
+  汽车综合服务: {type: value}
+  建筑装饰:   {type: value}      # SW1 兜底层(基建央企红利主导)
+  基础建设:   {type: value}
+  基建市政工程: {type: value}
+  房屋建设Ⅱ: {type: value}
+  房屋建设Ⅲ: {type: value}
+  专业工程:   {type: value}
+  其他专业工程: {type: value}
+  园林工程:   {type: value}
+  工程咨询服务Ⅱ: {type: value}
+  工程咨询服务Ⅲ: {type: value}
+  房地产服务: {type: value}
+  房地产综合服务: {type: value}
+  物业管理:   {type: value}
+  环保:       {type: value}      # SW1 兜底层
+  环境治理:   {type: value}
+  综合环境治理: {type: value}
+  固废治理:   {type: value}
+  大气治理:   {type: value}
+  环保设备Ⅱ: {type: value}
+  环保设备Ⅲ: {type: value}
+  社会服务:   {type: value}      # SW1 兜底层(旅游/酒店主导)
+  旅游及景区: {type: value}
+  自然景区:   {type: value}
+  人工景区:   {type: value}
+  旅游综合:   {type: value}
+  酒店:       {type: value}
+  酒店餐饮:   {type: value}
+  餐饮:       {type: value}
+  出版:       {type: value}      # 教材教辅稳定现金流
+  大众出版:   {type: value}
+  教育出版:   {type: value}
+  电视广播Ⅱ: {type: value}
+  电视广播Ⅲ: {type: value}
+  通信服务:   {type: value}
+  电信运营商: {type: value}
