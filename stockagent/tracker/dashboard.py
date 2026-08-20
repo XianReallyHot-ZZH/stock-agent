@@ -108,9 +108,9 @@ def _deviation_figure(sym: str, name: str, df: pd.DataFrame, period: int = ti.MA
         chip = ""
         if not pd.isna(cur_pct):
             if cur_pct <= 0.05:
-                chip = f" ·超卖区({cur_pct:.0%})"
+                chip = f" ·超卖区({cur_pct:.1%})"
             elif cur_pct >= 0.95:
-                chip = f" ·超买区({cur_pct:.0%})"
+                chip = f" ·超买区({cur_pct:.1%})"
         fig.add_trace(go.Scatter(x=[idx[-1]], y=[cur_dev], mode="markers+text",
                                  marker=dict(size=11, color=_PAL["ink"],
                                              line=dict(color=_PAL["surface"], width=1)),
@@ -157,7 +157,7 @@ def _trend_table_html(diag: dict) -> str:
         else:
             bo_label, bo_c = "中性", _PAL["muted"]
         choppy = f'<span style="color:{_PAL["warning"]}">⚠震荡</span>' if dg["choppy"] else "趋势"
-        dev_txt = (f"{dev['cur_dev']:+.1%} / {dev['pct']:.0%}位"
+        dev_txt = (f"{dev['cur_dev']:+.1%} / {dev['pct']:.1%}位"
                    if not pd.isna(dev["pct"]) and not pd.isna(dev["cur_dev"]) else "—")
         rows.append(
             f"<tr><td>{info['name']}</td>"
@@ -589,7 +589,7 @@ def _cycle_stage_chip(diag: dict) -> str:
         if pct is not None and not pd.isna(pct) and (pct <= 0.05 or pct >= 0.95):
             extremes.append((info["name"], pct))
     if extremes:
-        ext_txt = "、".join(f"{n}偏离{p:.0%}" for n, p in extremes[:2])
+        ext_txt = "、".join(f"{n}偏离{p:.1%}" for n, p in extremes[:2])
     else:
         ext_txt = "宽基偏离均中性"
     return (f"<div class='hint' style='margin-bottom:12px'>📍 周期定位:估值『{val_zone}』· {ext_txt}"
