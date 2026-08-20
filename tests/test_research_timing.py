@@ -371,3 +371,104 @@ def test_timing_snapshot_chip_uses_split_adjusted_shares():
     assert snap["chip"]["data_sufficient"] is True
     assert snap["chip"]["state"] == "flat"          # 前复权后各窗口 flow≈0（原始口径会是 +100% → 假 accumulating）
     assert max(abs(v) for v in snap["chip"]["flows"].values()) < 0.01
+
+
+# ---------------- latest_daily_flow（最新日净申赎 · 当日脉搏） ----------------
+def test_latest_daily_flow_basic_extreme_high():
+    # 299 日平坦 + 末日 +2% 净申购：pct=+2%，其余全 0 → 带符号分位=100%（史上最大申购日）
+    n = 300
+    idx = _idx(n)
+    adj = pd.Series(np.full(n, 1e9), index=idx)
+    adj.iloc[-1] = 1.02e9
+    nav = pd.Series(np.full(n, 2.0), index=idx)
+    r = tm.latest_daily_flow(adj, nav, min_history=250)
+    assert r["data_sufficient"] is True
+    assert abs(r["pct"] - 2.0) < 1e-9
+    assert r["pctile"] == 1.0                       # 全历史严格小于今日
+    assert abs(r["flow_yi"] - 0.02 * 1e9 * 2.0 / 1e8) < 1e-6   # +0.4亿
+    assert r["date"] == str(idx[-1].date())
+    assert r["n_history"] == n - 1
+
+
+def test_latest_daily_flow_extreme_low_and_mid():
+    # 末日 -5% 净赎回（史上最大异动日·双向口径）→ |x| 分位 1.0（方向由符号/着色表达）
+    n = 300
+    idx = _idx(n)
+    base = np.concatenate([np.full(n - 1, 1e9), [0.95e9]])
+    r = tm.latest_daily_flow(pd.Series(base, index=idx),
+                             pd.Series(np.full(n, 2.0), index=idx))
+    assert r["pctile"] == 1.0
+    # 波动序列，末日|变化率|取历史|变化率|中位 → 绝对值分位应落在中部
+    rng = np.random.default_rng(7)
+    sh = 1e9 * np.cumprod(1 + rng.normal(0, 0.005, n))
+    med_abs = np.median(np.abs(np.diff(sh) / sh[:-1]))
+    sh[-1] = sh[-2] * (1 + med_abs)
+    r2 = tm.latest_daily_flow(pd.Series(sh, index=idx), None)
+    assert 0.2 < r2["pctile"] < 0.8
+    assert np.isnan(r2["flow_yi"])                  # 无 unit_nav → 金额缺、%/分位照常
+
+
+def test_latest_daily_flow_side_pctile_beats_abs_on_skew():
+    """方向内分位 vs 绝对值分位的语义差（2026-08 定稿原因）：申购端尾巴更肥的
+    历史里，史上最大赎回日 按方向=100%（赎回向第一），绝对值口径被 +7% 申购日
+    压低 <100%——前者才是「这个方向空前」的忠实表达。"""
+    n = 300
+    idx = _idx(n)
+    rng = np.random.default_rng(3)
+    chg = rng.normal(0.0, 0.008, n)                 # 双向小波动
+    chg[50] = 0.07                                  # 一次 +7% 巨额申购(史上最肥)
+    chg[-1] = -0.05                                 # 末日 -5%：史上最大赎回
+    sh = 1e9 * np.cumprod(1 + chg)
+    r = tm.latest_daily_flow(pd.Series(sh, index=idx),
+                             pd.Series(np.full(n, 2.0), index=idx))
+    assert r["pctile_kind"] == "side"
+    assert r["pctile"] == 1.0                       # 赎回向史上第一
+    # 绝对值口径下它排在 +7% 之后 → <100%（对照：横幅的双向分位）
+    pct = pd.Series(chg).iloc[1:]
+    abs_rank = float(pct.abs().rank(method="average", pct=True).iloc[-1])
+    assert abs_rank < 1.0
+
+
+def test_latest_daily_flow_side_fallback_to_abs():
+    """某方向样本 < side_min_obs → 诚实退绝对值双向分位（kind="abs"）。"""
+    n = 300
+    idx = _idx(n)
+    rng = np.random.default_rng(5)
+    chg = np.abs(rng.normal(0.004, 0.004, n))       # 几乎全申购的历史
+    chg[-1] = -0.03                                 # 末日罕见赎回: 赎回侧样本=1
+    sh = 1e9 * np.cumprod(1 + chg)
+    r = tm.latest_daily_flow(pd.Series(sh, index=idx), None)
+    assert r["pctile_kind"] == "abs" and r["n_side"] == 1
+    assert r["pctile"] == 1.0                       # 绝对值口径仍是史上最大异动
+
+
+def test_latest_daily_flow_min_history_gate():
+    n = 100
+    idx = _idx(n)
+    adj = pd.Series(np.linspace(1e8, 1.3e8, n), index=idx)
+    r = tm.latest_daily_flow(adj, pd.Series(np.full(n, 2.0), index=idx), min_history=250)
+    assert r["data_sufficient"] is False
+    assert r["n_history"] == n - 1                  # 诚实报历史长度
+    assert tm.latest_daily_flow(None, None)["data_sufficient"] is False
+
+
+def test_timing_snapshot_includes_daily_flow():
+    # 快照接线：daily_flow 随 snapshot 返回，日期=份额末日；金额用 unit_nav 口径
+    n = 300
+    idx = _idx(n)
+    nav_df = pd.DataFrame({"unit_nav": np.full(n, 2.0),
+                           "acc_nav": np.linspace(1.0, 1.2, n)}, index=idx)
+    sh = np.full(n, 1e9)
+    sh[-1] = 1.01e9                                 # 末日 +1% 净申购
+    snap = tm.timing_snapshot(nav_df, pd.DataFrame({"shares": sh}, index=idx), ma_period=60)
+    dfl = snap["daily_flow"]
+    assert dfl["data_sufficient"] is True
+    assert dfl["date"] == str(idx[-1].date())
+    assert abs(dfl["pct"] - 1.0) < 1e-9
+    assert dfl["pctile"] == 1.0                     # 唯一非零日 → 史上最大申购日
+
+
+def test_timing_snapshot_insufficient_path_has_daily_flow_key():
+    nav_df = pd.DataFrame({"acc_nav": np.linspace(1, 1.1, 30)}, index=_idx(30))
+    snap = tm.timing_snapshot(nav_df, None, ma_period=60)
+    assert snap["daily_flow"]["data_sufficient"] is False

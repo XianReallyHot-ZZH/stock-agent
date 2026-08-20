@@ -819,7 +819,7 @@ def flow_events_strip_figure(flow: dict) -> go.Figure:
                         line=dict(color="white", width=1)),
             customdata=cds,
             hovertemplate=("%{customdata[0]}<br>%{x|%Y-%m-%d} · %{customdata[2]:+.1f}亿"
-                           "<br>日增减 %{customdata[3]:+.1%} · 历史分位 %{customdata[4]:.1%}"
+                           "<br>日增减 %{customdata[3]:+.1%} · 方向内分位 %{customdata[4]:.1%}"
                            "<extra></extra>")))
     fig.update_layout(height=230, template=_TEMPLATE, hovermode="closest",
                       showlegend=True, legend=dict(orientation="h", yanchor="bottom",
@@ -836,14 +836,14 @@ def flow_events_strip_figure(flow: dict) -> go.Figure:
 
 def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
     """📡 申赎异动横幅：最近大额申赎事件台账（|日增减%|≥自身历史分位 且 ≥金额
-    地板），点条目跳该 ETF 日度净申赎图。近1年扫描、最新在前（新事件顶旧事件），
+    地板），点条目跳该 ETF 日度净申赎图。近1月扫描、最新在前（新事件顶旧事件），
     最新交易日事件加「最新」徽标。无命中也常驻（安静占位）。纯观察·非买卖建议。"""
     events = flow.get("events") or []
     last_date = flow.get("last_date")
     if not events:
         body = ('<span class="xb-sub muted">近一个月无大额申赎命中 —— 安静窗口属正常。'
-                '判定：|日增减%| ≥ 自身历史99%分位 <b>且</b> |净申赎额| ≥ 1亿'
-                '（阈值可调 params.research.flow.alert）</span>')
+                '判定：日增减% ≥ 自身<b>方向</b>历史99%分位（申购日比申购日·赎回日比赎回日）<b>且</b> |净申赎额| ≥ 1亿'
+                '（申购日比申购日·赎回日比赎回日·某方向样本<30日退双向；阈值可调 params.research.flow.alert）</span>')
     else:
         shown = events[:top_n]
         items = []
@@ -856,7 +856,8 @@ def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
                 f'<span class="xb-item"><a href="#{ev["symbol"]}" class="xb-link">{nm}({ev["symbol"]})</a> '
                 f'{badge}<b class="{cls}">{arrow} {ev["flow_yi"]:+.1f}亿</b> '
                 f'<span class="xb-sub">{ev["date"]} · 日增减 {ev["pct"]:+.1%} · '
-                f'历史分位 {ev["pctile"]:.1%}</span></span>')
+                f'{("申购向" if ev["side"] == "in" else "赎回向") if ev.get("pctile_kind") == "side" else "双向"}'
+                f'分位 {ev["pctile"]:.1%}</span></span>')
         more = (f'<span class="xb-sub">…另有 {len(events) - top_n} 条</span>'
                 if len(events) > top_n else "")
         body = "".join(items) + more
@@ -864,7 +865,7 @@ def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
         '<div class="extreme-banner">'
         '<div class="extreme-title">📡 申赎异动 · 最近大额申赎事件（近1月） '
         '<span class="xb-note">时间条带：上轨=净申购(红)/下轨=净赎回(绿)·点大小∝金额·点悬停看详情·**点击点跳该ETF** · '
-        '|日增减%|≥自身历史99%分位 且 ≥1亿 · 流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议</span></div>'
+        '日增减%≥自身方向历史99%分位 且 ≥1亿 · 流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议</span></div>'
         + ('<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
            'style="min-height:230px"></div></div>' if events else "")
         + f'<div class="xb-list">{body}</div></div>')
@@ -985,7 +986,6 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
 
         to = snap.get("turnover_5d_yi")
         to_html = f"{to:.1f}亿" if not _nan(to) else "—"
-
         # 筹码方向 cell（份额申赎 · 机构行为代理）：主窗口值 + 方向 + 多窗口带标签直接展示
         chip = snap.get("chip") or {}
         if chip.get("data_sufficient") and not _nan(chip.get("flow_main")):
@@ -1000,16 +1000,42 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
         else:
             chip_cell = "<td class='c'><span class='ghost'>—</span></td>"
 
+        # 最新日净申赎 cell（当日脉搏 · 与筹码列的平滑中期票互补）：
+        # 主值=金额亿（Δ份额×当日unit_nav·拆分已调整），副行=日增减% + 自身全历史
+        # 带符号分位；≥95% 红=罕见大额净申购 / ≤5% 绿=罕见大额净赎回（A股资金流
+        # 语义·与筹码列相反，读图说明④注明）。历史不足250日 → 诚实显示 —。
+        dfl = snap.get("daily_flow") or {}
+        fy = dfl.get("flow_yi")
+        if dfl.get("data_sufficient") and not _nan(dfl.get("pct")):
+            fy_html = f"{fy:+.2f}亿" if not _nan(fy) else "—"
+            pt = dfl["pctile"]
+            # 分位标签：按方向各自统计（申购向/赎回向·方向内强度温度计），某方向
+            # 样本太少退双向（绝对值·与📡横幅同式）——两个口径回答不同问题，
+            # 不同名不同义，防「对不上」的困惑（2026-08 两轮口径修正后定稿）
+            if dfl.get("pctile_kind") == "side":
+                lbl = "申购向分位" if dfl["pct"] >= 0 else "赎回向分位"
+            else:
+                lbl = "双向分位"
+            hot = ("flow-hot" if dfl["pct"] > 0 else "flow-cold") if pt >= 0.95 else ""
+            pt_html = f"{lbl}<b class='{hot}'>{_fmt_pctile(pt)}</b>" if hot else f"{lbl}{_fmt_pctile(pt)}"
+            n_side = dfl.get("n_side")
+            flow_cell = (f"<td class='c bold' title=\"{dfl.get('date') or ''} · 最新日净申赎"
+                         f" · {lbl[:-2]}样本{n_side}日\">"
+                         f"{fy_html}"
+                         f"<br><span class='sub2 muted'>{dfl['pct']:+.1f}% · {pt_html}</span></td>")
+        else:
+            flow_cell = "<td class='c'><span class='ghost'>—</span></td>"
         out += (
             f"<tr data-name=\"{nm}\" data-style=\"{style}\" "
             f"data-dev=\"{_num_attr(cur)}\" data-pct=\"{_num_attr(pct)}\" "
             f"data-aum=\"{_num_attr(aum, 1)}\" data-turnover=\"{_num_attr(to, 1)}\" "
             f"data-chip=\"{_num_attr((snap.get('chip') or {}).get('flow_main'))}\" "
+            f"data-flow=\"{_num_attr(fy)}\" "
             f"data-earn=\"{_num_attr(snap.get('consensus_g'))}\">"
             f"<td><b><a href='#{sym}' class='etf-link'>{nm}</a></b>"
             f"<br><span class='sub2 muted'>{sym}</span>{aum_html}</td>"
             f"<td class='c bold {style_cls}'>{style_cn}{group_html}</td>"
-            f"{dev_cell}{sc_cell}{chip_cell}"
+            f"{dev_cell}{sc_cell}{chip_cell}{flow_cell}"
             f"{_earnings_cell(snap)}"
             f"<td class='c text2'>{to_html}</td></tr>"
         )
@@ -1131,6 +1157,13 @@ def flow_daily_figure(label: str, shares_df, nav_df):
     return fig
 
 
+def _fmt_pctile(pt: float) -> str:
+    """分位显示：着色区(≥95%·与📡横幅交叉对照的行)与低端(≤0.5%)用一位小数——
+    与横幅 :.1% 逐字一致且 :.0% 会把 99.3%/99.6% 圆成「99%/100%」抹掉差异；
+    其余整数保持列宽（2026-08 两次修正：圆整假象 + 列/横幅口径分裂）。"""
+    return f"{pt:.1%}" if (pt >= 0.95 or pt <= 0.005) else f"{pt:.0%}"
+
+
 def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int) -> list:
     """每 ETF 明细图组：份额 vs 净值（剪刀差叠加）+ 净值-MA 偏离度（极值标记 + 分位）
     + 日度净申赎（事件级：柱=亿元·线=%）。"""
@@ -1184,6 +1217,9 @@ p.sub { color:var(--muted); font-size:13px; margin-top:2px; }
 /* 语义色（深浅色各一套） */
 .c-pos { color:#ea580c; } body.dark .c-pos { color:#fb923c; }
 .c-neg { color:#2563eb; } body.dark .c-neg { color:#60a5fa; }
+/* 日申赎列极端分位（A股资金流语义：红=巨额净申购/绿=巨额净赎回·与筹码列相反） */
+.flow-hot { color:#dc2626; } body.dark .flow-hot { color:#f87171; }
+.flow-cold { color:#16a34a; } body.dark .flow-cold { color:#4ade80; }
 .st-value { color:#16a34a; } body.dark .st-value { color:#4ade80; }
 .st-growth { color:#2563eb; } body.dark .st-growth { color:#60a5fa; }
 .st-cyclic { color:#ea580c; } body.dark .st-cyclic { color:#fb923c; }
@@ -1616,6 +1652,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                     f'<th data-key="dev" data-type="num">净值MA{ma_period}偏离<sup style="font-size:9px">分位</sup></th>'
                     '<th>份额/净值剪刀差</th>'
                     '<th data-key="chip" data-type="num">筹码<sub style="font-size:9px">20日</sub></th>'
+                    '<th data-key="flow" data-type="num">日申赎<sub style="font-size:9px">当日脉搏</sub></th>'
                     '<th data-key="earn" data-type="num">业绩预期<sup style="font-size:9px">信息·预期g</sup></th>'
                     '<th data-key="turnover" data-type="num">成交<sub style="font-size:9px">5日</sub></th></tr>')
     tabs_html = (
@@ -1648,7 +1685,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                   "「板块间流向」是推断非直接观测（申赎是独立净额·资金来源无标签，存量约束下的此消彼长"
                   "=跷跷板最强证据）；本池是精选池非全市场，流出可能去了池外主题ETF（代表性偏差）；"
                   "拆分/折算已做前复权（份额×净值反向断崖检测），不计入流入。<br>"
-                  + ("⑤ <b>申赎异动台账</b>：近1年扫描 |日增减%| 进入自身历史99%分位 且 ≥1亿 的单日大额"
+                  + ("⑤ <b>申赎异动台账</b>：近1月扫描 日增减% 进入自身<b>方向</b>历史99%分位（申购日比申购日·赎回日比赎回日·2026-08 与排名表「日申赎」列统一口径·同日数字互证） 且 ≥1亿 的单日大额"
                      "申赎事件，最新8条滚动展示（新事件顶旧事件·供回检）；全历史分位·纯观察不防前视；"
                      "流入≠看好。点击条目跳该ETF的日度净申赎图看事件细节。<br>" if flow_events_html else ""))
     earn_guide = ("⑥ <b>业绩预期列（信息层）</b>：上=最新披露窗口的<b>业绩预告</b>聚合（多/空=预喜/预亏类型"
@@ -1674,7 +1711,7 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
 <details class="guide"><summary>📖 读图说明 · 偏离度 / 剪刀差（点击展开）</summary>
 <div class="guide-body">本看板跟踪三件事——① <b>净值-MA{ma_period}偏离度</b>：净值相对自身均线的偏离 + 历史百分位分位（0=最负/超卖…1=最正/超买），副图标历史极值「第几低/高」（1=史上最极端，纯观察）。
 ② <b>份额-净值剪刀差</b>：份额与净值走向分化（一升一降）时置灰标注漂移幅度与窗口天数；检不出干净分化则只画原始双线。
-③ <b>偏离度×筹码 四象限提醒</b>：偏离度进入自身历史 5%/95% 极端分位 × 筹码方向（份额申赎 5/10/20/30/60 日近端等差加权投票·±1% 死区·阈值2，机构行为代理·主体不可辨）交叉——超卖+筹码增=🟢机会（深跌有承接）/超买+筹码减=🟠风险（高位兑现）/超卖+筹码减=🔴严重警告（深跌无承接）/超买+筹码增=🔵关注（惯性未死）。筹码多窗口值（5/10/20/30/60 日净变化率）在排名表第二行与四象限条目下直接展示，一眼看申赎节奏。观察坐标·非买卖建议。<br>
+③ <b>偏离度×筹码 四象限提醒</b>：偏离度进入自身历史 5%/95% 极端分位 × 筹码方向（份额申赎 5/10/20/30/60 日近端等差加权投票·±1% 死区·阈值2，机构行为代理·主体不可辨）交叉——超卖+筹码增=🟢机会（深跌有承接）/超买+筹码减=🟠风险（高位兑现）/超卖+筹码减=🔴严重警告（深跌无承接）/超买+筹码增=🔵关注（惯性未死）。筹码多窗口值（5/10/20/30/60 日净变化率）在排名表第二行与四象限条目下直接展示，一眼看申赎节奏。<b>排名表「日申赎」列=当日脉搏</b>：最新交易日净申赎额（亿元=Δ份额×当日单位净值·拆分已调整）+ 份额日增减% + <b>方向内</b>自身全历史分位——申购日在全部申购日里排名（申购向分位）/赎回日在全部赎回日里排名（赎回向分位）：红绿着色表达方向、分位也按方向总体算（绝对值口径会把某方向史上空前的极端被另一方向更肥的尾巴压低分位）。某方向样本&lt;30日退「双向分位」（绝对值·横幅同规则降级）。分位≥95% 着色：正=红（该方向罕见大额）/负=绿——A股资金流语义·与筹码列颜色相反。<b>与「📡申赎异动」横幅同式同源：本列=最新日全量展示，横幅=近月≥99%分位+1亿地板过滤的子集，同日数字互证。</b>单日噪音大：当日脉搏看此列、中期节奏看筹码多窗口；历史不足250日诚实显示—。观察坐标·非买卖建议。<br>
 {flow_guide}{earn_guide}表格点击表头可排序；逐标的明细默认折叠，点击行展开，或用右侧下拉快速跳转。</div></details>
 {summary_html}
 {extreme_banner_html}

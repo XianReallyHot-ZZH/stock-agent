@@ -320,31 +320,47 @@ def group_monthly_matrix(panel: dict, groups: dict[str, list[str]],
 # ---------------------------------------------------------------------------
 
 def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.0,
-                      scan_days: int = 22, min_history: int = 250) -> list[dict]:
+                      scan_days: int = 22, min_history: int = 250,
+                      side_min_obs: int = 30) -> list[dict]:
     """最近申赎异动事件（近 scan_days≈1 个月）：全部命中按日期降序返回，
     截断/展示由 report 层做（条带图全画、文字台账取前 N）。
 
     判定（自适应每只 ETF 自身波动性 + 金额地板滤小钱噪声）：
-      |日增减%|（Δ份额/前日份额·拆分前复权口径）≥ 自身历史 pctile 分位
+      日增减%（Δ份额/前日份额·拆分前复权口径）≥ 自身**方向**历史 pctile 分位
       且 |当日净申赎额|（亿元）≥ floor_yi。
+    分位**按方向各自统计**（2026-08 与排名表「日申赎」列统一口径·同式同源·
+    同日数字互证）：申购日在全部申购日里按幅度排名 / 赎回日在全部赎回日里——
+    比绝对值口径更忠实于「罕见的大额申购/赎回」：申购端 routinely 有大脉冲的
+    ETF 一次常规量级申购不该上榜；空前的赎回也不该被更肥的申购尾巴掩盖。
+    某方向样本 < side_min_obs → 该方向退绝对值双向分位（kind="abs" 诚实降级）。
     分位为**全历史**口径（含事件当日自身；纯观察·与偏离度分位同哲学·不防前视）。
     有效观测 < min_history 的 ETF 跳过（历史太短分位不可靠）。
 
-    Returns: [{symbol, date, flow_yi, pct, pctile, side('in'/'out')}, ...]"""
+    Returns: [{symbol, date, flow_yi, pct, pctile, pctile_kind('side'/'abs'),
+               side('in'/'out')}, ...]"""
     events: list[dict] = []
     for sym, p in panel.items():
         pct = p["shares"].pct_change().dropna()
         if len(pct) < min_history:
             continue
-        ranks = pct.abs().rank(method="average", pct=True)
+        pos, neg = pct[pct >= 0], pct[pct < 0]
+        rank_pos = pos.abs().rank(method="average", pct=True) if len(pos) >= side_min_obs else None
+        rank_neg = neg.abs().rank(method="average", pct=True) if len(neg) >= side_min_obs else None
+        rank_abs = pct.abs().rank(method="average", pct=True)
         flow = p["flow"]
         for d in pct.index[-scan_days:]:
             f = flow.get(d)
             if f is None or f != f or abs(float(f)) < floor_yi:
                 continue
-            if float(ranks.loc[d]) >= pctile:
+            v = float(pct.loc[d])
+            r_side = rank_pos if v >= 0 else rank_neg
+            if r_side is not None:
+                ptd, kind = float(r_side.loc[d]), "side"
+            else:
+                ptd, kind = float(rank_abs.loc[d]), "abs"
+            if ptd >= pctile:
                 events.append({"symbol": sym, "date": d, "flow_yi": float(f),
-                               "pct": float(pct.loc[d]), "pctile": float(ranks.loc[d]),
-                               "side": "in" if float(pct.loc[d]) > 0 else "out"})
+                               "pct": v, "pctile": ptd, "pctile_kind": kind,
+                               "side": "in" if v > 0 else "out"})
     events.sort(key=lambda e: (e["date"], abs(e["flow_yi"])), reverse=True)
     return events

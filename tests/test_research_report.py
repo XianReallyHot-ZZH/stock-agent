@@ -227,9 +227,9 @@ def test_flow_events_banner_present_and_absent():
     base = _flow_mini()
     base["events"] = [
         {"symbol": "512800", "date": "2026-08-14", "flow_yi": 38.2, "pct": 0.084,
-         "pctile": 0.996, "side": "in"},
+         "pctile": 0.996, "pctile_kind": "side", "side": "in"},
         {"symbol": "512070", "date": "2026-08-12", "flow_yi": -21.0, "pct": -0.031,
-         "pctile": 0.992, "side": "out"},
+         "pctile": 0.992, "pctile_kind": "side", "side": "out"},
     ]
     base["last_date"] = "2026-08-14"
     snaps = {"159915": {"nav_dev_pct": 0.5, "nav_dev_cur": 0.0, "nav_extreme_events": [],
@@ -243,7 +243,7 @@ def test_flow_events_banner_present_and_absent():
     assert html.count('class="lazy-chart" data-sym="__flow"') == 2   # 线图+条带
     assert "净申购" in html.split("净申购")[0] or True  # placeholder
     assert 'href="#512800"' in html and "净申购 +38.2亿" in html
-    assert "净赎回 -21.0亿" in html and "历史分位 99.6%" in html
+    assert "净赎回 -21.0亿" in html and "申购向分位 99.6%" in html and "赎回向分位 99.2%" in html
     assert 'class="flow-ev-today">最新</b>' in html           # 最新日事件有徽标
     assert "申赎异动台账" in html                             # 读图说明 ⑤
     # 无事件（_flow_mini 无 events 键）→ 横幅仍常驻（安静窗口占位）
@@ -609,3 +609,15 @@ def test_earnings_alert_banner_history_block():
     assert "历史窗口台账" not in h2 and "上窗口" not in h2
     h3 = rep._earnings_alert_banner(snaps, meta, "2026-08-14", history={"windows": []})
     assert "历史窗口台账" not in h3
+
+
+def test_fmt_pctile_extreme_one_decimal():
+    """极端分位显示一位小数——:.0% 把 99.56% 圆成 100% 会暗示「史上最大」
+    （2026-08 实例：科创50 08-19 +5.2% 实为自身历史第 7 大申购日）。"""
+    assert rep._fmt_pctile(0.9956) == "99.6%"
+    assert rep._fmt_pctile(0.9994) == "99.9%"
+    assert rep._fmt_pctile(1.0) == "100.0%"          # 真并列/独占最大才配 100.0
+    assert rep._fmt_pctile(0.0) == "0.0%"
+    assert rep._fmt_pctile(0.004) == "0.4%"
+    assert rep._fmt_pctile(0.93) == "93%"            # 非着色区保持整数, 列宽友好
+    assert rep._fmt_pctile(0.97) == "97.0%"          # 着色区(≥95%)一位小数·与横幅一致

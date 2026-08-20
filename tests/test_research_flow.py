@@ -281,3 +281,38 @@ def test_monthly_matrix_all_nan_month():
     # 组内成员当月两端都无数据 → NaN（空白=无数据）
     m = fl.group_monthly_matrix({}, {"G": ["A"]}, start_month="2024-01")
     assert m.empty or np.isnan(m.loc["G", "2024-01"])
+
+
+def test_daily_flow_events_side_pctile_skewed_history():
+    """方向内分位检测（2026-08 与排名表「日申赎」列统一）：申购端尾巴肥的历史里，
+    史上最大赎回 赎回向≈100% 命中——绝对值口径会被 +7% 申购日压到 99% 以下漏掉；
+    反向：常规量级申购(与既往申购同量级) 赎回向排名不极端 → 不上榜。"""
+    n = 300
+    rng = np.random.default_rng(3)
+    chg = rng.normal(0.0, 0.008, n)
+    chg[[50, 80, 110, 140]] = 0.07                   # 4 个 +7% 肥申购日（申购端尾巴）
+    chg[-1] = -0.05                                  # 末日：史上最大赎回
+    sh = 1e9 * np.cumprod(1 + chg)
+    m = {"shares": pd.Series(sh, index=_idx(n)),
+         "nav": pd.Series(2.0, index=_idx(n))}
+    panel = {"A": {**m, "flow": fl.etf_flow_yi(m["shares"], m["nav"])}}
+    evs = fl.daily_flow_events(panel, pctile=0.99, floor_yi=0.1, scan_days=5)
+    assert len(evs) == 1 and evs[0]["side"] == "out"
+    assert evs[0]["pctile_kind"] == "side" and evs[0]["pctile"] == 1.0
+    # 对照：绝对值口径下末日 |−5%| 排在 +7% 之后 <99% → 旧口径会漏（口径差回归锚）
+    pct = m["shares"].pct_change().dropna()
+    assert float(pct.abs().rank(method="average", pct=True).iloc[-1]) < 0.99
+
+
+def test_daily_flow_events_sparse_side_falls_back_to_abs():
+    """赎回侧样本不足(< side_min_obs) → 该方向退绝对值双向分位（kind='abs'）。"""
+    n = 300
+    rng = np.random.default_rng(5)
+    chg = np.abs(rng.normal(0.004, 0.004, n))        # 几乎全申购
+    chg[-1] = -0.03                                  # 罕见赎回：赎回侧样本=1
+    sh = 1e9 * np.cumprod(1 + chg)
+    m = {"shares": pd.Series(sh, index=_idx(n)),
+         "nav": pd.Series(2.0, index=_idx(n))}
+    panel = {"A": {**m, "flow": fl.etf_flow_yi(m["shares"], m["nav"])}}
+    evs = fl.daily_flow_events(panel, pctile=0.99, floor_yi=0.1, scan_days=5)
+    assert len(evs) == 1 and evs[0]["pctile_kind"] == "abs"

@@ -311,6 +311,59 @@ def chip_direction(shares, nav_acc, windows: tuple[int, ...] = (5, 10, 20, 30, 6
 
 
 # ---------------------------------------------------------------------------
+# 最新日净申赎（当日脉搏 · 与筹码列的平滑中期票互补）
+# ---------------------------------------------------------------------------
+
+def latest_daily_flow(adj_shares, unit_nav_al, min_history: int = 250,
+                      side_min_obs: int = 30) -> dict:
+    """最新交易日净申赎：金额(亿) + 份额日增减% + 自身全历史**带符号**分位。
+
+    adj_shares: split_adjusted_shares 产物（拆分前复权——原始份额跨拆分日会读出
+    假 +100%）；unit_nav_al: 同索引对齐的**单位**净值（金额=真实现金进出，非
+    复权连续的 acc_nav）。口径与 flow.etf_flow_yi / 明细图 flow_daily_figure 一致
+    （此处内联同式而非 import——flow.py 反向 import 本模块，引它会循环依赖）。
+
+    分位**按方向各自统计**（scale-free：与基金规模无关、跨 ETF 可比）——申购日
+    在申购日总体里排名 / 赎回日在赎回日总体里排名：红绿着色表达方向语义，分位
+    也按方向总体算才不打架（绝对值口径会把"某方向史上空前的极端"被另一方向更
+    肥的尾巴压低分位；带符号口径会把大赎回日读成低分位假平静——2026-08 两版
+    都试过弃用）。与 📡申赎异动横幅**有意不同义**：横幅=绝对值双向分位（事件
+    检测器·挑不管方向的大日子），本列=方向内分位（方向强度温度计）——两个
+    数字回答不同问题，不可互相核对，展示层分别标注「双向/申购向/赎回向」。
+    某方向样本 < side_min_obs（一侧从未见过几次该方向的行为，分位无意义）→
+    退绝对值分位并标 kind="abs" 诚实降级。历史不足 min_history（横幅同门槛
+    250）→ data_sufficient=False，不硬给分位。
+    """
+    empty = {"data_sufficient": False, "date": None, "flow_yi": np.nan,
+             "pct": np.nan, "pctile": np.nan, "pctile_kind": None,
+             "n_side": 0, "n_history": 0}
+    if adj_shares is None or len(adj_shares.dropna()) < 3:
+        return empty
+    pct = adj_shares.pct_change() * 100.0
+    pct = pct.dropna()
+    if len(pct) < min_history:
+        return {**empty, "n_history": len(pct)}
+    # 金额=Δ份额×当日 unit_nav（unit_nav 缺值日 → 金额 NaN，%/分位照常）
+    flow_yi = (adj_shares.diff() * unit_nav_al) / 1e8 if unit_nav_al is not None \
+        else pd.Series(np.nan, index=adj_shares.index)
+    v = pct.iloc[-1]
+    # 按方向各自统计：今日是申购日 → 在全部申购日里排名；赎回日同理。
+    # 某方向样本太少(< side_min_obs) → 退绝对值双向分位（kind="abs"）。
+    side = pct[pct >= 0] if v >= 0 else pct[pct < 0]
+    if len(side) >= side_min_obs:
+        # 方向内按**幅度**排名（|x|）：申购侧幅度=本身；赎回侧最大赎回是最小值，
+        # 带符号 rank 会垫底——2026-08 测试抓回的符号错误
+        pctile = float(side.abs().rank(method="average", pct=True).iloc[-1])
+        kind, n_side = "side", len(side)
+    else:
+        pctile, kind, n_side = float(pct.abs().rank(method="average", pct=True).iloc[-1]), "abs", len(side)
+    return {"data_sufficient": True, "pctile_kind": kind, "n_side": n_side,
+            "date": str(pct.index[-1].date()) if hasattr(pct.index[-1], "date") else str(pct.index[-1]),
+            "flow_yi": float(flow_yi.iloc[-1]) if flow_yi.iloc[-1] == flow_yi.iloc[-1] else np.nan,
+            "pct": float(v), "pctile": pctile, "n_history": len(pct)}
+
+
+# ---------------------------------------------------------------------------
 # 单 ETF 快照装配
 # ---------------------------------------------------------------------------
 
@@ -345,6 +398,7 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         return {"nav_dev_cur": np.nan, "nav_dev_pct": np.nan, "nav_dev_max": np.nan,
                 "nav_dev_min": np.nan, "nav_extreme_events": [],
                 "scissor": {"detected": False}, "chip": _chip_empty,
+                "daily_flow": {"data_sufficient": False},
                 "share_splits": [],
                 "data_sufficient": False,
                 "ma_period": ma_period, "nav_col": nav_col}
@@ -363,6 +417,14 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
     chip = chip_direction(shares_series, nav_series,
                           windows=chip_windows, deadzone=chip_deadzone,
                           vote_threshold=chip_vote_threshold)
+    # 最新日净申赎：金额用 unit_nav（真实现金进出；acc_nav 复权连续不适配金额），
+    # 对齐到调整后份额日历（unit_nav 缺值日金额 NaN，%/分位照常）
+    unit_nav_al = None
+    if shares_series is not None and nav_df is not None and "unit_nav" in getattr(nav_df, "columns", []):
+        un = pd.to_numeric(nav_df["unit_nav"], errors="coerce").dropna()
+        if len(un):
+            unit_nav_al = un.reindex(shares_series.index)
+    daily_flow = latest_daily_flow(shares_series, unit_nav_al)
     return {
         "nav_dev_cur": ext["cur_dev"],
         "nav_dev_pct": ext["pct"],
@@ -371,6 +433,7 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         "nav_extreme_events": events,
         "scissor": scissor,
         "chip": chip,
+        "daily_flow": daily_flow,
         "share_splits": split_events,
         "data_sufficient": bool(ext["valid"]),
         "ma_period": ma_period,
