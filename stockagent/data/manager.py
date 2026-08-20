@@ -1086,7 +1086,7 @@ class DataManager:
         return out
 
     def update_economic_calendar(self, days_back: int = 7, days_forward: int = 45) -> dict:
-        """抓经济日历(近7天已公布+未来21天排期, 筛重要性≥2)→ economic_calendar 表。逐日容错。"""
+        """抓经济日历(近7天已公布+未来45天排期·源通常只给约30天, 筛重要性≥2)→ economic_calendar 表。逐日容错。"""
         out = {"calendar": 0}
         try:
             rows = fetcher.fetch_economic_calendar(days_back=days_back, days_forward=days_forward)

@@ -594,7 +594,7 @@ def _economic_calendar_block(store, c: dict, asof: str) -> str:
     df = df[df["event"].fillna("").str.contains("|".join(_CAL_KEYWORDS), regex=True)].copy()
     if df.empty:
         return ('<div class="chart"><div class="chart-t">📰 经济日历</div>'
-                '<div class="muted">近 7 天/未来 21 天无美国高重要性相关事件。</div></div>')
+                '<div class="muted">近 7 天/未来窗口内无美国高重要性相关事件。</div></div>')
 
     def stars(n):
         try:
@@ -625,8 +625,9 @@ def _economic_calendar_block(store, c: dict, asof: str) -> str:
               '<table><tr><th>日期</th><th>事件</th><th>公布</th><th>预期</th><th>前值</th><th>对黄金影响</th></tr>'
               + rows_r + '</table>') if len(rel) else '<div class="muted">无近期已公布。</div>')
 
-    # 未来排期(公布值缺)
-    up = df[df["actual"].isna()].sort_values(["date", "time"]).head(15)
+    # 未来排期(公布值缺): 不截行——head(15) 曾把 FOMC/非农/CPI 砍掉(2026-08 发现),
+    # 全量展示到源排期上限; 日历源(百度)通常只给约未来30天, 45天是请求窗口非保证。
+    up = df[df["actual"].isna()].sort_values(["date", "time"])
     rows_u = "".join(
         f"<tr><td class='muted'>{r['date']} {r['time'] or ''}</td><td class='stmt'>{r['event']}</td>"
         f"<td class='muted'>{r['forecast'] if r['forecast']==r['forecast'] else '—'}</td>"
@@ -634,7 +635,9 @@ def _economic_calendar_block(store, c: dict, asof: str) -> str:
         f"<td>{stars(r['importance'])}</td>"
         f"<td class='muted' style='font-size:11px'>{_upcoming_impact(r['event'], c)}</td></tr>"
         for _, r in up.iterrows())
-    tbl_u = (('<div class="chart-t" style="margin-top:10px">即将公布(未来45天 · 催化剂时点 · 决定埋伏时机)</div>'
+    horizon = up["date"].max() if len(up) else ""
+    tbl_u = ((f'<div class="chart-t" style="margin-top:10px">即将公布(催化剂时点 · 决定埋伏时机 · '
+              f'共{len(up)}条 · 排期至 {horizon}，源通常只给约未来30天)</div>'
               '<table><tr><th>时间</th><th>事件</th><th>预期</th><th>前值</th><th>重要性</th><th>对黄金影响</th></tr>'
               + rows_u + '</table>') if len(up) else '<div class="muted">无未来排期。</div>')
 

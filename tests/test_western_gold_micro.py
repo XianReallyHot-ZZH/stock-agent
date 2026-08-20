@@ -172,3 +172,28 @@ def test_gold_micro_block_cb_empty_placeholder(tmp_path):
     assert "中国央行黄金储备" in html          # 标题仍在(第三张图位不空)
     assert "央行购金数据暂缺" in html           # 占位说明
     assert "micro_cb" not in html               # 无 cb 图(plotly div 未生成)
+
+
+def test_framework_calendar_upcoming_not_truncated(tmp_path):
+    """未来排期表不得截断(2026-08 修复: head(15) 曾把 FOMC/非农/CPI 砍掉), 全量展示到源排期上限。"""
+    from stockagent.western_macro import framework
+    st = Store(tmp_path / "t.sqlite")
+    rows = [
+        {"date": "2026-08-19", "time": "20:30", "region": "美国", "event": "美国7月CPI年率(%)",
+         "actual": 3.0, "forecast": 3.1, "previous": 3.2, "importance": 3},
+    ]
+    # 19 条未来事件(超过旧 head(15)) + 最远一条 FOMC 利率决议
+    for i in range(19):
+        d = (datetime.date(2026, 8, 20) + datetime.timedelta(days=i)).isoformat()
+        rows.append({"date": d, "time": "20:30", "region": "美国",
+                     "event": "美国当周初请失业金人数(万)",
+                     "actual": None, "forecast": None, "previous": 22.0, "importance": 2})
+    rows.append({"date": "2026-09-17", "time": "02:00", "region": "美国",
+                 "event": "美国9月联邦基金利率目标上限(%)",
+                 "actual": None, "forecast": None, "previous": 4.0, "importance": 3})
+    st.upsert_economic_calendar(rows)
+    c = {"miss": "#c00", "edge": "#080", "ink2": "#666"}
+    html = framework._economic_calendar_block(st, c, "2026-08-20")
+    assert html.count("初请失业金") == 19          # 无截断: 19 条全在
+    assert "2026-09-17" in html                    # 最远催化剂(FOMC)在表内
+    assert "排期至 2026-09-17" in html             # 标注实际排期上限
