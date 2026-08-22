@@ -30,7 +30,7 @@ from plotly.subplots import make_subplots
 
 from . import earnings as ern
 from . import timing as tm
-from .flow import alert_window_label
+from .flow import alert_window_label, cluster_flow_events
 
 CHART_HEIGHT = 460
 _TEMPLATE = "plotly_white"
@@ -788,13 +788,40 @@ def flow_lines_figure(flow: dict) -> go.Figure:
     return fig
 
 
+def _flow_ev_lane(events: list[dict], base: float) -> tuple[list, list, list, list]:
+    """单轨（申购上 base=1 / 赎回下 base=-1）散点数据：同日多事件在轨内堆叠。
+    日期统一 ISO 串（Timestamp/date/str 三种事件来源都可序列化嵌 FLOW_EV）。"""
+    xs, ys, sizes, cds = [], [], [], []
+    per_day: dict[str, int] = {}
+    for e in events:
+        k = per_day.get(str(e["date"])[:10], 0)
+        per_day[str(e["date"])[:10]] = k + 1
+        xs.append(str(e["date"])[:10])
+        ys.append(base * (1.0 + 0.28 * k))              # 同日堆叠
+        sizes.append(max(abs(e["flow_yi"]), 0.3))
+        cds.append([e.get("name", e["symbol"]), e["symbol"],
+                    e["flow_yi"], e["pct"], e["pctile"]])
+    return xs, ys, sizes, cds
+
+
+def _flow_ev_strip_data(events: list[dict]) -> dict:
+    """条带图整图 restyle 数据（口径切换用）：双轨 x/y/marker.size/customdata+sizeref。"""
+    mx = max([abs(e["flow_yi"]) for e in events] + [1.0])
+    lanes = [_flow_ev_lane([e for e in events if e["side"] == "in"], 1),
+             _flow_ev_lane([e for e in events if e["side"] == "out"], -1)]
+    return {"x": [l[0] for l in lanes], "y": [l[1] for l in lanes],
+            "size": [l[2] for l in lanes], "custom": [l[3] for l in lanes],
+            "sizeref": mx / (22 ** 2)}
+
+
 def flow_events_strip_figure(flow: dict) -> go.Figure:
     """申赎异动时间条带：x=日期，申购/赎回分上下双轨，点大小∝金额，
     同日多事件在轨内堆叠。悬停=全信息；点击点跳该 ETF（_PAGE_JS plotly_click）。
     事件的时间聚集（如某周连环申购潮）在此一目了然——文字台账看不到这层。
     多窗口（2026-08）：嵌入**最大窗全量**事件，超出当前 x 范围的点自然裁掉；
     窗口切换=JS relayout x 范围（FLOW_EV.ranges），初始范围=默认窗（1月）截止日
-    （−1 天缓冲）。旧 payload 无 alert_windows → 退化 32 日历日近似。"""
+    （−1 天缓冲）。口径切换（二期）=JS restyle 双轨数据（FLOW_EV.strip）。
+    旧 payload 无 alert_windows → 退化 32 日历日近似。"""
     events = flow.get("events") or []
     last = pd.to_datetime(flow.get("last_date") or events[0]["date"])
     x0 = last - pd.Timedelta(days=32)
@@ -804,23 +831,10 @@ def flow_events_strip_figure(flow: dict) -> go.Figure:
             break
     mx = max([abs(e["flow_yi"]) for e in events] + [1.0])
 
-    def lane(evs, base):
-        xs, ys, sizes, cds = [], [], [], []
-        per_day: dict[str, int] = {}
-        for e in evs:
-            k = per_day.get(e["date"], 0)
-            per_day[e["date"]] = k + 1
-            xs.append(e["date"])
-            ys.append(base * (1.0 + 0.28 * k))          # 同日堆叠
-            sizes.append(max(abs(e["flow_yi"]), 0.3))
-            cds.append([e.get("name", e["symbol"]), e["symbol"],
-                        e["flow_yi"], e["pct"], e["pctile"]])
-        return xs, ys, sizes, cds
-
     fig = go.Figure()
     for evs, base, name, color in (([e for e in events if e["side"] == "in"], 1, "净申购", "#dc2626"),
                                    ([e for e in events if e["side"] == "out"], -1, "净赎回", "#16a34a")):
-        xs, ys, sizes, cds = lane(evs, base)
+        xs, ys, sizes, cds = _flow_ev_lane(evs, base)
         fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers", name=name,
             marker=dict(color=color, size=sizes, sizemode="area",
@@ -886,19 +900,43 @@ def _flow_ev_summary_html(events: list[dict], meta: dict) -> str:
             f'按ETF汇总（窗口内 · {len(agg)}只命中）：{chips}</span></div>')
 
 
-# 台账 top-N 随窗口档放大：1月 8 条管窥最近，1年可能上百条事件 → 24 条 + 汇总行
+def _flow_ev_tide_html(events: list[dict], meta: dict) -> str:
+    """长窗口（≥3月）连环潮汐行（二期）：同 ETF 同方向间隔≤5交易日的事件聚为
+    一潮——申赎潮汐（机构分批建仓/撤退的脚印）比孤立单发更有信息。前 6 潮。"""
+    eps = cluster_flow_events(events)
+    if not eps:
+        return ""
+    chips = " · ".join(
+        f'{meta.get(ep["symbol"], {}).get("name", ep["symbol"])}'
+        f'{"连环申购" if ep["side"] == "in" else "连环赎回"}{ep["n"]}次·'
+        f'<b class="{"flow-pos" if ep["net_yi"] > 0 else "flow-neg"}">累计{ep["net_yi"]:+.1f}亿</b>'
+        f'（{ep["start"][5:]}~{ep["end"][5:]}）'
+        for ep in eps[:6])
+    return (f'<div class="xb-list" style="margin-top:2px"><span class="xb-sub muted">'
+            f'🌊 连环潮汐（同ETF同方向·间隔≤5交易日聚一潮 · 共{len(eps)}潮·前6）：{chips}</span></div>')
+
+
+# 台账 top-N 随窗口档放大：1月 8 条管窥最近，1年可能上百条事件 → 24 条 + 汇总/潮汐行
 _FLOW_EV_TOP_N = {22: 8, 66: 12, 132: 16, 250: 24}
-_FLOW_EV_SUMMARY_MIN_DAYS = 66     # ≥3月 窗口附「按ETF汇总」行（短窗逐条日期更直观）
+_FLOW_EV_SUMMARY_MIN_DAYS = 66     # ≥3月 窗口附「按ETF汇总」「🌊连环潮汐」行（短窗逐条日期更直观）
+
+# 口径（二期）：full=今日尺度（默认·与排名表日申赎列一致）；pit=当时口径
+# （事件日只用其之前历史——「当时看来异常」的真历史，长窗下 ⊇ 今日尺度）
+_FLOW_EV_MODES = (("full", "今日尺度"), ("pit", "当时口径"))
 
 
 def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
     """📡 申赎异动横幅：最近大额申赎事件台账 + 时间条带，窗口可切 1/3/6/12 月
-    （默认 1 月）。服务端一次扫最大窗，各窗口台账**预渲染成 HTML 字典**嵌进
-    FLOW_EV JSON——客户端切窗口=换 innerHTML + 条带图 relayout x 范围，零重算、
-    无 JS 拼模板（markup 单一来源在 Python）。≥3月 窗口加按 ETF 汇总行。
-    分位 as-of-today：早前事件可能被其后更极端的流动挤出长窗视图（非当时口径）。
-    最新交易日事件加「最新」徽标；无命中也常驻（安静占位）。纯观察·非买卖建议。"""
-    events = flow.get("events") or []
+    （默认 1 月）、口径可切 今日尺度/当时口径（默认今日尺度）。服务端一次扫
+    最大窗×双口径，各（口径×窗口）台账**预渲染成 HTML 字典**嵌进 FLOW_EV
+    JSON——客户端切换=换 innerHTML + 条带图 relayout x 范围 / restyle 双轨数据，
+    零重算、无 JS 拼模板（markup 单一来源在 Python）。≥3月 窗口附按 ETF 汇总行
+    与 🌊 连环潮汐行。最新交易日事件加「最新」徽标；无命中也常驻（安静占位）。
+    纯观察·非买卖建议。"""
+    events_full = flow.get("events") or []
+    events_pit = flow.get("events_pit")
+    modes = _FLOW_EV_MODES if events_pit is not None else _FLOW_EV_MODES[:1]
+    any_events = events_full or events_pit or []
     last_date = flow.get("last_date")
     default_days = int(flow.get("alert_default_days") or 22)
     windows = flow.get("alert_windows") or [
@@ -907,37 +945,51 @@ def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
     default_days = next((int(w["days"]) for w in windows if w.get("default")),
                         int(windows[0]["days"]))          # 兜底：default 缺失取最小窗
 
-    ledgers: dict[int, str] = {}
-    ranges: dict[int, list[str]] = {}                     # 各窗口条带 x 范围（ISO）
+    ledgers: dict[str, dict[int, str]] = {m: {} for m, _ in modes}
+    ranges: dict[int, list[str]] = {}                     # 各窗口条带 x 范围（ISO·口径无关）
     labels: dict[int, str] = {}
     last_ts = (pd.to_datetime(last_date) if last_date
-               else (pd.to_datetime(events[0]["date"]) if events else None))
+               else (pd.to_datetime(any_events[0]["date"]) if any_events else None))
     for w in windows:
         d = int(w["days"])
         cutoff = w.get("cutoff")
-        evs = [e for e in events if (not cutoff) or str(e["date"])[:10] >= cutoff]
         cap = _FLOW_EV_TOP_N.get(d, top_n if d < _FLOW_EV_SUMMARY_MIN_DAYS else 24)
-        body = _flow_ev_ledger_html(evs, meta, last_date, cap)
-        if d >= _FLOW_EV_SUMMARY_MIN_DAYS:
-            body += _flow_ev_summary_html(evs, meta)
-        ledgers[d] = body
         labels[d] = w.get("label") or alert_window_label(d)
         if last_ts is not None:
             x0 = ((pd.to_datetime(cutoff) - pd.Timedelta(days=1)) if cutoff
                   else last_ts - pd.Timedelta(days=32))
             ranges[d] = [str(x0.date()), str((last_ts + pd.Timedelta(days=1)).date())]
+        for m, _ in modes:
+            evs = [e for e in (events_full if m == "full" else events_pit)
+                   if (not cutoff) or str(e["date"])[:10] >= cutoff]
+            body = _flow_ev_ledger_html(evs, meta, last_date, cap)
+            if d >= _FLOW_EV_SUMMARY_MIN_DAYS:
+                body += _flow_ev_summary_html(evs, meta)
+                body += _flow_ev_tide_html(evs, meta)
+            ledgers[m][d] = body
 
     chips = ("".join(
         f'<button class="flow-win-btn{" on" if int(w["days"]) == default_days else ""}" '
         f'data-days="{int(w["days"])}" onclick="switchFlowWindow({int(w["days"])})">'
         f'{w.get("label") or alert_window_label(int(w["days"]))}</button>'
         for w in windows)) if len(windows) > 1 else ""
+    mode_chips = ""
+    if len(modes) > 1:
+        mode_chips = ('<span class="flow-mode-group"><span class="xb-sub">口径</span>'
+                      + "".join(
+                          f'<button class="flow-win-btn{" on" if m == "full" else ""}" '
+                          f'data-mode="{m}" onclick="switchFlowMode(\'{m}\')" '
+                          f'title="{"全历史分位·与排名表日申赎列一致（默认）" if m == "full" else "事件日只用其之前历史算分位·当时看来异常（长窗真历史·⊇今日尺度）"}">'
+                          f'{lbl}</button>' for m, lbl in modes) + '</span>')
     script = ""
     if len(windows) > 1:                                  # 多窗才嵌数据（单窗无切换）
-        payload = json.dumps({"ledgers": {str(k): v for k, v in ledgers.items()},
-                              "ranges": {str(k): v for k, v in ranges.items()},
-                              "labels": {str(k): v for k, v in labels.items()},
-                              "default": default_days}, ensure_ascii=False)
+        payload = json.dumps(
+            {"ledgers": {m: {str(k): v for k, v in ledgers[m].items()} for m, _ in modes},
+             "ranges": {str(k): v for k, v in ranges.items()},
+             "labels": {str(k): v for k, v in labels.items()},
+             "strip": ({m: _flow_ev_strip_data(events_full if m == "full" else events_pit)
+                       for m, _ in modes} if len(modes) > 1 else None),
+             "default": default_days}, ensure_ascii=False)
         script = ('<script>var FLOW_EV = '
                   + re.sub(r"</script", r"<\\/script", payload, flags=re.I) + ';</script>')
 
@@ -946,12 +998,14 @@ def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
         '<div class="extreme-title">📡 申赎异动 · 最近大额申赎事件（近'
         f'<span id="flow-ev-win">{labels.get(default_days, "1月")}</span>）'
         + (f'<span class="flow-win-btns">{chips}</span>' if chips else "")
+        + mode_chips
         + ' <span class="xb-note">时间条带：上轨=净申购(红)/下轨=净赎回(绿)·点大小∝金额·点悬停看详情·**点击点跳该ETF** · '
-        '日增减%≥自身方向历史99%分位 且 ≥1亿 · 窗口分位以<b>今天</b>的全历史尺度衡量——早前事件可能被其后'
-        '更极端的流动挤出长窗视图（非当时口径）· 流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议</span></div>'
+        '日增减%≥自身方向历史99%分位 且 ≥1亿 · 口径：今日尺度=以<b>今天</b>的全历史衡量（早前事件可能被其后更极端的'
+        '流动挤出长窗视图）/ 当时口径=事件日只用其之前历史（当时看来异常·长窗下⊇今日尺度）· 流入≠看好（A股常见逆势申购）'
+        '· 纯观察·非买卖建议</span></div>'
         + ('<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
-           'style="min-height:230px"></div></div>' if events else "")
-        + f'<div class="xb-list" id="flow-ev-ledger">{ledgers[default_days]}</div>'
+           'style="min-height:230px"></div></div>' if any_events else "")
+        + f'<div class="xb-list" id="flow-ev-ledger">{ledgers["full"][default_days]}</div>'
         + script + '</div>')
 
 
@@ -1205,10 +1259,14 @@ def _detail_chips(snap: dict) -> str:
     return "".join(chips)
 
 
-def flow_daily_figure(label: str, shares_df, nav_df):
+def flow_daily_figure(label: str, shares_df, nav_df, flow_events: list[dict] | None = None):
     """日度净申赎（事件级）：柱 = 净申赎额（亿元 = Δ份额 × 当日单位净值·拆分已调整，
     红=净申购/绿=净赎回），线 = 份额日增减%（右轴，Δ份额/前日份额——分母随时间
     变化，与柱不同形：柱看这笔申赎的金额大小，线看它相对基金当时体量的大小）。
+
+    flow_events（二期·下钻标记）：该 ETF 在📡横幅事件集（今日尺度·最大窗）里的
+    事件日——柱区上方标记轨 ▲申购/▼赎回，悬停带方向内分位，与横幅同源互证；
+    从横幅点条目跳下来第一眼就能对上「那天发生了什么」。
 
     份额必须用拆分前复权口径（timing.split_adjusted_shares）——原始份额跨拆分日
     会画出一根假 +100%/数百亿的巨柱。无份额历史 → None（明细图组自动缩短）。"""
@@ -1229,7 +1287,26 @@ def flow_daily_figure(label: str, shares_df, nav_df):
         x=adj.index, y=pct, name="份额日增减%",
         line=dict(color="#2563eb", width=1.2),
         hovertemplate="%{x|%Y-%m-%d}<br>日增减: %{y:+.2f}%<extra></extra>"), secondary_y=True)
-    fig.update_layout(**_base_layout(f"{label} · 日度净申赎（柱:亿元=Δ份额×当日净值 · 线:份额日增减% · 拆分已调整）",
+    ev_note = ""
+    if flow_events:
+        ymax = float(np.nanmax(np.abs(flow_yi.values))) if flow_yi.notna().any() else 1.0
+        lane_y = ymax * 1.14                                   # 柱区上方的固定标记轨
+        for side, sym, color in (("in", "triangle-up", "#dc2626"), ("out", "triangle-down", "#16a34a")):
+            evs = [e for e in flow_events if e.get("side") == side]
+            if not evs:
+                continue
+            fig.add_trace(go.Scatter(
+                x=[str(e["date"])[:10] for e in evs], y=[lane_y] * len(evs),
+                mode="markers", name=f"📡事件·{'申购' if side == 'in' else '赎回'}",
+                marker=dict(symbol=sym, size=9, color=color,
+                            line=dict(color="white", width=1)),
+                customdata=[[e["flow_yi"], e["pct"], e["pctile"]] for e in evs],
+                hovertemplate=("%{x|%Y-%m-%d} · 📡横幅事件日<br>净申赎 %{customdata[0]:+.1f}亿"
+                               " · 日增减 %{customdata[1]:+.1%}<br>方向内分位 %{customdata[2]:.1%}"
+                               "<extra></extra>")), secondary_y=False)
+        fig.update_yaxes(range=[None, ymax * 1.28], secondary_y=False)   # 只扩上界给标记轨留位
+        ev_note = " · ▲▼横幅事件日"
+    fig.update_layout(**_base_layout(f"{label} · 日度净申赎（柱:亿元=Δ份额×当日净值 · 线:份额日增减% · 拆分已调整{ev_note}）",
                                      CHART_HEIGHT))
     fig.update_xaxes(type="date", rangeselector=_RANGE_BUTTONS,
                      rangeslider=dict(visible=True, thickness=0.02))
@@ -1248,9 +1325,10 @@ def _fmt_pctile(pt: float) -> str:
     return f"{pt:.1%}" if (pt >= 0.95 or pt <= 0.005) else f"{pt:.0%}"
 
 
-def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int) -> list:
+def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int,
+              flow_events: list[dict] | None = None) -> list:
     """每 ETF 明细图组：份额 vs 净值（剪刀差叠加）+ 净值-MA 偏离度（极值标记 + 分位）
-    + 日度净申赎（事件级：柱=亿元·线=%）。"""
+    + 日度净申赎（事件级：柱=亿元·线=%·📡横幅事件日标记轨）。"""
     nm = meta.get(sym, {}).get("name", sym)
     aum = snap.get("aum_yi")
     label = f"{nm}({sym})" + (f" · 规模{aum:.0f}亿" if not _nan(aum) else "")
@@ -1261,7 +1339,7 @@ def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int
                           scissor=snap.get("scissor")),
         nav_deviation_figure(label, sm.get("nav"), snap, ma_period=ma_period),
     ]
-    fd = flow_daily_figure(label, sm.get("shares"), sm.get("nav"))
+    fd = flow_daily_figure(label, sm.get("shares"), sm.get("nav"), flow_events=flow_events)
     if fd is not None:
         figs.append(fd)
     return figs
@@ -1330,6 +1408,8 @@ p.sub { color:var(--muted); font-size:13px; margin-top:2px; }
 .flow-ev-today { font-size:10px; background:#fcd34d; color:#78350f; border-radius:4px;
                  padding:0 4px; margin-left:2px; }   /* 申赎异动「最新」徽标 */
 .flow-win-btns { display:inline-flex; gap:4px; margin-left:8px; vertical-align:middle; }
+.flow-mode-group { display:inline-flex; gap:4px; margin-left:6px; vertical-align:middle;
+                   align-items:center; }   /* 口径切换（今日尺度/当时口径）*/
 .flow-win-btn { font-size:11px; line-height:1.5; padding:1px 9px; border-radius:9px;
                 cursor:pointer; background:var(--chipbg); color:var(--text2);
                 border:1px solid transparent; }      /* 申赎异动窗口切换（1/3/6/12月）*/
@@ -1514,7 +1594,8 @@ function _renderChart(el){
     if(el.dataset.rendered === '1') _applyPlotlyTheme(el, _isDark());
     if(sym === '__flow' && i === 0) _applyFlowFilter();   // 组chips过滤态在(重)渲染后恢复
     if(sym === '__flow' && i === 1){                      // 异动条带：点击点跳该ETF明细
-      if(_flowEvDays != null) switchFlowWindow(_flowEvDays);   // 已切窗口在(重)渲染后恢复
+      if(_flowEvMode !== 'full') switchFlowMode(_flowEvMode);       // 已切口径/窗口在(重)渲染后恢复
+      else if(_flowEvDays != null) switchFlowWindow(_flowEvDays);
       el.removeAllListeners && el.removeAllListeners('plotly_click');
       el.on('plotly_click', function(data){
         try { var cd = data.points[0].customdata;
@@ -1528,24 +1609,43 @@ function _renderChart(el){
 function _flowLinesEl(){
   return document.querySelector('.lazy-chart[data-sym="__flow"][data-idx="0"]');
 }
-// —— 申赎异动横幅：窗口切换（1/3/6/12月·默认1月）——
-// 各窗口台账 HTML 与条带 x 范围已由服务端预渲染进 FLOW_EV：切换=换 innerHTML +
-// relayout，零重算、无 JS 拼模板。图被懒渲染/purge 后重画时按 _flowEvDays 恢复。
-var _flowEvDays = null;
+// —— 申赎异动横幅：窗口切换（1/3/6/12月·默认1月）+ 口径切换（今日尺度/当时口径）——
+// 各（口径×窗口）台账 HTML、条带 x 范围与双轨数据已由服务端预渲染进 FLOW_EV：
+// 切窗口=换 innerHTML + relayout；切口径=restyle 双轨数据后重放当前窗口。
+// 零重算、无 JS 拼模板。图被懒渲染/purge 后重画时按 _flowEvMode/_flowEvDays 恢复。
+var _flowEvDays = null, _flowEvMode = 'full';
 function switchFlowWindow(days){
   if(!window.FLOW_EV) return;
   _flowEvDays = days;
-  document.querySelectorAll('.flow-win-btn').forEach(function(b){
+  document.querySelectorAll('.flow-win-btn[data-days]').forEach(function(b){
     b.classList.toggle('on', +b.getAttribute('data-days') === +days);
   });
+  var mode = FLOW_EV.ledgers[_flowEvMode] ? _flowEvMode : Object.keys(FLOW_EV.ledgers)[0];
   var lab = document.getElementById('flow-ev-win');
   if(lab && FLOW_EV.labels[days]) lab.textContent = FLOW_EV.labels[days];
   var led = document.getElementById('flow-ev-ledger');
-  if(led && FLOW_EV.ledgers[days] !== undefined) led.innerHTML = FLOW_EV.ledgers[days];
+  if(led && FLOW_EV.ledgers[mode] && FLOW_EV.ledgers[mode][days] !== undefined)
+    led.innerHTML = FLOW_EV.ledgers[mode][days];
   var el = document.querySelector('.lazy-chart[data-sym="__flow"][data-idx="1"]');
   if(el && el.dataset.rendered === '1' && FLOW_EV.ranges[days]){
     try { Plotly.relayout(el, {'xaxis.range': FLOW_EV.ranges[days]}); } catch(e) {}
   }
+}
+function switchFlowMode(mode){
+  if(!window.FLOW_EV || !FLOW_EV.ledgers[mode]) return;
+  _flowEvMode = mode;
+  document.querySelectorAll('.flow-win-btn[data-mode]').forEach(function(b){
+    b.classList.toggle('on', b.getAttribute('data-mode') === mode);
+  });
+  var el = document.querySelector('.lazy-chart[data-sym="__flow"][data-idx="1"]');
+  if(el && el.dataset.rendered === '1' && FLOW_EV.strip && FLOW_EV.strip[mode]){
+    var s = FLOW_EV.strip[mode];
+    try {
+      Plotly.restyle(el, {'x': s.x, 'y': s.y, 'marker.size': s.size,
+                          'marker.sizeref': s.sizeref, 'customdata': s.custom}, [0, 1]);
+    } catch(e) {}
+  }
+  switchFlowWindow(_flowEvDays != null ? _flowEvDays : FLOW_EV.default);
 }
 function _applyFlowFilter(){
   var el = _flowLinesEl();
@@ -1710,12 +1810,17 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     # 滚入视口才 Plotly.newPlot、离开 purge 释放——把同时在画的图从 66 张压到 ~3-5 张。
     # 明细改折叠面板（details 默认收起、置顶展开）：收起=零渲染，展开即触发 IO 渲染。
     from plotly.offline import get_plotlyjs
+    # 📡横幅事件（今日尺度·最大窗）按 symbol 分组——日度净申赎图上打标记轨（二期）
+    flow_evs_by_sym: dict[str, list[dict]] = {}
+    for e in (flow or {}).get("events") or []:
+        flow_evs_by_sym.setdefault(e["symbol"], []).append(e)
     charts_json: dict[str, list[str]] = {}
     chart_blocks = []
     jump_options = ['<option value="">跳转到 ETF…</option>']
     for sym, snap in ordered:
         nm = meta.get(sym, {}).get("name", sym)
-        figs = _etf_figs(sym, snap, meta, series_map, ma_period)
+        figs = _etf_figs(sym, snap, meta, series_map, ma_period,
+                         flow_events=flow_evs_by_sym.get(sym))
         charts_json[sym] = [f.to_json() for f in figs]
         star = "⭐ " if sym in pin_set else ""
         open_attr = " open" if sym in pin_set else ""

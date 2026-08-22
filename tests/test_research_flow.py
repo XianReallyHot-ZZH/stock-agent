@@ -196,6 +196,51 @@ def test_daily_flow_events_windows_are_nested():
         assert s <= l
 
 
+def test_daily_flow_events_rank_mode_expanding():
+    # 当时口径（point-in-time）：-100日的+20%申购**当时空前**（当时分位=1.0），
+    # 但其后 3 次更大的申购（+25/26/27%）让它跌出今日尺度的99%分位（296/299≈0.990<0.99·
+    # 平均秩口径）→ full 漏掉、expanding 抓到；3 次近期事件两口径都抓 → expanding ⊇ full
+    n = 300
+    sh = np.full(n, 1e9)
+    sh[-100:] = 1.2e9                 # -100日 +20%（当时最大）
+    for back, mul in ((60, 1.25), (50, 1.26), (40, 1.27)):
+        sh[-back:] = sh[-back:] * mul  # 3 次递增跳变（互不平局·都超过 +20%）
+    panel, _ = fl.flow_panel({"A": _series_map(n, sh, nav_val=2.0)})
+    evs_full = fl.daily_flow_events(panel, scan_days=250, floor_yi=1.0)
+    evs_pit = fl.daily_flow_events(panel, scan_days=250, floor_yi=1.0,
+                                   rank_mode="expanding")
+    d_full = {str(e["date"])[:10] for e in evs_full}
+    d_pit = {str(e["date"])[:10] for e in evs_pit}
+    assert len(evs_full) == 3 and len(evs_pit) == 4
+    assert d_full <= d_pit                                     # 嵌套性质
+    d_old = str(_idx(n)[-100])[:10]
+    assert d_old in d_pit and d_old not in d_full              # 当时空前·后被超越
+    with pytest.raises(ValueError):
+        fl.daily_flow_events(panel, rank_mode="bogus")
+
+
+def test_cluster_flow_events():
+    def ev(sym, date, flow, side="in"):
+        return {"symbol": sym, "date": date, "flow_yi": flow, "side": side}
+
+    evs = [
+        ev("A", "2026-08-01", 5.0), ev("A", "2026-08-04", 3.0), ev("A", "2026-08-08", 2.0),  # 连环申购3次
+        ev("A", "2026-07-01", 4.0),                                                          # 孤立单发 → 不聚
+        ev("B", "2026-08-02", -2.0, "out"), ev("B", "2026-08-05", -1.0, "out"),              # 连环赎回2次
+        ev("C", "2026-08-01", 5.0), ev("C", "2026-08-20", 5.0),                              # 间隔19日 → 两孤立
+        ev("D", "2026-08-03", 5.0), ev("D", "2026-08-06", -5.0, "out"),                      # 方向不同 → 不聚
+    ]
+    eps = fl.cluster_flow_events(evs)
+    assert [(e["symbol"], e["side"], e["n"]) for e in eps] == [("A", "in", 3), ("B", "out", 2)]
+    a = eps[0]
+    assert a["start"] == "2026-08-01" and a["end"] == "2026-08-08"
+    assert a["net_yi"] == 10.0 and a["peak_yi"] == 5.0 and a["peak_date"] == "2026-08-01"
+    b = eps[1]
+    assert b["net_yi"] == -3.0 and b["peak_yi"] == -2.0
+    assert fl.cluster_flow_events([ev("A", "2026-08-01", 5.0)]) == []       # 单发无潮
+    assert fl.cluster_flow_events([]) == []
+
+
 def test_alert_windows_payload():
     cal = _idx(300)                                              # 2024-01-01 起 300 个日历日
     out = fl.alert_windows_payload(cal, [250, 22, 22], 22)       # 去重+排序

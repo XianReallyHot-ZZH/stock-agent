@@ -321,7 +321,7 @@ def group_monthly_matrix(panel: dict, groups: dict[str, list[str]],
 
 def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.0,
                       scan_days: int = 22, min_history: int = 250,
-                      side_min_obs: int = 30) -> list[dict]:
+                      side_min_obs: int = 30, rank_mode: str = "full") -> list[dict]:
     """最近申赎异动事件（近 scan_days 个交易日）：全部命中按日期降序返回，
     截断/展示由 report 层做（条带图全画、文字台账取前 N）。
     多窗口横幅（2026-08）：本函数**一次按最大窗扫描**（scan_days=max(scan_windows)），
@@ -336,23 +336,50 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
     比绝对值口径更忠实于「罕见的大额申购/赎回」：申购端 routinely 有大脉冲的
     ETF 一次常规量级申购不该上榜；空前的赎回也不该被更肥的申购尾巴掩盖。
     某方向样本 < side_min_obs → 该方向退绝对值双向分位（kind="abs" 诚实降级）。
-    分位为**全历史**口径（含事件当日自身；纯观察·与偏离度分位同哲学·不防前视）。
-    **长窗口语义**：以今天的尺度衡量历史——早前的事件可能被其后更极端的流动
-    挤出 99% 分位而从长窗视图消失，非「当时看来异常」的 point-in-time 口径。
+    rank_mode（二期 2026-08）：
+      "full"（默认·今日尺度）= 全历史分位（含事件当日自身；与偏离度分位同哲学·
+        不防前视）——长窗语义：以今天的尺度衡量，早前事件可能被其后更极端的
+        流动挤出 99% 分位而消失；
+      "expanding"（当时口径·point-in-time）= 事件日只用**其之前**（含当日）的
+        历史算分位——「当时看来异常」的真历史。性质：对旧事件 expanding 分位 ≥
+        full（后续新增的更小同向日只稀释 full），故 expanding 事件集近似 ⊇ full。
     有效观测 < min_history 的 ETF 跳过（历史太短分位不可靠）。
 
     Returns: [{symbol, date, flow_yi, pct, pctile, pctile_kind('side'/'abs'),
                side('in'/'out')}, ...]"""
+    if rank_mode not in ("full", "expanding"):
+        raise ValueError(f"rank_mode 必须是 'full'/'expanding'，得到 {rank_mode!r}")
     events: list[dict] = []
     for sym, p in panel.items():
         pct = p["shares"].pct_change().dropna()
         if len(pct) < min_history:
             continue
+        flow = p["flow"]
+        if rank_mode == "expanding":
+            vals = pct.to_numpy(dtype=float)
+            dates = pct.index
+            start = max(0, len(pct) - scan_days)
+            for i in range(start, len(pct)):
+                d = dates[i]
+                f = flow.get(d)
+                if f is None or f != f or abs(float(f)) < floor_yi:
+                    continue
+                v = float(vals[i])
+                hist = vals[:i + 1]                    # 含当日（与 full 的 rank 含自身对齐）
+                side_hist = hist[hist >= 0] if v >= 0 else hist[hist < 0]
+                if len(side_hist) >= side_min_obs:
+                    ptd, kind = float((np.abs(side_hist) <= abs(v)).mean()), "side"
+                else:
+                    ptd, kind = float((np.abs(hist) <= abs(v)).mean()), "abs"
+                if ptd >= pctile:
+                    events.append({"symbol": sym, "date": d, "flow_yi": float(f),
+                                   "pct": v, "pctile": ptd, "pctile_kind": kind,
+                                   "side": "in" if v > 0 else "out"})
+            continue
         pos, neg = pct[pct >= 0], pct[pct < 0]
         rank_pos = pos.abs().rank(method="average", pct=True) if len(pos) >= side_min_obs else None
         rank_neg = neg.abs().rank(method="average", pct=True) if len(neg) >= side_min_obs else None
         rank_abs = pct.abs().rank(method="average", pct=True)
-        flow = p["flow"]
         for d in pct.index[-scan_days:]:
             f = flow.get(d)
             if f is None or f != f or abs(float(f)) < floor_yi:
@@ -369,6 +396,43 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
                                "side": "in" if v > 0 else "out"})
     events.sort(key=lambda e: (e["date"], abs(e["flow_yi"])), reverse=True)
     return events
+
+
+def cluster_flow_events(events: list[dict], *, gap_days: int = 7) -> list[dict]:
+    """连环申赎潮汐（二期）：同一 ETF **同方向**、事件日间隔 ≤ gap_days 日历日
+    （≈5 交易日·事件日都是交易日，7 日历日容忍节假日长周末）的连续命中聚成
+    一个 episode；孤立单发不聚。返回按 (次数, |累计净额|) 降序——先看谁被
+    连环操作最猛，同次数看金额。
+
+    [{symbol, side('in'/'out'), n, start, end, net_yi, peak_yi, peak_date}, ...]"""
+    by_sym: dict[str, list[dict]] = {}
+    for e in events:
+        by_sym.setdefault(e["symbol"], []).append(e)
+    episodes: list[dict] = []
+
+    def _flush(sym: str, evs: list[dict]):
+        if len(evs) < 2:
+            return
+        peak = max(evs, key=lambda e: abs(e["flow_yi"]))
+        episodes.append({"symbol": sym, "side": evs[0]["side"], "n": len(evs),
+                         "start": str(evs[0]["date"])[:10], "end": str(evs[-1]["date"])[:10],
+                         "net_yi": sum(e["flow_yi"] for e in evs),
+                         "peak_yi": peak["flow_yi"], "peak_date": str(peak["date"])[:10]})
+
+    for sym, evs in by_sym.items():
+        evs = sorted(evs, key=lambda e: str(e["date"])[:10])
+        cur: list[dict] = []
+        for e in evs:
+            ds = str(e["date"])[:10]
+            if cur and e.get("side") == cur[0].get("side") and \
+                    (pd.to_datetime(ds) - pd.to_datetime(str(cur[-1]["date"])[:10])).days <= gap_days:
+                cur.append(e)
+            else:
+                _flush(sym, cur)
+                cur = [e]
+        _flush(sym, cur)
+    episodes.sort(key=lambda ep: (ep["n"], abs(ep["net_yi"])), reverse=True)
+    return episodes
 
 
 # 窗口交易日数 → 横幅按钮标签（未命中映射的窗口退「N日」）

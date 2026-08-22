@@ -304,11 +304,18 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
     events = rfl.daily_flow_events(
         panel, pctile=float(ap.get("pctile", 0.99)), floor_yi=float(ap.get("floor_yi", 1.0)),
         scan_days=max(scan_windows), min_history=int(ap.get("min_history", 250)))
-    for e in events:                              # 附名称（条带图悬停/横幅展示用）
+    # 二期·当时口径（point-in-time）：事件日只用其之前历史算分位——「当时看来
+    # 异常」的真历史（长窗下今日尺度会漏掉「当时空前、后被更极端流动超越」的事件）
+    events_pit = rfl.daily_flow_events(
+        panel, pctile=float(ap.get("pctile", 0.99)), floor_yi=float(ap.get("floor_yi", 1.0)),
+        scan_days=max(scan_windows), min_history=int(ap.get("min_history", 250)),
+        rank_mode="expanding")
+    for e in events + events_pit:                 # 附名称（条带图悬停/横幅展示用）
         e["name"] = meta.get(e["symbol"], {}).get("name", e["symbol"])
     return {
         "window": window, "state": state, "group_roll": roll, "rolls": rolls,
-        "events": events, "last_date": (roll.index[-1] if len(roll) else None),
+        "events": events, "events_pit": events_pit,
+        "last_date": (roll.index[-1] if len(roll) else None),
         "alert_windows": rfl.alert_windows_payload(roll.index, scan_windows, default_days),
         "alert_default_days": default_days,
         "aum": rfl.group_aum_yi(panel, groups),
