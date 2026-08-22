@@ -184,6 +184,35 @@ def test_daily_flow_events_scan_window():
     assert str(evs250[0]["date"])[:10] == newest                 # 最新在前
 
 
+def test_daily_flow_events_windows_are_nested():
+    # 多窗横幅的窗口性质：分位 as-of-today 与窗口无关 → 短窗事件集 ⊆ 长窗事件集
+    # （一次扫 max(scan_windows)、各窗=日期切片 的前提）
+    n = 300
+    sh = np.full(n, 1e9); sh[-20:-5] = 1.4e9; sh[-5:] = 1.8e9
+    panel, _ = fl.flow_panel({"A": _series_map(n, sh, nav_val=2.0)})
+    for w_short, w_long in ((10, 22), (22, 66), (66, 250)):
+        s = {(e["symbol"], str(e["date"])[:10]) for e in fl.daily_flow_events(panel, scan_days=w_short)}
+        l = {(e["symbol"], str(e["date"])[:10]) for e in fl.daily_flow_events(panel, scan_days=w_long)}
+        assert s <= l
+
+
+def test_alert_windows_payload():
+    cal = _idx(300)                                              # 2024-01-01 起 300 个日历日
+    out = fl.alert_windows_payload(cal, [250, 22, 22], 22)       # 去重+排序
+    assert [o["days"] for o in out] == [22, 250]
+    assert [o["label"] for o in out] == ["1月", "1年"]
+    assert out[0]["default"] is True and out[1]["default"] is False
+    assert out[0]["cutoff"] == str(cal[-22].date())              # 截止=倒数第22个交易日
+    assert out[1]["cutoff"] == str(cal[-250].date())
+    # 日历短于窗口 → 取首日（诚实全量）；default 不在集合 → 最大窗兜底
+    short = fl.alert_windows_payload(_idx(40), [22, 250], 66)
+    assert [o["cutoff"] for o in short] == ["2024-01-19", "2024-01-01"]
+    assert short[1]["default"] is True
+    assert fl.alert_windows_payload([], [22], 22) == []          # 空日历 → 空
+    # 未映射窗口 → 「N日」标签
+    assert fl.alert_window_label(45) == "45日"
+
+
 def test_daily_flow_events_empty():
     assert fl.daily_flow_events({}) == []
     panel, _ = fl.flow_panel({"A": _series_map(300, np.full(300, 1e9))})

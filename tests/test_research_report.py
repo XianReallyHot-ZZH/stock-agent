@@ -219,7 +219,29 @@ def test_flow_events_strip_figure():
     assert fig.layout.yaxis.visible is False                    # 条带无 y 轴
     rng = fig.layout.xaxis.range
     days = (pd.Timestamp(rng[1]) - pd.Timestamp(rng[0])).days
-    assert 28 <= days <= 36                                    # ≈1个月
+    assert 28 <= days <= 36                                    # ≈1个月（无 alert_windows 退化口径）
+
+
+def test_flow_events_strip_figure_default_window_range():
+    # 多窗 payload：条带图嵌入全量事件（含窗外），初始 x 范围=默认窗截止日−1天
+    base = _flow_mini()
+    base["events"] = [
+        {"symbol": "512800", "name": "银行ETF", "date": "2026-08-14", "flow_yi": 38.2,
+         "pct": 0.084, "pctile": 0.996, "side": "in"},
+        {"symbol": "512070", "name": "证券保险ETF", "date": "2026-02-02", "flow_yi": -21.0,
+         "pct": -0.031, "pctile": 0.992, "side": "out"},
+    ]
+    base["last_date"] = "2026-08-14"
+    base["alert_default_days"] = 22
+    base["alert_windows"] = [
+        {"days": 22, "label": "1月", "cutoff": "2026-07-15", "default": True},
+        {"days": 250, "label": "1年", "cutoff": "2025-08-14", "default": False},
+    ]
+    fig = rep.flow_events_strip_figure(base)
+    assert len(fig.data[0].x) + len(fig.data[1].x) == 2        # 全量事件都嵌入（窗外裁掉由 x 范围负责）
+    rng = fig.layout.xaxis.range
+    assert pd.Timestamp(rng[0]).date() == pd.Timestamp("2026-07-14").date()   # cutoff−1天
+    assert pd.Timestamp(rng[1]) > pd.Timestamp("2026-08-14")                   # 末端+1天缓冲
 
 
 def test_flow_events_banner_present_and_absent():
@@ -239,25 +261,90 @@ def test_flow_events_banner_present_and_absent():
                       {"159915": {"name": "创业板ETF", "group": "成长宽基"},
                        "512800": {"name": "银行ETF"}, "512070": {"name": "证券保险ETF"}},
                       as_of="2026-08-14", flow=base)
-    assert "申赎异动 · 最近大额申赎事件（近1月）" in html
+    assert '最近大额申赎事件（近<span id="flow-ev-win">1月</span>）' in html
     assert html.count('class="lazy-chart" data-sym="__flow"') == 2   # 线图+条带
     assert "净申购" in html.split("净申购")[0] or True  # placeholder
     assert 'href="#512800"' in html and "净申购 +38.2亿" in html
     assert "净赎回 -21.0亿" in html and "申购向分位 99.6%" in html and "赎回向分位 99.2%" in html
     assert 'class="flow-ev-today">最新</b>' in html           # 最新日事件有徽标
     assert "申赎异动台账" in html                             # 读图说明 ⑤
+    assert '<button class="flow-win-btn' not in html          # 单窗（无 alert_windows）→ 无切换按钮（CSS 恒在）
     # 无事件（_flow_mini 无 events 键）→ 横幅仍常驻（安静窗口占位）
     html2 = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
                        {"159915": {"name": "创业板ETF"}}, as_of="2026-08-14",
                        flow=_flow_mini())
-    assert "申赎异动 · 最近大额申赎事件（近1月）" in html2
+    assert '最近大额申赎事件（近<span id="flow-ev-win">1月</span>）' in html2
     assert html2.count('class="lazy-chart" data-sym="__flow"') == 1   # 无事件→无线图外占位
     assert "安静窗口属正常" in html2
     assert ">最新</b>" not in html2 and 'href="#512800"' not in html2   # 无条目无徽标
     # 完全不带 flow payload → 横幅整体省略
     html3 = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
                        {"159915": {"name": "创业板ETF"}}, as_of="2026-08-14")
-    assert "申赎异动 · 最近大额申赎事件（近1月）" not in html3
+    assert "最近大额申赎事件" not in html3
+
+
+def test_flow_events_banner_window_switch():
+    """多窗 payload：4 窗 chips + FLOW_EV JSON（各窗台账预渲染）+ 汇总行只进长窗。
+
+    事件布局：银行ETF 3 次申购（1 在 22 日窗内、2 在半年前）+ 证券保险 1 次赎回（窗内）。
+    """
+    base = _flow_mini()
+    base["last_date"] = "2026-08-14"
+    base["alert_default_days"] = 22
+    base["alert_windows"] = [
+        {"days": 22, "label": "1月", "cutoff": "2026-07-16", "default": True},
+        {"days": 66, "label": "3月", "cutoff": "2026-05-08", "default": False},
+        {"days": 132, "label": "6月", "cutoff": "2026-02-06", "default": False},
+        {"days": 250, "label": "1年", "cutoff": "2025-08-15", "default": False},
+    ]
+    base["events"] = [
+        {"symbol": "512800", "date": "2026-08-10", "flow_yi": 38.2, "pct": 0.084,
+         "pctile": 0.996, "pctile_kind": "side", "side": "in"},
+        {"symbol": "512070", "date": "2026-07-20", "flow_yi": -21.0, "pct": -0.031,
+         "pctile": 0.992, "pctile_kind": "side", "side": "out"},
+        {"symbol": "512800", "date": "2026-02-10", "flow_yi": 12.0, "pct": 0.05,
+         "pctile": 0.994, "pctile_kind": "side", "side": "in"},
+        {"symbol": "512800", "date": "2026-01-15", "flow_yi": 8.0, "pct": 0.04,
+         "pctile": 0.991, "pctile_kind": "side", "side": "in"},
+    ]
+    meta = {"159915": {"name": "创业板ETF"},
+            "512800": {"name": "银行ETF"}, "512070": {"name": "证券保险ETF"}}
+    snaps = {"159915": {"nav_dev_pct": 0.5, "nav_dev_cur": 0.0, "nav_extreme_events": [],
+                        "data_sufficient": True, "style": "growth",
+                        "chip": {"state": "flat", "flows": {}}}}
+    html = rep.render(snaps, {"159915": {"shares": None, "nav": None}}, meta,
+                      as_of="2026-08-14", flow=base)
+    # 默认窗台账：两条窗内事件、窗外旧事件不出现、无汇总行（22 < 66）
+    assert 'id="flow-ev-ledger"' in html and "净申购 +38.2亿" in html
+    assert "2026-02-10" not in html.split("var FLOW_EV")[0]       # 初始 DOM 只嵌默认窗台账
+    assert html.count('class="flow-win-btn') >= 4                  # 4 窗 chips
+    assert 'onclick="switchFlowWindow(22)"' in html and 'onclick="switchFlowWindow(250)"' in html
+    assert 'flow-win-btn on" data-days="22"' in html               # 默认窗高亮
+    assert "var FLOW_EV = " in html and "switchFlowWindow" in html  # 预渲染数据 + JS
+    # FLOW_EV JSON 里各窗台账正确切片：1月=2条；3月=2条（旧事件 2/10、1/15 在 5/8 之前→不含）
+    # 6月=3条（含 2/10）；1年=4条 + 按ETF汇总（银行 3次·累计+58.2亿）
+    import json as _json
+    payload = html.split("var FLOW_EV = ", 1)[1].split(";</script>", 1)[0]
+    fev = _json.loads(payload)
+    assert set(fev["ledgers"]) == {"22", "66", "132", "250"} and fev["default"] == 22
+    assert fev["ledgers"]["22"].count("xb-item") == 2
+    assert fev["ledgers"]["66"].count("xb-item") == 2               # 1/15、2/10 均在 5/8 前
+    assert fev["ledgers"]["132"].count("xb-item") == 3              # 2/10 进 6月窗
+    assert fev["ledgers"]["250"].count("xb-item") == 4
+    assert "按ETF汇总" in fev["ledgers"]["250"] and "银行ETF 3次" in fev["ledgers"]["250"]
+    assert "累计+58.2亿" in fev["ledgers"]["250"]                   # 38.2+12.0+8.0
+    assert "按ETF汇总" not in fev["ledgers"]["22"]                  # 短窗无汇总行
+    assert fev["ranges"]["250"][0] == "2025-08-14"                  # cutoff−1天
+    assert fev["labels"]["250"] == "1年"
+    # 只剩窗外旧事件 → 短窗安静占位按窗渲染、长窗照常有条目
+    base2 = dict(base)
+    base2["events"] = [e for e in base["events"] if e["date"] < "2026-06-01"]
+    html2 = rep._flow_events_banner(base2, meta)
+    p2 = _json.loads(html2.split("var FLOW_EV = ", 1)[1].split(";</script>", 1)[0])
+    assert "安静窗口属正常" in p2["ledgers"]["22"]                  # 旧事件在 1月/3月窗外
+    assert "安静窗口属正常" in p2["ledgers"]["66"]
+    assert p2["ledgers"]["132"].count("xb-item") == 1              # 2/10 进 6月窗
+    assert p2["ledgers"]["250"].count("xb-item") == 2
 
 
 # ---------------- render 结构（主题/tab/折叠明细/快速跳转/回顶部/排序） ----------------

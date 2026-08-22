@@ -322,8 +322,11 @@ def group_monthly_matrix(panel: dict, groups: dict[str, list[str]],
 def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.0,
                       scan_days: int = 22, min_history: int = 250,
                       side_min_obs: int = 30) -> list[dict]:
-    """最近申赎异动事件（近 scan_days≈1 个月）：全部命中按日期降序返回，
+    """最近申赎异动事件（近 scan_days 个交易日）：全部命中按日期降序返回，
     截断/展示由 report 层做（条带图全画、文字台账取前 N）。
+    多窗口横幅（2026-08）：本函数**一次按最大窗扫描**（scan_days=max(scan_windows)），
+    各窗口（1/3/6/12月）只是日期切片——分位 as-of-today 全历史、与窗口无关，
+    report 层按 alert_windows_payload 的截止日过滤即可，无需重扫。
 
     判定（自适应每只 ETF 自身波动性 + 金额地板滤小钱噪声）：
       日增减%（Δ份额/前日份额·拆分前复权口径）≥ 自身**方向**历史 pctile 分位
@@ -334,6 +337,8 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
     ETF 一次常规量级申购不该上榜；空前的赎回也不该被更肥的申购尾巴掩盖。
     某方向样本 < side_min_obs → 该方向退绝对值双向分位（kind="abs" 诚实降级）。
     分位为**全历史**口径（含事件当日自身；纯观察·与偏离度分位同哲学·不防前视）。
+    **长窗口语义**：以今天的尺度衡量历史——早前的事件可能被其后更极端的流动
+    挤出 99% 分位而从长窗视图消失，非「当时看来异常」的 point-in-time 口径。
     有效观测 < min_history 的 ETF 跳过（历史太短分位不可靠）。
 
     Returns: [{symbol, date, flow_yi, pct, pctile, pctile_kind('side'/'abs'),
@@ -364,3 +369,32 @@ def daily_flow_events(panel: dict, *, pctile: float = 0.99, floor_yi: float = 1.
                                "side": "in" if v > 0 else "out"})
     events.sort(key=lambda e: (e["date"], abs(e["flow_yi"])), reverse=True)
     return events
+
+
+# 窗口交易日数 → 横幅按钮标签（未命中映射的窗口退「N日」）
+ALERT_WINDOW_LABELS = {22: "1月", 66: "3月", 132: "6月", 250: "1年"}
+
+
+def alert_window_label(days: int) -> str:
+    return ALERT_WINDOW_LABELS.get(int(days), f"{days}日")
+
+
+def alert_windows_payload(calendar, windows, default_days: int) -> list[dict]:
+    """各扫描窗口的元数据（days/label/cutoff/default），供横幅窗口切换。
+
+    cutoff=交易日历倒数第 days 个交易日（ISO 日期串）——窗口成员资格按
+    交易日切（22 交易日≈1 个自然月），非日历日近似。日历短于窗口 → 取首日
+    （窗口覆盖全部历史，诚实全量）。空日历返回空列表。
+    """
+    cal_list = list(calendar)
+    cal = pd.DatetimeIndex(pd.to_datetime(cal_list)) if cal_list else None
+    if cal is None or not len(cal):
+        return []
+    out = []
+    for w in sorted({int(x) for x in windows}):
+        cutoff = cal[-w] if len(cal) >= w else cal[0]
+        out.append({"days": w, "label": alert_window_label(w),
+                    "cutoff": str(cutoff.date()), "default": w == int(default_days)})
+    if not any(o["default"] for o in out) and out:   # default 不在集合 → 最大窗兜底
+        out[-1]["default"] = True
+    return out

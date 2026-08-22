@@ -297,14 +297,20 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
         breadth_floor_yi=float(fp.get("breadth_floor_yi", 1.0)),
         breadth_min=float(fp.get("breadth_min", 0.5)))
     ap = fp.get("alert", {}) or {}
+    # 多窗口横幅（2026-08）：一次按最大窗扫描（分位 as-of-today 与窗口无关），
+    # 各窗口=日期切片，report 层按 alert_windows 的截止日过滤出各自的台账
+    default_days = int(ap.get("scan_days", 22))
+    scan_windows = sorted({int(x) for x in ap.get("scan_windows", [default_days])} | {default_days})
     events = rfl.daily_flow_events(
         panel, pctile=float(ap.get("pctile", 0.99)), floor_yi=float(ap.get("floor_yi", 1.0)),
-        scan_days=int(ap.get("scan_days", 22)), min_history=int(ap.get("min_history", 250)))
+        scan_days=max(scan_windows), min_history=int(ap.get("min_history", 250)))
     for e in events:                              # 附名称（条带图悬停/横幅展示用）
         e["name"] = meta.get(e["symbol"], {}).get("name", e["symbol"])
     return {
         "window": window, "state": state, "group_roll": roll, "rolls": rolls,
         "events": events, "last_date": (roll.index[-1] if len(roll) else None),
+        "alert_windows": rfl.alert_windows_payload(roll.index, scan_windows, default_days),
+        "alert_default_days": default_days,
         "aum": rfl.group_aum_yi(panel, groups),
         "aum_series": rfl.group_aum_series(panel, groups),   # % 态逐日分母
         "groups": list(groups),

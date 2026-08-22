@@ -17,6 +17,7 @@ engine (pure f-string HTML).
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 from datetime import datetime
@@ -29,6 +30,7 @@ from plotly.subplots import make_subplots
 
 from . import earnings as ern
 from . import timing as tm
+from .flow import alert_window_label
 
 CHART_HEIGHT = 460
 _TEMPLATE = "plotly_white"
@@ -787,12 +789,19 @@ def flow_lines_figure(flow: dict) -> go.Figure:
 
 
 def flow_events_strip_figure(flow: dict) -> go.Figure:
-    """申赎异动时间条带（近1月）：x=日期，申购/赎回分上下双轨，点大小∝金额，
+    """申赎异动时间条带：x=日期，申购/赎回分上下双轨，点大小∝金额，
     同日多事件在轨内堆叠。悬停=全信息；点击点跳该 ETF（_PAGE_JS plotly_click）。
-    事件的时间聚集（如某周连环申购潮）在此一目了然——文字台账看不到这层。"""
+    事件的时间聚集（如某周连环申购潮）在此一目了然——文字台账看不到这层。
+    多窗口（2026-08）：嵌入**最大窗全量**事件，超出当前 x 范围的点自然裁掉；
+    窗口切换=JS relayout x 范围（FLOW_EV.ranges），初始范围=默认窗（1月）截止日
+    （−1 天缓冲）。旧 payload 无 alert_windows → 退化 32 日历日近似。"""
     events = flow.get("events") or []
     last = pd.to_datetime(flow.get("last_date") or events[0]["date"])
     x0 = last - pd.Timedelta(days=32)
+    for w in (flow.get("alert_windows") or []):
+        if w.get("default") and w.get("cutoff"):
+            x0 = pd.to_datetime(w["cutoff"]) - pd.Timedelta(days=1)
+            break
     mx = max([abs(e["flow_yi"]) for e in events] + [1.0])
 
     def lane(evs, base):
@@ -834,41 +843,116 @@ def flow_events_strip_figure(flow: dict) -> go.Figure:
     return fig
 
 
+def _flow_ev_ledger_html(events: list[dict], meta: dict, last_date, top_n: int) -> str:
+    """单窗口台账 HTML：top-N 条目（最新在前）+「另有 N 条」；无命中→安静占位。"""
+    if not events:
+        return ('<span class="xb-sub muted">本窗口无大额申赎命中 —— 安静窗口属正常。'
+                '判定：日增减% ≥ 自身<b>方向</b>历史99%分位（申购日比申购日·赎回日比赎回日）<b>且</b> |净申赎额| ≥ 1亿'
+                '（某方向样本<30日退双向；阈值可调 params.research.flow.alert）</span>')
+    items = []
+    for ev in events[:top_n]:
+        nm = meta.get(ev["symbol"], {}).get("name", ev["symbol"])
+        cls = "flow-pos" if ev["flow_yi"] > 0 else "flow-neg"
+        arrow = "净申购" if ev["flow_yi"] > 0 else "净赎回"
+        badge = ('<b class="flow-ev-today">最新</b> '
+                 if str(ev["date"])[:10] == str(last_date)[:10] else "")
+        items.append(
+            f'<span class="xb-item"><a href="#{ev["symbol"]}" class="xb-link">{nm}({ev["symbol"]})</a> '
+            f'{badge}<b class="{cls}">{arrow} {ev["flow_yi"]:+.1f}亿</b> '
+            f'<span class="xb-sub">{str(ev["date"])[:10]} · 日增减 {ev["pct"]:+.1%} · '
+            f'{("申购向" if ev["side"] == "in" else "赎回向") if ev.get("pctile_kind") == "side" else "双向"}'
+            f'分位 {ev["pctile"]:.1%}</span></span>')
+    more = (f'<span class="xb-sub">…另有 {len(events) - top_n} 条</span>'
+            if len(events) > top_n else "")
+    return "".join(items) + more
+
+
+def _flow_ev_summary_html(events: list[dict], meta: dict) -> str:
+    """长窗口（≥3月）按 ETF 汇总行：命中次数 + 累计净额——比逐条日期更早回答
+    「谁在被持续申购/赎回」。按次数降序、同次数按|累计净额|降序，取前 8 只。"""
+    if not events:
+        return ""
+    agg: dict[str, dict] = {}
+    for e in events:
+        a = agg.setdefault(e["symbol"], {"n": 0, "net": 0.0})
+        a["n"] += 1
+        a["net"] += float(e["flow_yi"])
+    rows = sorted(agg.items(), key=lambda kv: (-kv[1]["n"], -abs(kv[1]["net"])))[:8]
+    chips = " · ".join(
+        f'{meta.get(s, {}).get("name", s)} {a["n"]}次·'
+        f'<b class="{"flow-pos" if a["net"] > 0 else "flow-neg"}">累计{a["net"]:+.1f}亿</b>'
+        for s, a in rows)
+    return (f'<div class="xb-list" style="margin-top:2px"><span class="xb-sub muted">'
+            f'按ETF汇总（窗口内 · {len(agg)}只命中）：{chips}</span></div>')
+
+
+# 台账 top-N 随窗口档放大：1月 8 条管窥最近，1年可能上百条事件 → 24 条 + 汇总行
+_FLOW_EV_TOP_N = {22: 8, 66: 12, 132: 16, 250: 24}
+_FLOW_EV_SUMMARY_MIN_DAYS = 66     # ≥3月 窗口附「按ETF汇总」行（短窗逐条日期更直观）
+
+
 def _flow_events_banner(flow: dict, meta: dict, top_n: int = 8) -> str:
-    """📡 申赎异动横幅：最近大额申赎事件台账（|日增减%|≥自身历史分位 且 ≥金额
-    地板），点条目跳该 ETF 日度净申赎图。近1月扫描、最新在前（新事件顶旧事件），
-    最新交易日事件加「最新」徽标。无命中也常驻（安静占位）。纯观察·非买卖建议。"""
+    """📡 申赎异动横幅：最近大额申赎事件台账 + 时间条带，窗口可切 1/3/6/12 月
+    （默认 1 月）。服务端一次扫最大窗，各窗口台账**预渲染成 HTML 字典**嵌进
+    FLOW_EV JSON——客户端切窗口=换 innerHTML + 条带图 relayout x 范围，零重算、
+    无 JS 拼模板（markup 单一来源在 Python）。≥3月 窗口加按 ETF 汇总行。
+    分位 as-of-today：早前事件可能被其后更极端的流动挤出长窗视图（非当时口径）。
+    最新交易日事件加「最新」徽标；无命中也常驻（安静占位）。纯观察·非买卖建议。"""
     events = flow.get("events") or []
     last_date = flow.get("last_date")
-    if not events:
-        body = ('<span class="xb-sub muted">近一个月无大额申赎命中 —— 安静窗口属正常。'
-                '判定：日增减% ≥ 自身<b>方向</b>历史99%分位（申购日比申购日·赎回日比赎回日）<b>且</b> |净申赎额| ≥ 1亿'
-                '（申购日比申购日·赎回日比赎回日·某方向样本<30日退双向；阈值可调 params.research.flow.alert）</span>')
-    else:
-        shown = events[:top_n]
-        items = []
-        for ev in shown:
-            nm = meta.get(ev["symbol"], {}).get("name", ev["symbol"])
-            cls = "flow-pos" if ev["flow_yi"] > 0 else "flow-neg"
-            arrow = "净申购" if ev["flow_yi"] > 0 else "净赎回"
-            badge = ('<b class="flow-ev-today">最新</b> ' if ev["date"] == last_date else "")
-            items.append(
-                f'<span class="xb-item"><a href="#{ev["symbol"]}" class="xb-link">{nm}({ev["symbol"]})</a> '
-                f'{badge}<b class="{cls}">{arrow} {ev["flow_yi"]:+.1f}亿</b> '
-                f'<span class="xb-sub">{ev["date"]} · 日增减 {ev["pct"]:+.1%} · '
-                f'{("申购向" if ev["side"] == "in" else "赎回向") if ev.get("pctile_kind") == "side" else "双向"}'
-                f'分位 {ev["pctile"]:.1%}</span></span>')
-        more = (f'<span class="xb-sub">…另有 {len(events) - top_n} 条</span>'
-                if len(events) > top_n else "")
-        body = "".join(items) + more
+    default_days = int(flow.get("alert_default_days") or 22)
+    windows = flow.get("alert_windows") or [
+        {"days": default_days, "label": alert_window_label(default_days),
+         "cutoff": None, "default": True}]
+    default_days = next((int(w["days"]) for w in windows if w.get("default")),
+                        int(windows[0]["days"]))          # 兜底：default 缺失取最小窗
+
+    ledgers: dict[int, str] = {}
+    ranges: dict[int, list[str]] = {}                     # 各窗口条带 x 范围（ISO）
+    labels: dict[int, str] = {}
+    last_ts = (pd.to_datetime(last_date) if last_date
+               else (pd.to_datetime(events[0]["date"]) if events else None))
+    for w in windows:
+        d = int(w["days"])
+        cutoff = w.get("cutoff")
+        evs = [e for e in events if (not cutoff) or str(e["date"])[:10] >= cutoff]
+        cap = _FLOW_EV_TOP_N.get(d, top_n if d < _FLOW_EV_SUMMARY_MIN_DAYS else 24)
+        body = _flow_ev_ledger_html(evs, meta, last_date, cap)
+        if d >= _FLOW_EV_SUMMARY_MIN_DAYS:
+            body += _flow_ev_summary_html(evs, meta)
+        ledgers[d] = body
+        labels[d] = w.get("label") or alert_window_label(d)
+        if last_ts is not None:
+            x0 = ((pd.to_datetime(cutoff) - pd.Timedelta(days=1)) if cutoff
+                  else last_ts - pd.Timedelta(days=32))
+            ranges[d] = [str(x0.date()), str((last_ts + pd.Timedelta(days=1)).date())]
+
+    chips = ("".join(
+        f'<button class="flow-win-btn{" on" if int(w["days"]) == default_days else ""}" '
+        f'data-days="{int(w["days"])}" onclick="switchFlowWindow({int(w["days"])})">'
+        f'{w.get("label") or alert_window_label(int(w["days"]))}</button>'
+        for w in windows)) if len(windows) > 1 else ""
+    script = ""
+    if len(windows) > 1:                                  # 多窗才嵌数据（单窗无切换）
+        payload = json.dumps({"ledgers": {str(k): v for k, v in ledgers.items()},
+                              "ranges": {str(k): v for k, v in ranges.items()},
+                              "labels": {str(k): v for k, v in labels.items()},
+                              "default": default_days}, ensure_ascii=False)
+        script = ('<script>var FLOW_EV = '
+                  + re.sub(r"</script", r"<\\/script", payload, flags=re.I) + ';</script>')
+
     return (
         '<div class="extreme-banner">'
-        '<div class="extreme-title">📡 申赎异动 · 最近大额申赎事件（近1月） '
-        '<span class="xb-note">时间条带：上轨=净申购(红)/下轨=净赎回(绿)·点大小∝金额·点悬停看详情·**点击点跳该ETF** · '
-        '日增减%≥自身方向历史99%分位 且 ≥1亿 · 流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议</span></div>'
+        '<div class="extreme-title">📡 申赎异动 · 最近大额申赎事件（近'
+        f'<span id="flow-ev-win">{labels.get(default_days, "1月")}</span>）'
+        + (f'<span class="flow-win-btns">{chips}</span>' if chips else "")
+        + ' <span class="xb-note">时间条带：上轨=净申购(红)/下轨=净赎回(绿)·点大小∝金额·点悬停看详情·**点击点跳该ETF** · '
+        '日增减%≥自身方向历史99%分位 且 ≥1亿 · 窗口分位以<b>今天</b>的全历史尺度衡量——早前事件可能被其后'
+        '更极端的流动挤出长窗视图（非当时口径）· 流入≠看好（A股常见逆势申购）· 纯观察·非买卖建议</span></div>'
         + ('<div class="chart-block"><div class="lazy-chart" data-sym="__flow" data-idx="1" '
            'style="min-height:230px"></div></div>' if events else "")
-        + f'<div class="xb-list">{body}</div></div>')
+        + f'<div class="xb-list" id="flow-ev-ledger">{ledgers[default_days]}</div>'
+        + script + '</div>')
 
 
 def _flow_section(flow: dict) -> str:
@@ -1245,6 +1329,11 @@ p.sub { color:var(--muted); font-size:13px; margin-top:2px; }
              cursor:pointer; user-select:none; }   /* 点击=线开关·双击=独显·title=成员列表 */
 .flow-ev-today { font-size:10px; background:#fcd34d; color:#78350f; border-radius:4px;
                  padding:0 4px; margin-left:2px; }   /* 申赎异动「最新」徽标 */
+.flow-win-btns { display:inline-flex; gap:4px; margin-left:8px; vertical-align:middle; }
+.flow-win-btn { font-size:11px; line-height:1.5; padding:1px 9px; border-radius:9px;
+                cursor:pointer; background:var(--chipbg); color:var(--text2);
+                border:1px solid transparent; }      /* 申赎异动窗口切换（1/3/6/12月）*/
+.flow-win-btn.on { background:#fcd34d; color:#78350f; font-weight:600; }
 .flow-chip:not(.on) { opacity:.38; filter:grayscale(.8); }   /* 关闭态：变灰去色 */
 .flow-dot { display:inline-block; width:8px; height:8px; border-radius:50%;
             margin-right:4px; vertical-align:baseline; }
@@ -1425,6 +1514,7 @@ function _renderChart(el){
     if(el.dataset.rendered === '1') _applyPlotlyTheme(el, _isDark());
     if(sym === '__flow' && i === 0) _applyFlowFilter();   // 组chips过滤态在(重)渲染后恢复
     if(sym === '__flow' && i === 1){                      // 异动条带：点击点跳该ETF明细
+      if(_flowEvDays != null) switchFlowWindow(_flowEvDays);   // 已切窗口在(重)渲染后恢复
       el.removeAllListeners && el.removeAllListeners('plotly_click');
       el.on('plotly_click', function(data){
         try { var cd = data.points[0].customdata;
@@ -1437,6 +1527,25 @@ function _renderChart(el){
 // 单击 chip=该组线开关 · 双击=仅看该组(已独显则复位) · ↺全部=全开
 function _flowLinesEl(){
   return document.querySelector('.lazy-chart[data-sym="__flow"][data-idx="0"]');
+}
+// —— 申赎异动横幅：窗口切换（1/3/6/12月·默认1月）——
+// 各窗口台账 HTML 与条带 x 范围已由服务端预渲染进 FLOW_EV：切换=换 innerHTML +
+// relayout，零重算、无 JS 拼模板。图被懒渲染/purge 后重画时按 _flowEvDays 恢复。
+var _flowEvDays = null;
+function switchFlowWindow(days){
+  if(!window.FLOW_EV) return;
+  _flowEvDays = days;
+  document.querySelectorAll('.flow-win-btn').forEach(function(b){
+    b.classList.toggle('on', +b.getAttribute('data-days') === +days);
+  });
+  var lab = document.getElementById('flow-ev-win');
+  if(lab && FLOW_EV.labels[days]) lab.textContent = FLOW_EV.labels[days];
+  var led = document.getElementById('flow-ev-ledger');
+  if(led && FLOW_EV.ledgers[days] !== undefined) led.innerHTML = FLOW_EV.ledgers[days];
+  var el = document.querySelector('.lazy-chart[data-sym="__flow"][data-idx="1"]');
+  if(el && el.dataset.rendered === '1' && FLOW_EV.ranges[days]){
+    try { Plotly.relayout(el, {'xaxis.range': FLOW_EV.ranges[days]}); } catch(e) {}
+  }
 }
 function _applyFlowFilter(){
   var el = _flowLinesEl();
