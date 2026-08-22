@@ -6,7 +6,7 @@ A股板块轮动 ETF 决策助手。规则引擎出决策、大模型出解释�
 
 ```bash
 # 开发
-python -m pytest tests/ -q                    # 跑全部测试（850 个）
+python -m pytest tests/ -q                    # 跑全部测试（874 个）
 python scripts/run_backtest.py                 # 单次回测（默认信号）
 python scripts/sweep_params.py                 # 参数扫描（全部信号）
 python scripts/walk_forward.py                 # 样本外验证
