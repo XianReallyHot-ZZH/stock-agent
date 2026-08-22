@@ -104,6 +104,9 @@ def build_pool_snapshot(store, config=None, asof: str | None = None) -> dict:
     cov = uni.industry_coverage(joined)
     codes = [str(c) for c in joined.index]
     codeset = set(codes)
+    # 名称查表(spot join 而来): PEAD/修正动量等按 code 装配的表补 name 用——
+    # 不补则看板股票列退 code 兜底,显示「688308 688308」(2026-08 抓回)
+    uni_names = joined["name"].astype(str).to_dict() if "name" in joined.columns else {}
 
     # ---- 当期三环帧 + 逐股面板 ----
     period = cal.current_period(now)
@@ -117,6 +120,8 @@ def build_pool_snapshot(store, config=None, asof: str | None = None) -> dict:
     snap_then_date = (now - timedelta(days=7 * int(revcfg.get("lookback_weeks", 4)))).strftime("%Y%m%d")
     _, snap_then = store.get_consensus_snapshot(asof=snap_then_date)
     rev = rv.revision_table(cons, snap_then, dates_available=n_dates, codes=codes, cfg=revcfg)
+    for r in rev["rows"]:                      # 纯函数按 code 出行,名称由装配层补
+        r["name"] = uni_names.get(r["code"], r["code"])
     rev_by_code = {r["code"]: r for r in rev["rows"]}
 
     # ---- 前瞻 g 横截面分位(成长猛 rank 腿) ----
@@ -171,7 +176,9 @@ def build_pool_snapshot(store, config=None, asof: str | None = None) -> dict:
             r = pe.pead_surprise(float(yoy), pt, eps_now=eps_now, eps_prior=eps_prior,
                                  fy1_year=fy1, prior_actual_yoy=prior_np)
             if r["valid"]:
-                pead_events.append({"code": str(code), "period": pt, "announce_date": ann,
+                pead_events.append({"code": str(code),
+                                    "name": uni_names.get(str(code), str(code)),
+                                    "period": pt, "announce_date": ann,
                                     "type": row.get("type"), "forecast_yoy": float(yoy),
                                     "surprise_pp": r["surprise_pp"], "expected": r["expected"],
                                     "leg": r["leg"]})

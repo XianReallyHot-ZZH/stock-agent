@@ -98,6 +98,7 @@ def test_full_pipeline_assembles():
     rev = {r["code"]: r for r in snap["revision"]["rows"]}
     assert snap["revision"]["cold_start"] is None
     assert "002460" in rev and rev["002460"]["up"] is True
+    assert rev["002460"]["name"] == "赣锋锂业"   # 装配层补 name(纯函数只出 code)
     # 变脸: 002460 同尾 20250630→20260630 尚无 20260630 正式报 → 由已报序列判(无 down)
     codes_down = {r["code"] for r in snap["face_rows_down"]}
     assert "002460" not in codes_down
@@ -105,6 +106,7 @@ def test_full_pipeline_assembles():
     pead = {r["code"]: r for r in snap["pead_rows"]}
     assert "002460" in pead and abs(pead["002460"]["surprise_pp"] - 40.0) < 1e-6
     assert pead["002460"]["leg"] == "A"
+    assert pead["002460"]["name"] == "赣锋锂业"  # 无 name 则看板股票列退 code 兜底(2026-08 修复)
     # 价格新鲜度/快照数
     assert snap["price_freshness"]["n"] == 2
     assert snap["n_snapshots"] == 4
