@@ -66,10 +66,23 @@ def _chip(label: str, color: str) -> str:
 
 
 # ---- ① 货币信用 ----
+_MONEY_WINDOW_YEARS = 10  # 展示窗口近 N 年(2008-2011 四万亿年代 25%+ 高增速会拉长 y 轴、
+                          # 压平近年 6-13% 的形态;全量序列仍供状态机/事件计算,见 _money_html 图注)
+
+
 def _money_figure(mcd: dict) -> go.Figure:
     fig = go.Figure()
     m2, m1 = mcd["m2_series"], mcd["m1_series"]
     sc, pu = mcd["scissor_series"], mcd["pulse_series"]
+    # 数据切片到展示窗口(只喂近 N 年 → y 轴 autorange 随窗口数据,不再被窗口外高点拉长)
+    ends = [s.index[-1] for s in (m2, m1, sc, pu) if len(s)]
+    if ends:
+        cut = (pd.to_datetime(max(ends))
+               - pd.DateOffset(years=_MONEY_WINDOW_YEARS)).strftime("%Y-%m-01")
+        m2, m1, sc, pu = (s[s.index >= cut] for s in (m2, m1, sc, pu))
+        events = [e for e in mcd.get("events", []) if str(e["month"]) >= cut]
+    else:
+        events = list(mcd.get("events", []))
     fig.add_trace(go.Scatter(
         x=pd.to_datetime(m2.index), y=m2.to_numpy(dtype=float), name="M2 同比%",
         line=dict(color=_PAL["series_1"], width=2.2),
@@ -91,7 +104,7 @@ def _money_figure(mcd: dict) -> go.Figure:
             hovertemplate="%{x|%Y-%m}<br>社融脉冲 %{y:.1f}%<extra></extra>"))
     m2_map = {str(m)[:7]: float(v) for m, v in m2.items()}
     for kind, (sym, color, label) in _MONEY_EVENT_STYLE.items():
-        ev = [e for e in mcd.get("events", []) if e["kind"] == kind]
+        ev = [e for e in events if e["kind"] == kind]
         if not ev:
             continue
         fig.add_trace(go.Scatter(
@@ -116,9 +129,9 @@ def _money_figure(mcd: dict) -> go.Figure:
     fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
                      rangeslider_visible=True,
                      rangeselector=dict(buttons=[
-                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(count=10, label="10年", step="year", stepmode="backward"),
                          dict(count=5, label="5年", step="year", stepmode="backward"),
-                         dict(label="全部", step="all"),
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
                      ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
     return fig
 
@@ -158,7 +171,10 @@ def _money_html(mcd: dict, fig_html: str, conclusion: str) -> str:
             f"口径:金十源·月频(次月中旬公布上月,天然滞后 2-6 周);事件标记=2月动量 run 状态机"
             f"(连降{mcm.DOWN_RUN}月=下行确认/大段后反向{mcm.TURN_RUN}月=拐点,与 validate_m2_timing 同规则);"
             "M1 于 2024-01 换新口径(含个人活期)——前后不可比,只展示不进研究;"
-            "社融脉冲=增量TTM/M2 代理(存量同比无免费源)。<br>" + concl_html)
+            "社融脉冲=增量TTM/M2 代理(存量同比无免费源);"
+            "时序图只画近10年(更早年份 25%+ 的高增速会拉长 y 轴、压平近年形态——"
+            "状态机/事件计算仍用 2008 起全量序列,全史事件图见 validate_m2_timing)。<br>"
+            + concl_html)
     return tiles + f"<div class='hint' style='margin-top:10px'>{hint}</div>" + (
         f"<div style='margin-top:12px'>{fig_html}</div>" if fig_html else "")
 
