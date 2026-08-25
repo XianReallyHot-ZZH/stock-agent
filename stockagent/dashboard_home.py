@@ -1,7 +1,7 @@
-"""六看板总入口壳页 (iframe 导航 · 只读 · 无数据依赖)。
+"""七看板总入口壳页 (iframe 导航 · 只读 · 无数据依赖)。
 
-data/index.html: 左侧导航 + 右侧 iframe 装载六个现有看板 HTML, 切换不重载(保留滚动/状态)。
-六个看板生成器零改动——壳只负责导航/记忆上次选择/as_of(mtime) 标注; 缺哪个看板就提示生成命令。
+data/index.html: 左侧导航 + 右侧 iframe 装载七个现有看板 HTML, 切换不重载(保留滚动/状态)。
+各看板生成器零改动——壳只负责导航/记忆上次选择/as_of(mtime) 标注; 缺哪个看板就提示生成命令。
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ _TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>stock-agent · 六看板总入口</title>
+<title>stock-agent · 七看板总入口</title>
 <style>
 :root { --bg:#f7f7f5; --side:#ffffff; --text:#1a1a19; --muted:#6b7280; --line:#e5e7eb;
         --accent:#ea580c; --ok:#16a34a; --warn:#d97706; }
@@ -92,7 +92,7 @@ iframe { width:100%; height:100%; border:none; display:none; background:#fff }
 </head>
 <body>
 <aside>
-  <div class="brand">📈 stock-agent<span class="sub">六看板总入口 · __GEN_AT__</span></div>
+  <div class="brand">📈 stock-agent<span class="sub">七看板总入口 · __GEN_AT__</span></div>
   <nav id="nav"></nav>
   <div class="foot">
     <button id="theme" class="tb">🌙 深色</button>

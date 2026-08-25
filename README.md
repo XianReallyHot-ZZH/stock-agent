@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Tests](https://img.shields.io/badge/tests-874%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-942%20passing-brightgreen.svg)
 ![Data](https://img.shields.io/badge/data-AkShare-orange.svg)
 ![Status](https://img.shields.io/badge/status-shadow%20only-lightgrey.svg)
 
@@ -21,7 +21,7 @@
 - [🧭 设计哲学](#-设计哲学)
 - [🏗️ 架构](#️-架构)
 - [🚀 快速开始](#-快速开始)
-- [📊 六大模块](#-六大模块)
+- [📊 八大模块](#-八大模块)
 - [🗓️ 日常使用](#️-日常使用)
 - [🔧 配置](#-配置)
 - [📡 数据源](#-数据源)
@@ -46,7 +46,7 @@
 - **仓位管理看板**：估值档 × 预案表对照器——沪深300 PE+PB 10 年滚动分位四档逐日回放（2005 起，与指数看板 ④ 同口径）+ 档位统计（历史占比/前向 1y·3y 收益中位/年化波动）+ 切换事件台账 + 环境注记（恐贪/地量/关键位）；预案表 = `params.yaml position_plan` 用户自定义的档位→权益仓位%区间，看板只对照「现在在哪格」，温度计非开关·不喂引擎。
 - **候选个股池看板**：研报覆盖池（~2300 只·consensus∩非ST）的**筛选漏斗**——六张策略表：①偏离超卖复合分（自身百分位触发+护栏+企稳，防飞刀）②业绩预期猛×深跌（周期=商品驱动+g确认 / 成长=三腿；披露窗口A全类型+B仅周期）③一致预期修正动量（个股版 E4）④PEAD 预告超预期（point-in-time 双腿无前视）⑤业绩变脸监测（跳档/趋势破位/连亏/拐头，陈老师方法论系统化）⑥戴维斯双击候选（stage-2 按需腿）；raw+分红运行时前复权防除息假极值；配 event-study 验证器（结论含无 edge 也注入读图说明）。
 - **自律度对账**：记录目标持仓 vs 实际执行，量化自己的纪律。
-- **纯函数 + 配置驱动 + 全测试覆盖**（874 个 pytest），回测与实盘共用同一引擎函数。
+- **纯函数 + 配置驱动 + 全测试覆盖**（942 个 pytest），回测与实盘共用同一引擎函数。
 
 ---
 
@@ -75,7 +75,10 @@
   │   × 6 可插拔信号                    │   │   • 指数择时    (tracker/)    │
   │   × 双层止损(ATR/entry_stop)        │   │   • 个股诊断    (tracker/)    │
   │                                    │   │   • 仓位管理     (tracker/)    │
-  │   → 组合决策 → Engine 编排           │   │   → 5 套交互式 HTML 看板      │
+  │                                    │   │   • 宏观框架(western_macro/)  │
+  │                                    │   │   • 国内宏观  (china_macro/)  │
+  │                                    │   │   • 候选个股池   (pool/)       │
+  │   → 组合决策 → Engine 编排           │   │   → 7 套交互式 HTML 看板      │
   └──────────────────┬─────────────────┘   └─────────────────────────────┘
                      ▼
   ┌────────────────────────────────────┐
@@ -110,7 +113,9 @@ python scripts/update_data.py                         # 日线（幂等，~1 分
 python scripts/backfill_scale.py --start 2021-01-01   # ETF 份额历史（~10 分钟）
 python scripts/fix_splits.py                          # 修拆分（运行一次）
 
-# 五套看板所需（首次较久，之后增量；仓位管理看板零新增回填，直接用 backfill_index 的沪深300 PE/PB）
+# 七套看板所需（首次较久，之后增量；仓位管理看板零新增回填，直接用 backfill_index 的沪深300 PE/PB）
+# （候选个股池冷启动较重 ~2-3h，见下文第 8 节；国内宏观一键如下）
+python scripts/backfill_china_macro.py               # 国内宏观:Shibor/FDR007/LPR/中债+央行表+国债/地方债+通胀/实体
 python scripts/setup_research_dashboard.py --skip-pe  # ETF 研究看板一键（价格+份额+净值+业绩预期底座+渲染；--skip-pe 省PE ~30min）
 python scripts/backfill_index.py                      # 7 宽基日线(含上证综指·中证1000) + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 上交所融资融券(⑨恐惧贪婪)
 python scripts/backfill_stock_data.py                 # 观察池个股 日线/估值/财报/分红/预告
@@ -127,12 +132,12 @@ python scripts/backfill_economic_calendar.py           # 经济日历(美国高�
 ### 验证安装
 
 ```bash
-python -m pytest tests/ -q          # 874 个测试全过即环境 OK
+python -m pytest tests/ -q          # 942 个测试全过即环境 OK
 ```
 
 ---
 
-## 📊 六大模块
+## 📊 八大模块
 
 ### 1. ETF 轮动决策引擎（核心）
 
@@ -160,7 +165,7 @@ rotation:
 
 ```bash
 python scripts/research_report.py             # 生成 data/research_report.html（纯可视化，无 LLM/无告警推送）
-python scripts/dashboard_data_check.py --fix  # 查/补数据新鲜度（价格/份额/净值；成分/一致预期快照/三环链 周度自动；PE 不必补）
+python scripts/dashboard_data_check.py --fix  # 查/补数据新鲜度（价格/份额/净值+业绩预期底座+指数层+货币⑪+国内宏观+候选池,各腿按节奏门控）
 ```
 
 ### 3. 指数择时层看板
@@ -247,7 +252,7 @@ python scripts/china_macro_report.py            # 生成 data/china_macro.html�
 
 ## 📡 数据源
 
-python -m pytest tests/ -q          # 874 个
+python -m pytest tests/ -q          # 942 个
 
 数据为**不复权**原始价，需 `fix_splits.py` 修拆分后用于价格序列（真 NAV 不受影响）。
 
@@ -256,7 +261,7 @@ python -m pytest tests/ -q          # 874 个
 ## 🧪 测试
 
 ```bash
-python -m pytest tests/ -q          # 874 个
+python -m pytest tests/ -q          # 942 个
 ```
 
 - **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值。
@@ -288,7 +293,7 @@ stock-agent/
 ├── scripts/           update_data · run_eod · run_morning_report · run_backtest ·
 │                      sweep_params · walk_forward · backfill_scale · fix_splits ·
 │                      research_report · index_timing_report · stock_report · ...
-├── tests/             单测(874)
+├── tests/             单测(942)
 ├── docs/              PRD · 执行计划 · 课程笔记 · Phase 交接
 ├── DESIGN.md          产品设计(16 决策 + 架构 + 路线图 + 回测结论)
 ├── CLAUDE.md          开发规范(命令 + 架构 + 代码风格 + 数据质量)

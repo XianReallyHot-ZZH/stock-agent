@@ -1,4 +1,4 @@
-"""Tests for stockagent.dashboard_home (五看板总入口壳页).
+"""Tests for stockagent.dashboard_home (七看板总入口壳页).
 
 Covers nav_entries (mtime→as_of / 当日新鲜度 / 缺文件) and render_home
 (壳页关键标记: iframe/导航 JSON/localStorage 键/深浅色)。模板布局本身不测。
