@@ -666,6 +666,42 @@ class DataManager:
             log.warning("china_tsf failed: %s", str(e)[:120])
         return out
 
+    def update_china_rates(self) -> dict:
+        """Fetch + store 中国利率与流动性四腿(第七看板: Shibor/FDR定盘/LPR/中债期限结构,金十源)。
+        逐腿独立容错;源返回全历史 → 全量 upsert 幂等(repo 按年分段拉)。Returns {leg: rows}。"""
+        out = {"shibor": 0, "repo": 0, "lpr": 0, "cnbond": 0}
+        legs = [
+            ("shibor", fetcher.fetch_shibor, self.store.upsert_shibor),
+            ("repo", fetcher.fetch_repo_fix, self.store.upsert_repo_fix),
+            ("lpr", fetcher.fetch_lpr, self.store.upsert_lpr),
+            ("cnbond", fetcher.fetch_cn_bond, self.store.upsert_cn_bond),
+        ]
+        for name, fetch, upsert in legs:
+            try:
+                rows = fetch()
+                out[name] = upsert(rows)
+                log.info("china_rates %s: +%d rows (to %s)", name, out[name],
+                         rows[-1].get("date") if rows else "?")
+            except Exception as e:  # noqa: BLE001
+                log.warning("china_rates %s failed: %s", name, str(e)[:120])
+            time.sleep(0.3)
+        if any(out.values()):
+            self.store.set_meta("last_china_rates_update", fetcher.today_str())
+        return out
+
+    def update_cb_balance(self) -> dict:
+        """Fetch + store 央行资产负债表(第七看板,月频滞后~1月;claim_odc=OMO/MLF 余额)。幂等。"""
+        out = {"cb_balance": 0}
+        try:
+            rows = fetcher.fetch_cb_balance()
+            out["cb_balance"] = self.store.upsert_cb_balance(rows)
+            self.store.set_meta("last_cb_balance_update", fetcher.today_str())
+            log.info("cb_balance: +%d rows (to %s)", out["cb_balance"],
+                     rows[-1]["month"] if rows else "?")
+        except Exception as e:  # noqa: BLE001
+            log.warning("cb_balance failed: %s", str(e)[:120])
+        return out
+
     def update_index_all(self) -> None:
         """Convenience: refresh all index-layer data (daily + PE + PB + market PB + turnover)."""
         self.update_index_daily()

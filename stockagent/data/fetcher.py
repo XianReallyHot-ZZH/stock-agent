@@ -1812,3 +1812,148 @@ def fetch_china_tsf(retries: int = 3) -> list[dict]:
     raise FetchError(f"china_tsf 抓取重试耗尽: {last}")
 
 
+# ---- 中国利率与流动性 (第七看板 国内宏观 · 金十源,2026-08-24 探针验证) ----
+_SHIBOR_COLS = {"overnight": "O/N-定价", "w1": "1W-定价", "w2": "2W-定价", "m1": "1M-定价",
+                "m3": "3M-定价", "m6": "6M-定价", "m9": "9M-定价", "y1": "1Y-定价"}
+
+
+def parse_shibor(df) -> list[dict]:
+    """ak.macro_china_shibor_all (金十,2015起,日频) → [{date,overnight,w1..y1}](只取定价列,弃涨跌幅)。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        d = _norm_date(r.get("日期"))
+        if not d:
+            continue
+        row = {"date": d}
+        for k, col in _SHIBOR_COLS.items():
+            row[k] = r.get(col)
+        out.append(row)
+    return out
+
+
+def fetch_shibor(retries: int = 3) -> list[dict]:
+    return _retry_ak_wrap(parse_shibor, ak.macro_china_shibor_all, retries)
+
+
+def parse_repo_fix(df) -> list[dict]:
+    """ak.repo_rate_hist (定盘利率,日频) → [{date,fr001..fdr014}]。FDR=银银间(DR 系,央行政策目标利率)。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        d = _norm_date(r.get("date"))
+        if not d:
+            continue
+        out.append({"date": d, "fr001": r.get("FR001"), "fr007": r.get("FR007"),
+                    "fr014": r.get("FR014"), "fdr001": r.get("FDR001"),
+                    "fdr007": r.get("FDR007"), "fdr014": r.get("FDR014")})
+    return out
+
+
+def fetch_repo_fix(start: str = "2020-09-30", end: str | None = None,
+                   retries: int = 2) -> list[dict]:
+    """FR/FDR 定盘利率(需日期窗口参数,按年分段拉全史——同 fetch_market_margin 分段先例)。"""
+    end = end or today_str()
+    out: list[dict] = []
+    seg_start = start
+    while seg_start < end:
+        y = int(seg_start[:4])
+        seg_end = min(f"{y}-12-31", end)
+        last = None
+        rows = None
+        for i in range(retries + 1):
+            try:
+                rows = parse_repo_fix(
+                    ak.repo_rate_hist(start_date=seg_start.replace("-", ""),
+                                      end_date=seg_end.replace("-", "")))
+                break
+            except Exception as e:  # noqa: BLE001
+                last = e
+                time.sleep(1.5 * (i + 1))
+        if rows is None:
+            raise FetchError(f"repo_fix {seg_start}..{seg_end} 重试耗尽: {last}")
+        out.extend(rows)
+        seg_start = f"{y + 1}-01-01"
+        time.sleep(0.4)
+    return out
+
+
+def parse_lpr(df) -> list[dict]:
+    """ak.macro_china_lpr (月频20日,1991起含旧贷款基准利率) → [{date,lpr1y,lpr5y,base1y,base5y}]。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        d = _norm_date(r.get("TRADE_DATE"))
+        if not d:
+            continue
+        out.append({"date": d, "lpr1y": r.get("LPR1Y"), "lpr5y": r.get("LPR5Y"),
+                    "base1y": r.get("RATE_1"), "base5y": r.get("RATE_2")})
+    return out
+
+
+def fetch_lpr(retries: int = 3) -> list[dict]:
+    return _retry_ak_wrap(parse_lpr, ak.macro_china_lpr, retries)
+
+
+def parse_cn_bond(df) -> list[dict]:
+    """ak.bond_zh_us_rate (中美国债收益率同表) → 只取中国列 [{date,y2,y5,y10,y30,spread_10y2y}]
+    (美国列归 western_macro 域,不在此存)。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        d = _norm_date(r.get("日期"))
+        if not d:
+            continue
+        out.append({"date": d, "y2": r.get("中国国债收益率2年"), "y5": r.get("中国国债收益率5年"),
+                    "y10": r.get("中国国债收益率10年"), "y30": r.get("中国国债收益率30年"),
+                    "spread_10y2y": r.get("中国国债收益率10年-2年")})
+    return out
+
+
+def fetch_cn_bond(start_date: str = "19901219", retries: int = 3) -> list[dict]:
+    return _retry_ak_wrap(parse_cn_bond, ak.bond_zh_us_rate, retries, start_date=start_date)
+
+
+def parse_cb_balance(df) -> list[dict]:
+    """ak.macro_china_central_bank_balance (央行资产负债表,月频,统计时间 '1993.6'式)
+    → [{month,claim_odc,base_money,govt_deposit,total_assets}]。对其他存款性公司债权=OMO/MLF 余额
+    (月度差分≈净投放的滞后近似);早期缺列 NaN → None 归一。"""
+    if df is None or len(df) == 0:
+        return []
+    _nn = lambda v: None if v is None or v != v else v   # noqa: E731  NaN→None(pandas 混列读成 NaN)
+    out = []
+    for _, r in df.iterrows():
+        m = _CB_DATE_RE.match(str(r.get("统计时间") or ""))
+        if not m:
+            continue
+        out.append({
+            "month": f"{m.group(1)}-{int(m.group(2)):02d}-01",
+            "claim_odc": _nn(r.get("对其他存款性公司债权")),
+            "base_money": _nn(r.get("储备货币")),
+            "govt_deposit": _nn(r.get("政府存款")),
+            "total_assets": _nn(r.get("总资产")),
+        })
+    return out
+
+
+def fetch_cb_balance(retries: int = 3) -> list[dict]:
+    return _retry_ak_wrap(parse_cb_balance, ak.macro_china_central_bank_balance, retries)
+
+
+def _retry_ak_wrap(parse, fn, retries: int = 3, **kw) -> list[dict]:
+    """金十系单调用端点通用壳:重试 + 解析(指数退避,偶发被拦耐拦)。"""
+    last = None
+    for i in range(retries + 1):
+        try:
+            return parse(fn(**kw))
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if i < retries:
+                time.sleep(1.5 * (i + 1))
+    raise FetchError(f"{getattr(fn, '__name__', 'ak')} 抓取重试耗尽: {last}")
+
+

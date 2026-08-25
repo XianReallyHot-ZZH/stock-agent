@@ -6,7 +6,7 @@ A股板块轮动 ETF 决策助手。规则引擎出决策、大模型出解释�
 
 ```bash
 # 开发
-python -m pytest tests/ -q                    # 跑全部测试（910 个）
+python -m pytest tests/ -q                    # 跑全部测试（925 个）
 python scripts/run_backtest.py                 # 单次回测（默认信号）
 python scripts/sweep_params.py                 # 参数扫描（全部信号）
 python scripts/walk_forward.py                 # 样本外验证
@@ -19,8 +19,8 @@ python scripts/fix_splits.py                   # 修拆分（运行一次）
 python scripts/fix_share_scale.py              # 修 fix_splits 份额前复权残留错位行（运行一次，2026-08 已跑）
 python scripts/plot_shares.py                  # 画份额+净值交互图（注意：净值轴=close价，旧bug保留）
 
-# 六看板总入口壳页（左侧导航 iframe 装载六看板 · data/index.html · 无数据依赖秒级）
-python scripts/dashboard_home.py               # 生成 + 打开（六看板 HTML 各自生成后刷新即见；记住上次选择；绿点=今日/黄点=过期/灰点=未生成给命令）
+# 七看板总入口壳页（左侧导航 iframe 装载七看板 · data/index.html · 无数据依赖秒级）
+python scripts/dashboard_home.py               # 生成 + 打开（七看板 HTML 各自生成后刷新即见；记住上次选择；绿点=今日/黄点=过期/灰点=未生成给命令）
 
 # 候选个股池（pool，第六看板 · 只读筛选旁路 · 全覆盖池六策略漏斗，详见 docs/stock_pool/CONTEXT.md）
 python scripts/backfill_stock_pool.py --all    # 冷启动：spot→consensus兜底→行业→日线(~1.5-3h断点续跑)→分红；日度增量由 dashboard_data_check --fix 自动带（~45-75min）
@@ -55,6 +55,13 @@ python scripts/backfill_stock_data.py             # 回填观察池 个股日线
 python scripts/stock_report.py                    # 生成个股诊断看板（data/stock_diagnose.html，告警区+个股卡片，深浅色可切；🤖按钮点击时实时生成AI评估）
 python scripts/stock_report.py --push-alerts      # 生成看板 + 推送个股信号提醒到微信（A1/A2/A3/G1/G2/E3/E4/Q1/P1/M1/M2 触发时）
 python scripts/ai_eval_server.py                  # 🤖AI评估本地服务（首个长驻·127.0.0.1:8765，看板🤖按钮点击时实时调LLM生成；先起它再点🤖）
+
+# 国内宏观看板（china_macro，第七看板 · 只读旁路 · 与宏观框架=海外宏观对称 · 规划见 docs/EXECUTION_PLAN-国内宏观.md）
+python scripts/backfill_china_macro.py        # 回填 利率四腿(Shibor 2015起/FDR007定盘 2020-09起按年分段/LPR 1991起/中债期限结构 1990起) + 央行资产负债表(月频1993起,OMO/MLF余额)（幂等·金十源）
+python scripts/china_macro_report.py          # 生成 data/china_macro.html（三 section：①货币信用=⑪完整版[M2/M1/剪刀差/社融脉冲/状态机+实证结论meta读] ②利率与流动性[FDR007/Shibor/LPR/10Y−2Y+OMO月度净投放近似] ③政策日历[政治局4/7/12月·中央经济工作会议·货政报告·两会·LPR·金融数据公布 下次时点+倒计时]；深浅色可切）
+
+# 国内宏观看板（china_macro · 第七看板 data/china_macro.html · 只读旁路 · 与宏观框架=海外宏观对称 · 规划与端点真相见 docs/EXECUTION_PLAN-国内宏观.md）
+- **`stockagent/china_macro/` + `scripts/china_macro_report.py`**：中国本土宏观观测层，三 section——①货币信用（M2/M1 同比+剪刀差+社融脉冲+episode 状态机+实证结论 meta 读=指数择时 ⑪ 的完整版）②利率与流动性（FDR007=DR 系定盘·央行政策目标利率区[2020-09 起]/Shibor[2015 起 8 期限]/LPR[1991 起]/中债期限结构 10Y−2Y[1990 起]+央行资产负债表「对其他存款性公司债权」月度差分=OMO/MLF 净投放滞后近似[1993 起·月频]）③政策日历（`policy.py` 纯函数·硬编码典型时点：政治局经济会议 4/7/12 月·中央经济工作会议·货政报告季度·两会·LPR 每月 20 日·金融数据公布每月 10-15 日→下次时点+倒计时；只放事实，观点结算归 docs/CLAIMS_LEDGER.md）。数据腿 `backfill_china_macro.py`（五表 shibor_daily/repo_fix_daily/lpr_monthly/cn_bond_daily/cb_balance_monthly，金十源幂等；FDR 按年分段拉；已并入 dashboard_data_check --fix[利率>2天·央行表>35天门控]）。**待补三项**（免费源缺，诚实标注不硬凑）：日度 OMO 净投放/票据转贴利率/国债发行明细（地方债明细有）。**纪律**：先行代理未过 event-study 礼遇前一律观察项、不出现「预测/信号」措辞（M2 拐点实证已示公布滞后吃掉几乎全部 edge）；**永不喂引擎；隔离要点**：china_macro→tracker 仅 import money_conditions/diagnose 纯函数（与 pool→tracker 同向），不 re-export
 
 # 西方宏观预测台账（western_macro · Phase 3 只读旁路 · ADR-0001）
 # 两面: ①预测台账(claim→edge打分,度量预测者) ②宏观框架看板(北向目标·纯数据沿因果链跟踪分析,不再抠命中率)。永不喂引擎

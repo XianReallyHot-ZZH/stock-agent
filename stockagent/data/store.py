@@ -288,6 +288,38 @@ CREATE TABLE IF NOT EXISTS china_tsf (           -- 社融增量(月频,金十)�
     tsf_inc REAL,                                -- 当月社融增量(亿元)
     PRIMARY KEY (month)
 );
+CREATE TABLE IF NOT EXISTS shibor_daily (          -- 国内宏观(第七看板) · 利率与流动性: Shibor 定价(金十,2015起)
+    date TEXT NOT NULL,                            -- YYYY-MM-DD
+    overnight REAL, w1 REAL, w2 REAL, m1 REAL,     -- 各期限定价(%)
+    m3 REAL, m6 REAL, m9 REAL, y1 REAL,
+    PRIMARY KEY (date)
+);
+CREATE TABLE IF NOT EXISTS repo_fix_daily (        -- 回购定盘利率 FR/FDR(FDR=DR系定盘价=央行政策目标利率,2020-09起)
+    date TEXT NOT NULL,
+    fr001 REAL, fr007 REAL, fr014 REAL,            -- 银行间回购定盘利率
+    fdr001 REAL, fdr007 REAL, fdr014 REAL,         -- 银银间回购定盘利率(DR 系)
+    PRIMARY KEY (date)
+);
+CREATE TABLE IF NOT EXISTS lpr_monthly (           -- LPR 报价(每月20日,2019起)+旧贷款基准利率(1991起)
+    date TEXT NOT NULL,
+    lpr1y REAL, lpr5y REAL,                        -- 1年/5年期 LPR(%)
+    base1y REAL, base5y REAL,                      -- 旧贷款基准利率(对照)
+    PRIMARY KEY (date)
+);
+CREATE TABLE IF NOT EXISTS cn_bond_daily (         -- 中债国债到期收益率(期限结构;金十,1990起)
+    date TEXT NOT NULL,
+    y2 REAL, y5 REAL, y10 REAL, y30 REAL,          -- 各期限到期收益率(%)
+    spread_10y2y REAL,                             -- 10Y−2Y 期限利差(pp)
+    PRIMARY KEY (date)
+);
+CREATE TABLE IF NOT EXISTS cb_balance_monthly (    -- 央行资产负债表(月频·滞后~1月,1993起)
+    month TEXT NOT NULL,                           -- YYYY-MM-01
+    claim_odc REAL,                                -- 对其他存款性公司债权(OMO+MLF+PSL 等余额)
+    base_money REAL,                               -- 储备货币(基础货币)
+    govt_deposit REAL,                             -- 政府存款(财政收支→M2 扰动项;早期缺列=空)
+    total_assets REAL,
+    PRIMARY KEY (month)
+);
 CREATE TABLE IF NOT EXISTS wm_claims (
     uid          TEXT PRIMARY KEY,   -- 稳定 hash(episode_date|asset|type|statement 规范化)→ 幂等再抽取
     episode_date TEXT NOT NULL,      -- 哪一期说的 (YYYY-MM-DD)
@@ -1243,6 +1275,73 @@ class Store:
         if df.empty:
             return pd.DataFrame()
         return df.set_index("month")
+
+    # ---- China rates / cb balance (第七看板 国内宏观 · 利率与流动性,金十源) ----
+    def _upsert_simple(self, table: str, cols: list[str], rows: list[dict]) -> int:
+        """单主键 date/month 宽表通用 upsert(行=dict,键名含主键;主键原样 str,数值列过 _num)。幂等。"""
+        if not rows:
+            return 0
+        key = "date" if "date" in rows[0] else "month"
+        payload = [tuple(str(r[key]) if c == key else _num(r.get(c)) for c in cols)
+                   for r in rows]
+        upd = ", ".join(f"{c}=excluded.{c}" for c in cols if c != key)
+        with self._conn() as c2:
+            c2.executemany(
+                f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
+                f"ON CONFLICT({key}) DO UPDATE SET {upd}", payload)
+        return len(payload)
+
+    def _get_simple(self, table: str, key: str, cols: list[str]) -> pd.DataFrame:
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                f"SELECT {key},{','.join(cols)} FROM {table} ORDER BY {key}", c)
+        if df.empty:
+            return pd.DataFrame()
+        return df.set_index(key)
+
+    def upsert_shibor(self, rows: list[dict]) -> int:
+        """rows: {date,overnight,w1,w2,m1,m3,m6,m9,y1}。幂等(全量重拉)。"""
+        return self._upsert_simple("shibor_daily",
+                                   ["date", "overnight", "w1", "w2", "m1", "m3", "m6", "m9", "y1"], rows)
+
+    def get_shibor_series(self) -> pd.DataFrame:
+        return self._get_simple("shibor_daily", "date",
+                                ["overnight", "w1", "w2", "m1", "m3", "m6", "m9", "y1"])
+
+    def upsert_repo_fix(self, rows: list[dict]) -> int:
+        """rows: {date,fr001,fr007,fr014,fdr001,fdr007,fdr014}。幂等。"""
+        return self._upsert_simple("repo_fix_daily",
+                                   ["date", "fr001", "fr007", "fr014", "fdr001", "fdr007", "fdr014"], rows)
+
+    def get_repo_fix_series(self) -> pd.DataFrame:
+        return self._get_simple("repo_fix_daily", "date",
+                                ["fr001", "fr007", "fr014", "fdr001", "fdr007", "fdr014"])
+
+    def upsert_lpr(self, rows: list[dict]) -> int:
+        """rows: {date,lpr1y,lpr5y,base1y,base5y}。幂等。"""
+        return self._upsert_simple("lpr_monthly",
+                                   ["date", "lpr1y", "lpr5y", "base1y", "base5y"], rows)
+
+    def get_lpr_series(self) -> pd.DataFrame:
+        return self._get_simple("lpr_monthly", "date", ["lpr1y", "lpr5y", "base1y", "base5y"])
+
+    def upsert_cn_bond(self, rows: list[dict]) -> int:
+        """rows: {date,y2,y5,y10,y30,spread_10y2y}。幂等。"""
+        return self._upsert_simple("cn_bond_daily",
+                                   ["date", "y2", "y5", "y10", "y30", "spread_10y2y"], rows)
+
+    def get_cn_bond_series(self) -> pd.DataFrame:
+        return self._get_simple("cn_bond_daily", "date",
+                                ["y2", "y5", "y10", "y30", "spread_10y2y"])
+
+    def upsert_cb_balance(self, rows: list[dict]) -> int:
+        """rows: {month,claim_odc,base_money,govt_deposit,total_assets}。幂等。"""
+        return self._upsert_simple("cb_balance_monthly",
+                                   ["month", "claim_odc", "base_money", "govt_deposit", "total_assets"], rows)
+
+    def get_cb_balance_series(self) -> pd.DataFrame:
+        return self._get_simple("cb_balance_monthly", "month",
+                                ["claim_odc", "base_money", "govt_deposit", "total_assets"])
 
     # ---- ETF dividend (V4 tracker · 价值型股息率) ----
     def upsert_etf_dividend(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:

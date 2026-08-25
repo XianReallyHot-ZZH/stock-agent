@@ -15,26 +15,29 @@ hint 加交叉引用「深度观测见国内宏观看板」；本看板承载完
 
 ## 分期
 
-### Phase 0 · 端点探针（当前）
-验证高频先行代理的免费数据可得性，产出「端点真相」表（下方）。拿不到的诚实列 **待补**，
-不引入付费/爬虫源（FRED 先例的非-akshare 授权源可留口）。
+### Phase 0 · 端点探针 ✅（2026-08-24 完成，结果见下方真相表）
+### v1 · 看板落地 ✅（2026-08-25 完成）
+`stockagent/china_macro/`（policy.py 日历纯函数 + framework.py 三 section 渲染）+
+`scripts/china_macro_report.py` + `backfill_china_macro.py`（五表：shibor_daily/repo_fix_daily/
+lpr_monthly/cn_bond_daily/cb_balance_monthly）+ shell 注册 6→7 + data_check 门控
+（利率>2天·央行表>35天）+ tests/test_china_macro.py(15) + skill `china-macro-dashboard`。
+实际落地与原计划的差异：央行资产负债表（claim_odc 月度差分=OMO 近似）提前进 v1 的 section ②。
 
-| 腿 | 用途 | 候选端点 | 结论 |
+| 腿 | 用途 | 候选端点 | 结论（2026-08-24 实测） |
 |---|---|---|---|
-| Shibor（同业拆放利率） | 银行间资金面日度脉搏 | `macro_china_shibor_all` | （探针后填） |
-| DR007（银行间质押式回购） | 央行政策目标利率、比 Shibor 更贴意图 | ？ | （探针后填） |
-| 央行 OMO 净投放（逆回购/MLF） | 基础货币日度投放 | ？ | （探针后填） |
-| 票据转贴利率（6M 国股银票） | 信贷投放领先温度计（卖方预测社融第一输入） | ？ | （探针后填） |
-| 政府债净融资（国债+地方债） | 社融/M2 分子端可提前观测成分 | ？ | （探针后填） |
-| LPR / 中债收益率 | 政策利率锚/期限结构（政策日历 companion） | `macro_china_lpr` 等 | （探针后填） |
+| Shibor（同业拆放利率） | 银行间资金面日度脉搏 | `macro_china_shibor_all` | ✅ 2015-05-08 起，O/N~1Y 全 8 期限，日频（金十源） |
+| DR007（质押式回购 7 天） | 央行政策目标利率、比 Shibor 更贴意图 | `repo_rate_hist(start_date,end_date)` | ✅ **FDR001/007/014 定盘价（DR 系）**+FR001/007/014 同表，2020-09-30 起；需日期窗口分段拉（同 `fetch_market_margin` 按段先例） |
+| 央行 OMO 净投放（逆回购/MLF） | 基础货币日度投放 | 无独立端点 | ⚠️ 间接：`macro_china_central_bank_balance` 央行资产负债表（月频滞后，**「对其他存款性公司债权」列=OMO/MLF 余额**，1993 起 355 期）——月度余额差分可近似净投放；**日度净投放待补** |
+| 票据转贴利率（6M 国股银票） | 信贷投放领先温度计（卖方预测社融第一输入） | 无 | ❌ 待补（免费源缺；不爬虫） |
+| 政府债净融资 | 社融/M2 分子端可提前观测成分 | `bond_local_government_issue_cninfo` | ⚠️ 半程：**地方债发行明细✅**（计划/实际发行量+缴款日，2 个月 1988 行，按日窗口分段拉）；**国债发行明细待补**（免费端点只有国债指数，无发行列表） |
+| LPR | 政策利率锚（20 日月频） | `macro_china_lpr` | ✅ 1991 起（LPR1Y/5Y + 旧贷款基准利率 RATE_1/2），当前 1Y 3.0%/5Y 3.5% |
+| 中债期限结构 | 社会无风险利率/期限利差（信贷需求代理） | `bond_zh_us_rate(start_date)` | ✅ 中国 2/5/10/30Y + **10Y−2Y 利差**同表（1990 起，中美并列）；当前 10Y 1.68%/10Y−2Y 45bp |
 
-### v1 · 看板落地
-新包 `stockagent/china_macro/`（对称 `western_macro/`）+ `scripts/china_macro_report.py` +
-`dashboard_home.DASHBOARDS` 注册 6→7 + dashboards/tracker skill 同步。三个 section：
-1. **货币信用**：⑪ 完整版（M2/M1 同比+剪刀差+社融脉冲+状态机+实证结论）
-2. **利率与流动性**：过探针者（Shibor 系/OMO 月内净投放累计）
-3. **政策日历**：硬编码年度日历（政治局会议 4/7/12 月·中央经济工作会议 12 月·货政报告季度）
-   + 下次会议倒计时。**只放事实不做 claim 打分**——那归 `docs/CLAIMS_LEDGER.md`，不造第二套台账。
+**Phase 0 净结论**：v1 利率与流动性 section 装 **Shibor + FDR007 + LPR + 中债期限结构**（四腿全过），
+央行资产负债表（月频）入货币信用 section 作 OMO 余额近似；**待补三项**（日度 OMO 净投放、票据转贴、
+国债发行明细）诚实标注，不硬凑——国债缺口可先用地方债做"政府债可观测成分"半程版。
+
+### v1 · 看板落地（已完成——见上方勾销记录，以下为原始设计）
 
 ### v2 · nowcast 与回放
 4. **社融可观测成分**：政府债净融资日度累计 + 企业债 → 「本月社融分子端能提前看见的部分」

@@ -13,6 +13,8 @@ from pathlib import Path
 DASHBOARDS = [
     ("macro", "macro_framework.html", "🌍", "宏观框架",
      "因果链·黄金定位器·微观紧缺·日历", "python scripts/macro_framework_report.py"),
+    ("china_macro", "china_macro.html", "🏛️", "国内宏观",
+     "货币信用·利率流动性·政策日历", "python scripts/china_macro_report.py"),
     ("index_timing", "index_timing.html", "📈", "指数择时",
      "估值开关·趋势·相对周期·地量·恐贪", "python scripts/index_timing_report.py"),
     ("research", "research_report.html", "📊", "行业研究",

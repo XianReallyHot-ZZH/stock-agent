@@ -166,6 +166,13 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
     m2_last = _fetch(conn, "SELECT MAX(month) FROM china_money_supply")[0]
     tsf_last = _fetch(conn, "SELECT MAX(month) FROM china_tsf")[0]
     print(f"  货币条件 M2 {str(m2_last)[:7] if m2_last else '（无）':10} · 社融 {str(tsf_last)[:7] if tsf_last else '（无）'}(月频,⑪)")
+    sb_last = _fetch(conn, "SELECT MAX(date) FROM shibor_daily")[0]
+    fdr_last = _fetch(conn, "SELECT MAX(date) FROM repo_fix_daily")[0]
+    lpr_last = _fetch(conn, "SELECT MAX(date) FROM lpr_monthly")[0]
+    bond_last = _fetch(conn, "SELECT MAX(date) FROM cn_bond_daily")[0]
+    cb_last = _fetch(conn, "SELECT MAX(month) FROM cb_balance_monthly")[0]
+    print(f"  利率腿 Shibor {str(sb_last):12} FDR {str(fdr_last):12} LPR {str(lpr_last):12}"
+          f" 中债 {str(bond_last):12} 央行表 {str(cb_last)[:7] if cb_last else '（无）'}(第七看板)")
 
     # ---- candidate pool (V7 第六看板 · 候选个股池) ----
     pool_info: dict = {"universe": [], "universe_n": 0}
@@ -278,6 +285,21 @@ def main():
     if money_stale:
         print(f"  货币条件刷新·M2/M1/社融(月频, 当前 {money_last or '无'})...")
         dm.update_china_money()
+
+    # 6.7) china rates (第七看板 国内宏观 · 利率四腿日频): refresh if >2 days
+    rates_last = store.get_meta("last_china_rates_update")
+    rates_stale = rates_last is None or (
+        (datetime.now() - datetime.strptime(rates_last, "%Y-%m-%d")).days > 2)
+    if rates_stale:
+        print(f"  利率腿刷新·Shibor/FDR/LPR/中债(当前 {rates_last or '无'})...")
+        dm.update_china_rates()
+    # 6.8) cb balance (第七看板 · 央行资产负债表月频): refresh if >35 days
+    cb_last = store.get_meta("last_cb_balance_update")
+    cb_stale = cb_last is None or (
+        (datetime.now() - datetime.strptime(cb_last, "%Y-%m-%d")).days > 35)
+    if cb_stale:
+        print(f"  央行资产负债表刷新(月频, 当前 {cb_last or '无'})...")
+        dm.update_cb_balance()
 
     # 7) candidate-pool spot (V7 第六看板): daily snapshot — universe 的 ST 过滤 + 展示名来源
     spot_last = store.get_meta("last_stock_spot_update")
