@@ -165,7 +165,7 @@ rotation:
 
 ```bash
 python scripts/research_report.py             # 生成 data/research_report.html（纯可视化，无 LLM/无告警推送）
-python scripts/dashboard_data_check.py --fix  # 查/补数据新鲜度（价格/份额/净值+业绩预期底座+指数层+货币⑪+国内宏观+候选池,各腿按节奏门控）
+python scripts/dashboard_data_check.py --fix  # 查/补数据新鲜度（价格/份额/净值+业绩预期底座+指数层+货币条件[国内宏观①]+国内宏观+候选池,各腿按节奏门控）
 ```
 
 ### 3. 指数择时层看板
@@ -173,7 +173,7 @@ python scripts/dashboard_data_check.py --fix  # 查/补数据新鲜度（价格/
 沪深 300 估值开关（同口径 PE+PB 四档 zone）、大小盘温差、蓝筹 vs 成长仓位倾向、60 日线趋势 / **真穿越突破跌破**（近 5 日真正穿越 60 日线 + 偏离≥2% 才算「有效」，非「在线上」）/ 偏离极值；另含 ⑦ 相对周期律（创业板 vs 上证点差包络位置）、⑧ 成交量地量监测、⑨ 恐惧贪婪指数（动量/流动性/波动率/估值/杠杆 5 成分 → 0-100 复合，温度计非开关）、⑩ 关键位监测（平台顶+前低规则选位 → 支撑测试状态机 + 下/上第一档；实证：破位·未收后 20 日波动抬升、胜率无 edge，温度计非开关；配套 A股观点预登记台账 `docs/CLAIMS_LEDGER.md`）。
 
 ```bash
-python scripts/index_timing_report.py         # 生成 data/index_timing.html（十一 section（含 ⑨恐惧贪婪·⑩关键位·⑪货币条件），深浅色可切）
+python scripts/index_timing_report.py         # 生成 data/index_timing.html（十 section（含 ⑨恐惧贪婪·⑩关键位；货币条件已移国内宏观看板①），深浅色可切）
 ```
 
 ### 4. 个股诊断看板
@@ -216,7 +216,7 @@ python scripts/validate_pead.py                 # PEAD 实证（两臂 vs 基线
 
 ### 8. 国内宏观看板（第七看板 · 只读观测 · 与宏观框架=海外宏观对称）
 
-中国本土宏观的观测层：①货币信用（M2/M1 同比+剪刀差+社融脉冲+episode 状态机——指数择时 ⑪ 的完整版）②利率与流动性（FDR007=央行政策目标利率区、Shibor、LPR、中债 10Y−2Y 期限结构、OMO/MLF 月度净投放近似）③政策日历（硬编码典型时点+倒计时；观点结算归 CLAIMS_LEDGER）④社融可观测成分（政府债=国债+地方债逐券堆叠+月内累计 vs 近12月均值+社融分项历史——观测非预测，信贷黑箱留白）⑤会议→M2 转向历史回放（锚点月后 3 月上行概率，未走完的锚不进统计）⑥通胀（CPI/PPI 同比+PPI−CPI 上下游剪刀差）⑦实体（官方制造业 PMI 荣枯线+社零/工业增加值同比；工业增加值源端滞后~1年，图注说明）。规划与端点真相见 `docs/EXECUTION_PLAN-国内宏观.md`。
+中国本土宏观的观测层：①货币信用（M2/M1 同比+剪刀差+社融脉冲+episode 状态机——原指数择时⑪已并入此处）②利率与流动性（FDR007=央行政策目标利率区、Shibor、LPR、中债 10Y−2Y 期限结构、OMO/MLF 月度净投放近似）③政策日历（硬编码典型时点+倒计时；观点结算归 CLAIMS_LEDGER）④社融可观测成分（政府债=国债+地方债逐券堆叠+月内累计 vs 近12月均值+社融分项历史——观测非预测，信贷黑箱留白）⑤会议→M2 转向历史回放（锚点月后 3 月上行概率，未走完的锚不进统计）⑥通胀（CPI/PPI 同比+PPI−CPI 上下游剪刀差）⑦实体（官方制造业 PMI 荣枯线+社零/工业增加值同比；工业增加值源端滞后~1年，图注说明）。规划与端点真相见 `docs/EXECUTION_PLAN-国内宏观.md`。
 
 ```bash
 python scripts/backfill_china_macro.py          # Shibor/FDR/LPR/中债 + 央行资产负债表 + 国债/地方债明细 + 通胀/实体（幂等）

@@ -7,7 +7,7 @@ description: Refresh data and generate the 国内宏观看板 (china_macro.html,
 
 中国本土宏观观测层(第七看板,与宏观框架=海外宏观对称;规划与端点真相见 `docs/EXECUTION_PLAN-国内宏观.md`)。
 输出 `data/china_macro.html`(离线自包含 ~6MB,深浅色可切),七节:
-①货币信用(M2/M1 同比+剪刀差+社融脉冲+episode 状态机+实证结论 meta 活注入——指数择时 ⑪ 的完整版)
+①货币信用(M2/M1 同比+剪刀差+社融脉冲+episode 状态机+实证结论 meta 活注入——原指数择时⑪已并入,此处唯一入口)
 ②利率与流动性(FDR007=央行政策目标利率区/Shibor/LPR/中债 10Y−2Y + OMO/MLF 月度净投放近似)
 ③政策日历(硬编码典型时点 → 下次时点+倒计时;观点结算归 docs/CLAIMS_LEDGER.md)
 ④社融可观测成分(政府债=国债+地方债逐券月度堆叠+月内累计 vs 近12月均值 + 社融分项[贷款/企业债/股票]历史分布——**观测非预测**,信贷黑箱诚实留白)
@@ -30,7 +30,7 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_china_macro.py --lgb   # 只地�
 PYTHONIOENCODING=utf-8 python scripts/backfill_china_macro.py --tsy   # 只国债发行明细
 PYTHONIOENCODING=utf-8 python scripts/backfill_china_macro.py --real  # 只通胀/实体五腿(月度)
 ```
-货币条件(M2/M1/社融)的数据腿在 `backfill_index.py --money`(⑪ 共用同一份表;社融分项扩列也随它刷)。
+货币条件(M2/M1/社融)的数据腿在 `backfill_index.py --money`(原⑪数据腿,国内宏观看板①为唯一消费方;社融分项扩列也随它刷)。
 
 ### 2. 生成看板
 ```bash
@@ -51,12 +51,11 @@ PYTHONIOENCODING=utf-8 python scripts/china_macro_report.py --no-open
 - **下次政策事件倒计时**(≤14 天标红:金融数据公布/LPR/政治局/中央经济工作会议…)
 
 ## 已知坑(端点真相 · 2026-08-24 探针)
-- **五腿全金十源**,偶发被拦 → 脚本内指数退避重试,重跑即可。
+- 利率/实体腿金十源、债券明细 cninfo 源,偶发被拦 → 脚本内指数退避重试,重跑即可。
 - `repo_rate_hist` **需日期窗口参数** → fetcher 按年分段拉(同 `fetch_market_margin` 先例),全史 2020-09 起。
 - **地方债/国债明细**(`bond_local_government_issue_cninfo`/`bond_treasure_issue_cninfo`)2021-09 起,cninfo 限流 → 按月窗分段+逐窗重试,失败月跳过重跑自愈;**逐券口径(含再融资/跨市场),绝对量级未与官方月报交叉校验——④只作月度节奏/月内累计的相对观察**。
 - **官方 PMI 用 `macro_china_pmi`(月份表,2008 起正常更新)**;`macro_china_pmi_yearly`(报告族,2005 起)源停更至 2025-08 仅作并接补早段。**工业增加值(报告族)源端滞后~1 年**——图注说明,读趋势用。**财新 PMI 弃用**(源日期语义混杂,新旧行发布日/参考月口径不一,防错位)。
-- **永久待补(2026-08-25 终审)**:日度 OMO 净投放、票据转贴利率——免费源确认无;OMO 用央行资产负债表月度差分近似(②),够用。
-- **待补三项**(免费源缺,不硬凑):日度 OMO 净投放 / 票据转贴利率 / 国债发行明细——央行资产负债表月度差分是 OMO 的滞后近似,地方债发行明细有(`bond_local_government_issue_cninfo`)但 v1 未入看板(v2 政府债净融资腿)。
+- **永久待补(2026-08-25 终审)**:日度 OMO 净投放、票据转贴利率——免费源确认无;OMO 用央行资产负债表月度差分近似(②),够用。国债发行明细已于远期批补齐、政府债已入 ④。
 - LPR 表 1991 起含旧贷款基准利率(RATE_1/2 列);中债表只存中国列(美国列归 western_macro 域)。
 | 端点 | 用途 | 起点 |
 |---|---|---|
