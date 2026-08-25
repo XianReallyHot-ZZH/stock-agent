@@ -276,7 +276,12 @@ def _omo_figure(cb: pd.DataFrame) -> go.Figure:
                       yaxis2=dict(title_text="余额 万亿", overlaying="y", side="right",
                                   gridcolor="rgba(0,0,0,0)", zeroline=False, showgrid=False))
     fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
-                     rangeslider_visible=True)
+                     rangeslider_visible=True,
+                     rangeselector=dict(buttons=[
+                         dict(count=1, label="1年", step="year", stepmode="backward"),
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
     return fig
 
 
@@ -340,7 +345,12 @@ def _gov_figure(stack: dict, cur_ym: str) -> go.Figure:
                       legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                       yaxis=dict(title_text="亿元", gridcolor=_PAL["grid"]))
     fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
-                     rangeslider_visible=True)
+                     rangeslider_visible=True,
+                     rangeselector=dict(buttons=[
+                         dict(count=1, label="1年", step="year", stepmode="backward"),
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
     return fig
 
 
@@ -348,9 +358,9 @@ def _tsf_comp_figure(tsf: pd.DataFrame) -> go.Figure:
     """社融分项月度(亿元,社融官方口径):人民币贷款/企业债券/股票融资。"""
     fig = go.Figure()
     if tsf is not None and len(tsf):
-        for col, nm, c in (("rmb_loans", "人民币贷款", _PAL["series_1"]),
-                           ("corp_bond", "企业债券", _PAL["series_2"]),
-                           ("equity_fin", "股票融资", _PAL["series_3"])):
+        for col, nm, c in (("rmb_loans", "新增人民币贷款", _PAL["series_1"]),
+                           ("corp_bond", "新增企业债券", _PAL["series_2"]),
+                           ("equity_fin", "新增股票融资", _PAL["series_3"])):
             if col not in tsf.columns:
                 continue
             s = pd.to_numeric(tsf[col], errors="coerce").dropna()
@@ -367,7 +377,12 @@ def _tsf_comp_figure(tsf: pd.DataFrame) -> go.Figure:
                       yaxis=dict(title_text="亿元(月增)", gridcolor=_PAL["grid"],
                                  zerolinecolor=_PAL["grid"]))
     fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
-                     rangeslider_visible=True)
+                     rangeslider_visible=True,
+                     rangeselector=dict(buttons=[
+                         dict(count=1, label="1年", step="year", stepmode="backward"),
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
     return fig
 
 
