@@ -163,6 +163,9 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
         print(f"  {nm:6} PE {str(d):12}")
     d = _fetch(conn, "SELECT MAX(date) FROM market_pb")[0]
     print(f"  全市场PB {str(d):12}")
+    m2_last = _fetch(conn, "SELECT MAX(month) FROM china_money_supply")[0]
+    tsf_last = _fetch(conn, "SELECT MAX(month) FROM china_tsf")[0]
+    print(f"  货币条件 M2 {str(m2_last)[:7] if m2_last else '（无）':10} · 社融 {str(tsf_last)[:7] if tsf_last else '（无）'}(月频,⑪)")
 
     # ---- candidate pool (V7 第六看板 · 候选个股池) ----
     pool_info: dict = {"universe": [], "universe_n": 0}
@@ -267,6 +270,14 @@ def main():
     dm.update_index_daily()
     dm.update_index_pe()
     dm.update_market_pb()
+
+    # 6.5) china money (⑪ 货币条件 · 月频): refresh if >35 days (次月中旬出新值后)
+    money_last = store.get_meta("last_china_money_update")   # YYYY-MM-DD
+    money_stale = money_last is None or (
+        (datetime.now() - datetime.strptime(money_last, "%Y-%m-%d")).days > 35)
+    if money_stale:
+        print(f"  货币条件刷新·M2/M1/社融(月频, 当前 {money_last or '无'})...")
+        dm.update_china_money()
 
     # 7) candidate-pool spot (V7 第六看板): daily snapshot — universe 的 ST 过滤 + 展示名来源
     spot_last = store.get_meta("last_stock_spot_update")

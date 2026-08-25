@@ -1744,3 +1744,71 @@ def fetch_economic_calendar(days_back: int = 7, days_forward: int = 45, retries:
     return out
 
 
+# ---- 中国货币条件 (⑪ 货币条件 · M2/M1/社融 月频, 金十源) ----
+_MONEY_MONTH_RE = re.compile(r"(\d{4})年(\d{1,2})月份")
+_MONEY_COLS = {
+    "m2_amt": "货币和准货币(M2)-数量(亿元)", "m2_yoy": "货币和准货币(M2)-同比增长",
+    "m1_amt": "货币(M1)-数量(亿元)", "m1_yoy": "货币(M1)-同比增长",
+    "m0_amt": "流通中的现金(M0)-数量(亿元)", "m0_yoy": "流通中的现金(M0)-同比增长",
+}
+
+
+def parse_china_money_supply(df) -> list[dict]:
+    """ak.macro_china_money_supply (金十, 月频, '2026年07月份') → [{month,m2_*,m1_*,m0_*}]。
+    同比直接用源列(不重算); 2024-01 起 M1 新口径(含个人活期)——序列有断点,上层图注、只展示不进研究。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        m = _MONEY_MONTH_RE.match(str(r.get("月份") or ""))
+        if not m:
+            continue
+        row = {"month": f"{m.group(1)}-{int(m.group(2)):02d}-01"}
+        for key, col in _MONEY_COLS.items():
+            row[key] = r.get(col)
+        out.append(row)
+    return out
+
+
+def fetch_china_money_supply(retries: int = 3) -> list[dict]:
+    """M2/M1/M0 月度(2008 起, 金十)。端点偶发被拦 → 指数退避(金十 jsonp 同族,比固定间隔耐拦)。"""
+    last = None
+    for i in range(retries + 1):
+        try:
+            return parse_china_money_supply(ak.macro_china_money_supply())
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if i < retries:
+                time.sleep(1.5 * (i + 1))
+    raise FetchError(f"china_money_supply 抓取重试耗尽: {last}")
+
+
+def parse_china_tsf(df) -> list[dict]:
+    """ak.macro_china_shrzgm (社融增量, 月频, '201501') → [{month,tsf_inc}]。
+    只取增量——存量同比无免费源,上层用 增量TTM/M2 作脉冲代理(源滞后货币约 2-3 个月)。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        s = str(r.get("月份") or "")
+        if len(s) != 6 or not s.isdigit():
+            continue
+        v = r.get("社会融资规模增量")
+        if v is None or v != v:   # NaN 跳过
+            continue
+        out.append({"month": f"{s[:4]}-{s[4:]}-01", "tsf_inc": float(v)})
+    return out
+
+
+def fetch_china_tsf(retries: int = 3) -> list[dict]:
+    last = None
+    for i in range(retries + 1):
+        try:
+            return parse_china_tsf(ak.macro_china_shrzgm())
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if i < retries:
+                time.sleep(1.5 * (i + 1))
+    raise FetchError(f"china_tsf 抓取重试耗尽: {last}")
+
+

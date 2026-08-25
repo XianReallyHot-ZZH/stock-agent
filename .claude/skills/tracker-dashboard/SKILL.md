@@ -1,11 +1,11 @@
 ---
 name: tracker-dashboard
-description: Refresh data and generate the 指数择时层看板 (index_timing.html, 10 sections). Use when the user wants to update/refresh the index-timing / broad-market dashboard, or asks to "生成/刷新指数看板/大盘择时看板/index timing dashboard". Backfills 7 broad-index daily(含上证综指000001·中证1000 000852) + 沪深300/上证50/中证500 PE/PB + 全市场 PB + 两市成交额(baostock) + 上交所融资融券(⑨恐惧贪婪·杠杆成分), then renders the dashboard. Phase 1-B of the tracker module.
+description: Refresh data and generate the 指数择时层看板 (index_timing.html, 11 sections). Use when the user wants to update/refresh the index-timing / broad-market dashboard, or asks to "生成/刷新指数看板/大盘择时看板/index timing dashboard". Backfills 7 broad-index daily(含上证综指000001·中证1000 000852) + 沪深300/上证50/中证500 PE/PB + 全市场 PB + 两市成交额(baostock) + 上交所融资融券(⑨恐惧贪婪·杠杆成分) + 货币条件 M2/M1/社融(⑪·金十月频), then renders the dashboard. Phase 1-B of the tracker module.
 ---
 
 # 指数择时层看板 — 维护与生成
 
-只读诊断模块(基于课程 S12-13 + 周期律/量价实证,**不碰交易引擎**)。输出 `data/index_timing.html`(离线自包含 ~10MB,深浅色可切),十节:③估值开关(PE/PB时序图) · ⑥市场温度·大小盘温差 · ④蓝筹vs成长 · ②趋势状态 · ⑤突破跌破信号 · ①偏离极值曲线 · ⑦相对周期律(创业板vs上证点差) · ⑧成交量地量监测 · ⑨恐惧贪婪指数(5成分0-100复合,温度计非开关) · ⑩关键位监测(平台顶+前低规则选位·支撑测试状态机·下/上第一档;实证:破位后20日波动抬升,温度计非开关)。
+只读诊断模块(基于课程 S12-13 + 周期律/量价实证,**不碰交易引擎**)。输出 `data/index_timing.html`(离线自包含 ~10MB,深浅色可切),十一节:③估值开关(PE/PB时序图) · ⑥市场温度·大小盘温差 · ④蓝筹vs成长 · ②趋势状态 · ⑤突破跌破信号 · ①偏离极值曲线 · ⑦相对周期律(创业板vs上证点差) · ⑧成交量地量监测 · ⑨恐惧贪婪指数(5成分0-100复合,温度计非开关) · ⑩关键位监测(平台顶+前低规则选位·支撑测试状态机·下/上第一档;实证:破位后20日波动抬升,温度计非开关) · ⑪货币条件(M2/M1同比+剪刀差+社融脉冲·2月动量run状态机;「M2定大盘」叙事观测层,实证:公布滞后吃掉几乎全部触底回升edge,温度计非开关)。
 
 ## 触发场景
 - "刷新指数看板 / 大盘择时看板 / tracker dashboard / 生成指数看板 / 指数择时"
@@ -17,7 +17,7 @@ description: Refresh data and generate the 指数择时层看板 (index_timing.h
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/backfill_index.py
 ```
-抓 7 宽基日线(sina,含上证综指000001=⑦基准·中证1000 000852) + 沪深300/上证50/中证500 PE+PB(legulegu) + 全市场 PB + 两市成交额(baostock sh.000001+sz.399001=⑧地量数据源,首次拉历史到 1991 起、稍慢) + 上交所融资融券(`stock_margin_sse`按年分段,⑨恐惧贪婪·杠杆成分,历史自 2010-03)。可选 `--turnover`/`--margin` 只刷单项。每次全量覆盖。
+抓 7 宽基日线(sina,含上证综指000001=⑦基准·中证1000 000852) + 沪深300/上证50/中证500 PE+PB(legulegu) + 全市场 PB + 两市成交额(baostock sh.000001+sz.399001=⑧地量数据源,首次拉历史到 1991 起、稍慢) + 上交所融资融券(`stock_margin_sse`按年分段,⑨恐惧贪婪·杠杆成分,历史自 2010-03) + 货币条件 M2/M1+社融(金十月频,⑪,2008起223月全量重拉)。可选 `--turnover`/`--margin`/`--money` 只刷单项。每次全量覆盖。
 
 或先看新鲜度(指数段):
 ```bash
@@ -28,7 +28,7 @@ PYTHONIOENCODING=utf-8 python scripts/dashboard_data_check.py
 ### 2. 生成看板
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py
-# → data/index_timing.html(~10MB,离线自包含,10 section)
+# → data/index_timing.html(~10MB,离线自包含,11 section)
 ```
 打开:双击 `data/index_timing.html`,或终端 `start data/index_timing.html`。
 
@@ -44,6 +44,17 @@ PYTHONIOENCODING=utf-8 python scripts/validate_support_break.py
 # → data/support_break_study.html(⑩ event-study:平台顶+前低规则选位,守住vs破位的前向二阶矩/胜率/bootstrap)
 ```
 
+### 2d. (可选) M2 拐点深度验证报告
+```bash
+PYTHONIOENCODING=utf-8 python scripts/validate_m2_timing.py
+# → data/m2_timing_study.html(⑪ event-study:三臂×双口径防前视[lag0理想 vs lag15公布] vs 无条件基线
+#   + 滞后侵蚀面板 + 事件清单;结论写 meta 活注入 ⑪ 读图说明——跑完需重新生成看板才见注入)
+```
+```bash
+PYTHONIOENCODING=utf-8 python scripts/validate_support_break.py
+# → data/support_break_study.html(⑩ event-study:平台顶+前低规则选位,守住vs破位的前向二阶矩/胜率/bootstrap)
+```
+
 ### 3. 汇报(给用户)
 - **估值开关 zone**(低位·可激进 / 高位·宜保守 / 结构分化·宜观望 / 中位·中性)+ 沪深300 PE/PB 分位(③图看历史位置)
 - **市场温度**:大小盘温差(同步 / 小盘偏贵 / 小盘偏便宜)
@@ -54,6 +65,7 @@ PYTHONIOENCODING=utf-8 python scripts/validate_support_break.py
 - **⑧ 成交量地量**:成交额/MA250 + 量底→价底时效(~1 月);**地量≠高胜率买点**(实证:各 horizon 胜率~50%,仅时效成立)
 - **⑨ 恐惧贪婪指数**:5 成分(动量/流动性/波动率/估值/杠杆)0-100 复合 + 五档标签;**温度计非开关**(同 ⑧ 实证无 edge,只读不喂引擎)
 - **⑩ 关键位监测**:下方第一支撑/上方第一压力 + 各位状态(回踩测试中/破位观察中/已守住/假破·已收回/已破位·未收);**实证:破位·未收确认后 20 日波动抬升,回撤中位/胜率无 edge** → 温度计非开关;当前进行中的测试(如上证 3766)自动列 pending;主流观点 claim 预登记在 docs/CLAIMS_LEDGER.md
+- **⑪ 货币条件**:M2/M1 同比 + 剪刀差 + 社融脉冲 + episode 状态机(下行确认/触底回升/见顶回落);**实证(双口径防前视):公布滞后吃掉几乎全部触底回升 edge**(lag0 60日上涨概率86% → 公布口径57%),下行确认 33% 最稳弱信号;n=9/7/5 → 温度计非开关,怎么用由人综合决定
 
 ## 已知坑(数据源限制,看板已处理)
 - **创业板指/科创50/中证1000 无 PE/PB**:`stock_index_pe/pb_lg` 只支持沪深300/上证50/中证500。这三只仍能算日线趋势/偏离(无估值分位)。
@@ -71,4 +83,6 @@ PYTHONIOENCODING=utf-8 python scripts/validate_support_break.py
 | 沪深300 PB | `stock_index_pb_lg(symbol="沪深300")` | 同上,「市净率」 |
 | 全市场 PB | `stock_a_all_pb()` | legulegu,全A PB 中位数 + 历史分位 |
 | 上交所融资融券 | `stock_margin_sse(start_date,end_date)` | ⑨恐惧贪婪·杠杆成分;沪市信用交易日级总量,**单次封顶 ~2000 行→按年分段**;深市总量历史不可得(`stock_margin_szse` 仅当日快照),v1 仅沪市 |
+| 货币条件 M2/M1/M0 | `macro_china_money_supply()` | ⑪金十源,月频(次月中旬出上月),2008起223行,倒序,'2026年07月份'式月份;全量重拉 upsert;**M1 在 2024-01 换新口径(含个人活期)——序列断点,只展示不进研究** |
+| 社融增量 | `macro_china_shrzgm()` | ⑪金十源,月频,'201501'式月份;**只有增量无存量同比**→看板用 增量TTM/M2 脉冲代理;源滞后货币约 2-3 个月 |
 | 不支持 | 创业板指/科创50 的 PE/PB(`stock_index_pe/pb_lg` 支持集不含) | 用日线趋势/偏离代替 |

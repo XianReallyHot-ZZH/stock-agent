@@ -6,7 +6,8 @@
   diagnose_style(store)       — 蓝筹 vs 成长 → 仓位倾向(S13)
   diagnose_relative_cycle(store) — ⑦相对周期律: 创业板 vs 上证 点差在包络内的位置 → 极点/中枢
   diagnose_fear_greed(store)  — ⑨恐惧贪婪指数: 5成分(动量/流动性/波动/估值/杠杆) → 0-100 复合(只读温度计)
-  diagnose_layer(store)       — 顶层:遍历6宽基 + 估值 + 风格 + 相对周期 + 恐贪,返回完整指数择时诊断
+  diagnose_money_conditions(store) — ⑪货币条件: M2/M1同比+剪刀差+社融脉冲+episode状态机(只读温度计)
+  diagnose_layer(store)       — 顶层:遍历6宽基 + 估值 + 风格 + 相对周期 + 恐贪 + 货币,返回完整指数择时诊断
 """
 from __future__ import annotations
 
@@ -288,12 +289,48 @@ def diagnose_fear_greed(store, index_sym: str = "000001") -> dict:
     }
 
 
+def diagnose_money_conditions(store) -> dict:
+    """⑪ 货币条件(只读诊断旁路): M2/M1 同比 + M1−M2 剪刀差 + 社融脉冲 + episode 状态机。
+    「M2 定大盘」主流叙事的观测层落地——温度计非开关,永不喂引擎;实证结论由
+    validate_m2_timing 写 meta、dashboard 活注入读图说明。"""
+    from . import money_conditions as mcm
+    df = store.get_china_money_series()
+    if len(df) < mcm.MIN_MONTHS:
+        return {"valid": False, "months": len(df)}
+    m2 = pd.to_numeric(df["m2_yoy"], errors="coerce")
+    m1 = pd.to_numeric(df["m1_yoy"], errors="coerce")
+    tsf = store.get_china_tsf_series()
+    pulse = (mcm.tsf_pulse_series(tsf["tsf_inc"], df["m2_amt"])
+             if len(tsf) and "tsf_inc" in tsf.columns else pd.Series(dtype=float))
+    state = mcm.episode_state(m2)
+
+    def _last(s: pd.Series) -> float:
+        return float(s.iloc[-1]) if len(s) and not pd.isna(s.iloc[-1]) else float("nan")
+
+    sc = mcm.scissor_series(m1, m2)
+    return {
+        "valid": True,
+        "months": len(df),
+        "month_last": str(df.index[-1]),
+        "m2_yoy": _last(m2),
+        "m1_yoy": _last(m1),
+        "m2_series": m2.dropna(),
+        "m1_series": m1.dropna(),
+        "scissor_series": sc,
+        "pulse_series": pulse,
+        "events": mcm.m2_episode_events(m2),
+        "state": state,
+        "state_label": mcm.state_label(state),
+        "tsf_last": str(tsf.index[-1]) if len(tsf) else None,
+    }
+
+
 def diagnose_layer(store, period: int = ti.MA_PERIOD,
                    lookback: int | None = None) -> dict:
     """顶层:整个指数择时层诊断(给 dashboard)。
 
     返回 {indices: {symbol: {name, close_last, date_last, diagnosis, valid}},
-          valuation, market_temp, style, relative_cycle, turnover, fear_greed, period}."""
+          valuation, market_temp, style, relative_cycle, turnover, fear_greed, money, period}."""
     indices = {}
     for sym, nm in BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -316,5 +353,6 @@ def diagnose_layer(store, period: int = ti.MA_PERIOD,
         "relative_cycle": diagnose_relative_cycle(store),
         "turnover": diagnose_turnover(store),
         "fear_greed": diagnose_fear_greed(store),
+        "money": diagnose_money_conditions(store),
         "period": period,
     }

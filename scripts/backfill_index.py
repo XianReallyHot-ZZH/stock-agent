@@ -9,6 +9,7 @@ Usage:
   python scripts/backfill_index.py --pe       # only the 3 PE series
   python scripts/backfill_index.py --pb       # only whole-market PB
   python scripts/backfill_index.py --margin   # only 上交所融资融券(⑨恐惧贪婪·杠杆成分)
+  python scripts/backfill_index.py --money    # only 中国货币条件(⑪ M2/M1/社融,金十·月频)
 """
 from __future__ import annotations
 
@@ -67,6 +68,18 @@ def _summary(dm: DataManager):
               f"最新融资余额={float(df['financing_sse'].iloc[-1]) / 1e8:.0f}亿")
     else:
         print("  融资融券(沪): (无)")
+    df = store.get_china_money_series()
+    if len(df):
+        last_m2 = float(df["m2_yoy"].iloc[-1])
+        print(f"  货币条件: {len(df)} 月, {df.index.min()}..{df.index.max()} | "
+              f"最新M2同比={last_m2:.1f}%")
+    else:
+        print("  货币条件: (无)")
+    df = store.get_china_tsf_series()
+    if len(df):
+        print(f"  社融增量: {len(df)} 月, {df.index.min()}..{df.index.max()}")
+    else:
+        print("  社融增量: (无)")
 
 
 def main():
@@ -76,12 +89,13 @@ def main():
     ap.add_argument("--pb", action="store_true", help="only whole-market PB")
     ap.add_argument("--turnover", action="store_true", help="only 两市日成交额(⑧地量监测,baostock)")
     ap.add_argument("--margin", action="store_true", help="only 上交所融资融券(⑨恐惧贪婪·杠杆成分,sse)")
+    ap.add_argument("--money", action="store_true", help="only 中国货币条件(⑪ M2/M1/社融,金十·月频)")
     args = ap.parse_args()
     setup_logging()
     cfg = get_config()
     dm = DataManager(config=cfg)
 
-    selective = args.daily or args.pe or args.pb or args.turnover or args.margin
+    selective = args.daily or args.pe or args.pb or args.turnover or args.margin or args.money
     if args.daily or not selective:
         dm.update_index_daily()
     if args.pe or not selective:
@@ -93,6 +107,8 @@ def main():
         dm.update_market_turnover()
     if args.margin or not selective:
         dm.update_market_margin()
+    if args.money or not selective:
+        dm.update_china_money()
 
     _summary(dm)
 

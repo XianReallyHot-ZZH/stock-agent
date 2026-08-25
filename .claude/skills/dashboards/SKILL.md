@@ -10,7 +10,7 @@ description: One-click refresh + generate + open all six read-only diagnostic da
 | 看板 | 产物 | 单看板 skill |
 |---|---|---|
 | ETF 行业研究（择时跟踪·偏离度/剪刀差/筹码/资金流向/业绩预期） | `data/research_report.html` | `research-dashboard` |
-| 指数择时（估值开关·趋势·相对周期·地量·偏离·恐贪） | `data/index_timing.html` | `tracker-dashboard` |
+| 指数择时（估值开关·趋势·相对周期·地量·偏离·恐贪·货币条件） | `data/index_timing.html` | `tracker-dashboard` |
 | 个股诊断（三类·S07 归因·S10 戴维斯·S08 避坑·时序图·🤖AI评估） | `data/stock_diagnose.html` | （无，本 skill 覆盖） |
 | 宏观框架（因果链 利率→曲线→美元→金属→能源→权益 · 🥇黄金阶段定位器 · 微观紧缺） | `data/macro_framework.html` | （无，本 skill 覆盖） |
 | 仓位管理（估值档×预案对照·档位统计·切换事件·温度计非开关） | `data/position.html` | （无，本 skill 覆盖；数据腿复用 backfill_index.py，零新增回填） |
@@ -89,7 +89,7 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_economic_calendar.py
 ### 2. 生成五个 HTML
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/research_report.py        # 冷启动时已由 setup 渲染过,这里重跑无妨(秒级);纯可视化(无 LLM/无告警)
-PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（10 section，深浅色可切）
+PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（11 section，深浅色可切）
 PYTHONIOENCODING=utf-8 python scripts/stock_report.py           # 个股诊断（卡片+弹窗时序图+🤖按钮，深浅色可切；生成不调LLM，🤖点击时实时生成）
 PYTHONIOENCODING=utf-8 python scripts/macro_framework_report.py --no-open # 宏观框架（总览表+🥇黄金阶段定位器+微观紧缺+因果链分节点图，纯数据无LLM）；--no-open 必须：脚本默认会自动开浏览器，不加会与第3步重复弹两次
 PYTHONIOENCODING=utf-8 python scripts/position_report.py        # 仓位管理（估值档×预案对照；数据腿=backfill_index.py 已回填的 index_pe/pb，无新回填；预案表在 config/params.yaml position_plan）

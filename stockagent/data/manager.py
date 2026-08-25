@@ -644,6 +644,28 @@ class DataManager:
         log.info("market_margin: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
         return n
 
+    def update_china_money(self) -> dict:
+        """Fetch + store 中国货币条件月度数据(⑪: M2/M1/M0 + 社融增量, 金十源)。
+        两源独立容错(社融源滞后/偶发被拦不拖垮货币腿);源返回全历史 → 全量 upsert 幂等。
+        Returns {money: rows, tsf: rows}。"""
+        out = {"money": 0, "tsf": 0}
+        try:
+            rows = fetcher.fetch_china_money_supply()
+            out["money"] = self.store.upsert_china_money(rows)
+            self.store.set_meta("last_china_money_update", fetcher.today_str())
+            log.info("china_money: +%d rows (to %s)", out["money"],
+                     rows[0]["month"] if rows else "?")
+        except Exception as e:  # noqa: BLE001
+            log.warning("china_money failed: %s", str(e)[:120])
+        try:
+            rows = fetcher.fetch_china_tsf()
+            out["tsf"] = self.store.upsert_china_tsf(rows)
+            log.info("china_tsf: +%d rows (to %s)", out["tsf"],
+                     rows[0]["month"] if rows else "?")
+        except Exception as e:  # noqa: BLE001
+            log.warning("china_tsf failed: %s", str(e)[:120])
+        return out
+
     def update_index_all(self) -> None:
         """Convenience: refresh all index-layer data (daily + PE + PB + market PB + turnover)."""
         self.update_index_daily()

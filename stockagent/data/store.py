@@ -276,6 +276,18 @@ CREATE TABLE IF NOT EXISTS economic_calendar (   -- 经济日历/事件·框架�
     importance INTEGER,                          -- 重要性 1/2/3(筛 ≥2)
     PRIMARY KEY (date, time, event)
 );
+CREATE TABLE IF NOT EXISTS china_money_supply ( -- ⑪ 货币条件: M2/M1/M0 月度(金十·央行金融统计数据) · 月频
+    month   TEXT NOT NULL,                       -- YYYY-MM-01
+    m2_amt  REAL, m2_yoy REAL,                   -- M2 余额(亿元)/同比(%) —— 口径 2008 以来一致,event-study 主信号
+    m1_amt  REAL, m1_yoy REAL,                   -- M1(2024-01 起新口径含个人活期——序列有断点,仅展示不进研究)
+    m0_amt  REAL, m0_yoy REAL,                   -- 流通现金(备查)
+    PRIMARY KEY (month)
+);
+CREATE TABLE IF NOT EXISTS china_tsf (           -- 社融增量(月频,金十)——脉冲=增量TTM/M2 的原料;存量同比无免费源
+    month   TEXT NOT NULL,                       -- YYYY-MM-01(源滞后货币约 2-3 个月)
+    tsf_inc REAL,                                -- 当月社融增量(亿元)
+    PRIMARY KEY (month)
+);
 CREATE TABLE IF NOT EXISTS wm_claims (
     uid          TEXT PRIMARY KEY,   -- 稳定 hash(episode_date|asset|type|statement 规范化)→ 幂等再抽取
     episode_date TEXT NOT NULL,      -- 哪一期说的 (YYYY-MM-DD)
@@ -1178,6 +1190,59 @@ class Store:
         with self._conn() as c:
             row = c.execute("SELECT MAX(date) FROM market_margin").fetchone()
             return row[0] if row and row[0] else None
+
+    # ---- China money (⑪ 货币条件 · M2/M1/社融 月频, 金十源) ----
+    def upsert_china_money(self, rows: list[dict]) -> int:
+        """rows: {month,m2_amt,m2_yoy,m1_amt,m1_yoy,m0_amt,m0_yoy}。幂等(全量重拉覆盖,月频仅~220行)。"""
+        if not rows:
+            return 0
+        payload = [(r["month"], _num(r.get("m2_amt")), _num(r.get("m2_yoy")),
+                    _num(r.get("m1_amt")), _num(r.get("m1_yoy")),
+                    _num(r.get("m0_amt")), _num(r.get("m0_yoy"))) for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO china_money_supply(month,m2_amt,m2_yoy,m1_amt,m1_yoy,m0_amt,m0_yoy) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(month) DO UPDATE SET "
+                "m2_amt=excluded.m2_amt,m2_yoy=excluded.m2_yoy,m1_amt=excluded.m1_amt,"
+                "m1_yoy=excluded.m1_yoy,m0_amt=excluded.m0_amt,m0_yoy=excluded.m0_yoy",
+                payload)
+        return len(payload)
+
+    def get_china_money_series(self) -> pd.DataFrame:
+        """货币供应 DataFrame(month 升序 index=month,
+        cols=m2_amt/m2_yoy/m1_amt/m1_yoy/m0_amt/m0_yoy)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT month,m2_amt,m2_yoy,m1_amt,m1_yoy,m0_amt,m0_yoy "
+                "FROM china_money_supply ORDER BY month", c)
+        if df.empty:
+            return pd.DataFrame()
+        return df.set_index("month")
+
+    def last_china_money_date(self) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(month) FROM china_money_supply").fetchone()
+            return row[0] if row and row[0] else None
+
+    def upsert_china_tsf(self, rows: list[dict]) -> int:
+        """rows: {month,tsf_inc}。幂等。"""
+        if not rows:
+            return 0
+        payload = [(r["month"], _num(r.get("tsf_inc"))) for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO china_tsf(month,tsf_inc) VALUES(?,?) "
+                "ON CONFLICT(month) DO UPDATE SET tsf_inc=excluded.tsf_inc", payload)
+        return len(payload)
+
+    def get_china_tsf_series(self) -> pd.DataFrame:
+        """社融增量 DataFrame(month 升序 index=month, cols=tsf_inc)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT month,tsf_inc FROM china_tsf ORDER BY month", c)
+        if df.empty:
+            return pd.DataFrame()
+        return df.set_index("month")
 
     # ---- ETF dividend (V4 tracker · 价值型股息率) ----
     def upsert_etf_dividend(self, symbol: str, df: pd.DataFrame, source: str = "") -> int:
