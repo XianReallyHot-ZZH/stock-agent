@@ -1,6 +1,6 @@
 """国内宏观看板渲染(第七看板 data/china_macro.html · 只读旁路 · 永不喂引擎)。
 
-三 section:
+五 section:
 ① 货币信用 —— ⑪ 货币条件完整版(M2/M1 同比+剪刀差+社融脉冲+episode 状态机+事件标记+实证结论
    meta 读)。复用 tracker.diagnose.diagnose_money_conditions 与 tracker.money_conditions 纯函数
    (china_macro→tracker 同向依赖,与 pool→tracker 同礼遇;不反向、不 re-export)。
@@ -8,6 +8,10 @@
    + 央行资产负债表「对其他存款性公司债权」月度差分(OMO/MLF 净投放的滞后近似)。
 ③ 政策日历 —— 硬编码典型时点(政治局 4/7/12 月·中央经济工作会议·货政报告·两会·LPR·金融数据公布)
    → 下次时点+倒计时;只放事实,观点结算归 docs/CLAIMS_LEDGER.md。
+④ 社融可观测成分(nowcast · 观测非预测) —— 地方债逐券月度+月内累计(政府债半程;国债明细无免费源)
+   + 社融分项历史(信贷/企业债/股票,官方口径)做分布对照;信贷黑箱诚实留白。
+⑤ 会议→M2 转向历史回放 —— 锚点月(3两会/4·7·12政治局+经济工作会议)后 3 个月 M2 同比方向统计,
+   「12月定调→来年放水」叙事的历史对照;历史统计非因果非信号。
 
 先行代理未过 event-study 礼遇前一律为观察项,不出现「预测/信号」措辞。
 """
@@ -298,6 +302,121 @@ def _rates_html(repo, shibor, lpr, bond, cb, figs: list[str]) -> str:
     return out
 
 
+# ---- ④ 社融可观测成分(nowcast · 观测非预测) ----
+def _lgb_figure(monthly: pd.Series, cur_ym: str) -> go.Figure:
+    """地方债月度实际发行柱(亿元);当前月高亮=月内进行时(不完整月)。"""
+    fig = go.Figure()
+    if monthly is not None and len(monthly):
+        colors = [_PAL["critical"] if ym == cur_ym else _PAL["series_1"]
+                  for ym in monthly.index]
+        fig.add_trace(go.Bar(
+            x=pd.to_datetime([f"{ym}-01" for ym in monthly.index]),
+            y=monthly.to_numpy(dtype=float), name="月度实际发行(亿)",
+            marker_color=colors,
+            hovertemplate="%{x|%Y-%m}<br>%{y:,.0f} 亿元<extra></extra>"))
+    fig.update_layout(height=300, margin=dict(l=56, r=20, t=20, b=30),
+                      paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+                      font=dict(color=_PAL["ink"]), showlegend=False,
+                      yaxis=dict(title_text="亿元", gridcolor=_PAL["grid"]))
+    fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
+                     rangeslider_visible=True)
+    return fig
+
+
+def _tsf_comp_figure(tsf: pd.DataFrame) -> go.Figure:
+    """社融分项月度(亿元,社融官方口径):人民币贷款/企业债券/股票融资。"""
+    fig = go.Figure()
+    if tsf is not None and len(tsf):
+        for col, nm, c in (("rmb_loans", "人民币贷款", _PAL["series_1"]),
+                           ("corp_bond", "企业债券", _PAL["series_2"]),
+                           ("equity_fin", "股票融资", _PAL["series_3"])):
+            if col not in tsf.columns:
+                continue
+            s = pd.to_numeric(tsf[col], errors="coerce").dropna()
+            if not len(s):
+                continue
+            fig.add_trace(go.Scatter(
+                x=pd.to_datetime(s.index), y=s.to_numpy(dtype=float), name=nm,
+                line=dict(color=c, width=1.5),
+                hovertemplate=f"%{{x|%Y-%m}}<br>{nm} %{{y:,.0f}} 亿<extra></extra>"))
+    fig.update_layout(height=300, margin=dict(l=56, r=20, t=20, b=30),
+                      paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+                      font=dict(color=_PAL["ink"]), showlegend=True,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                      yaxis=dict(title_text="亿元(月增)", gridcolor=_PAL["grid"],
+                                 zerolinecolor=_PAL["grid"]))
+    fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
+                     rangeslider_visible=True)
+    return fig
+
+
+def _nowcast_html(monthly, tsf, figs: list[str], cur_ym: str) -> str:
+    """④ 社融可观测成分:政府债(地方债)月内 nowcast + 社融分项历史。观测非预测。"""
+    if (monthly is None or len(monthly) == 0) and (tsf is None or len(tsf) == 0):
+        return ("<p class='hint'>社融可观测成分数据不足(先跑 "
+                "python scripts/backfill_china_macro.py --lgb 与 backfill_index.py --money)</p>")
+    from . import nowcast as nc
+    prog = nc.mtd_progress(monthly, cur_ym)
+    ratio_txt = f"{prog['ratio'] * 100:.0f}%" if prog["ratio"] == prog["ratio"] else "—"
+    cur_txt = f"{prog['cur']:,.0f}亿" if prog["cur"] == prog["cur"] else "—"
+    last_txt = f"{prog['last_full']:,.0f}亿" if prog["last_full"] == prog["last_full"] else "—"
+
+    def _tsf_tile(col: str, label: str, color: str) -> str:
+        if tsf is None or len(tsf) == 0 or col not in tsf.columns:
+            return _tile(label, "—", "(缺分项数据)", _PAL["muted"])
+        s = pd.to_numeric(tsf[col], errors="coerce").dropna()
+        if not len(s):
+            return _tile(label, "—", "(分项缺)", _PAL["muted"])
+        return _tile(label, f"{float(s.iloc[-1]):,.0f}亿",
+                     f"{str(s.index[-1])[:7]} 月 · 社融口径", color)
+
+    tiles = ("<div class='tiles-row'>"
+             + _tile(f"本月地方债已发行({cur_ym})", cur_txt,
+                     f"vs 近12月完整月均值 {ratio_txt} · 月内进行时", _PAL["critical"])
+             + _tile("上月地方债全月", last_txt, "完整月对照", _PAL["series_1"])
+             + _tsf_tile("rmb_loans", "信贷分项(社融口径)", _PAL["series_1"])
+             + _tsf_tile("corp_bond", "企业债分项(社融口径)", _PAL["series_2"])
+             + "</div>")
+    hint = ("<b>社融分子端,只有一部分能提前看见</b>:政府债(此处=地方债逐券明细,国债发行明细无免费源→半程)"
+            "与企业债按发行/缴款**日度**可观测;**信贷(最大头)是月度黑箱**——免费票据利率源缺,待补"
+            "(见执行规划)。分项历史为社融官方口径(滞后 2-3 月),做「信贷/企业债通常多大」的分布对照。<br>"
+            "口径三重诚实:①cninfo 逐券口径(含再融资/跨市场),绝对量级未与官方月报交叉校验——本 section 用于"
+            "**月度节奏与月内累计的相对观察**;②当前月是进行时(红柱不完整,和完整月比天然偏低);"
+            "③「本月已发行→社融政府债分项」还需净融资(发行−到期)换算,此处只看发行侧。<b>观测非预测,"
+            "永不喂引擎。</b>")
+    out = tiles + f"<div class='hint' style='margin-top:10px'>{hint}</div>"
+    out += "".join(f"<div style='margin-top:12px'>{f}</div>" for f in figs if f)
+    return out
+
+
+# ---- ⑤ 会议→M2 转向历史回放 ----
+def _meeting_html(stats: dict, ahead: int = 3) -> str:
+    """⑤ 会议锚点会后 M2 同比方向的历史统计——「12月定调→来年放水」叙事的历史对照。"""
+    if not stats:
+        return "<p class='hint'>会议→M2 回放数据不足(需 M2 同比 ≥ 数年月度序列)</p>"
+    rows = ""
+    for a, s in sorted(stats.items()):
+        prob = s["up_prob"]
+        pc = _PAL["good"] if prob >= 0.6 else _PAL["critical"] if prob <= 0.4 else _PAL["ink_sec"]
+        ld = s["latest_delta"]
+        lc = _PAL["good"] if ld > 0 else _PAL["critical"] if ld < 0 else _PAL["ink_sec"]
+        rows += (f"<tr><td style='text-align:left;font-weight:600'>{s['label']}</td>"
+                 f"<td>{s['n']}</td>"
+                 f"<td style='font-weight:700;color:{pc}'>{prob * 100:.0f}%</td>"
+                 f"<td>{s['median_delta']:+.1f}pp</td>"
+                 f"<td>{s['latest_ym']}</td>"
+                 f"<td style='color:{lc}'>{ld:+.1f}pp</td></tr>")
+    hint = (f"读法:每个政策锚点月之后 <b>{ahead} 个月</b>,M2 同比相对锚点月**上行了还是下行了**——"
+            "上行概率高=该锚点历史上常是「放水起点」叙事的统计对照(如 12 月中央经济工作会议定调→来年信用扩张)。"
+            "<b>月度锚点近似</b>(会议实际日期在月中,对月度序列无差);最近一个还没走完 ahead 的锚不进统计(防半程假读);"
+            "n≈17-18/锚点,读方向不读精度;<b>历史对照非因果</b>,更非信号——会议效果取决于当时稳增长压力,"
+            "同一锚点在不同周期方向可反。温度计非开关,永不喂引擎。")
+    return (f"<table><tr><th style='text-align:left'>锚点(典型)</th><th>n</th>"
+            f"<th>会后{ahead}月 M2 上行概率</th><th>中位变化</th><th>最近完整锚</th>"
+            f"<th>最近变化</th></tr>{rows}</table>"
+            f"<div class='hint' style='margin-top:10px'>{hint}</div>")
+
+
 # ---- ③ 政策日历 ----
 def _policy_html(events: list[dict]) -> str:
     if not events:
@@ -371,14 +490,20 @@ function toggleTheme(){
 
 def render_china_macro(store, out_path: Path, asof: str = "") -> Path:
     """渲染国内宏观看板 → data/china_macro.html (只读·不喂引擎)。"""
+    from . import nowcast as nc
+
     mcd = diagnose_money_conditions(store)
     repo = store.get_repo_fix_series()
     shibor = store.get_shibor_series()
     lpr = store.get_lpr_series()
     bond = store.get_cn_bond_series()
     cb = store.get_cb_balance_series()
+    tsf = store.get_china_tsf_series()
     concl = store.get_meta("china_money_conclusion", "") or ""
     policy_events = policy.policy_calendar(date.today())
+    lgb_detail = store.get_lgb_issue()
+    lgb_monthly = nc.lgb_monthly_series(lgb_detail)
+    cur_ym = date.today().strftime("%Y-%m")
 
     figs: list[str] = []
     first = True
@@ -402,6 +527,20 @@ def render_china_macro(store, out_path: Path, asof: str = "") -> Path:
         except Exception:  # noqa: BLE001
             continue
     rates_html = _rates_html(repo, shibor, lpr, bond, cb, rates_figs)
+    nowcast_figs = []
+    for build, args, div in ((_lgb_figure, (lgb_monthly, cur_ym), "cm_lgb"),
+                             (_tsf_comp_figure, (tsf,), "cm_tsfcomp")):
+        try:
+            f = build(*args)
+            if len(f.data):
+                nowcast_figs.append(f.to_html(full_html=False, include_plotlyjs=first, div_id=div))
+                first = False
+        except Exception:  # noqa: BLE001
+            continue
+    nowcast_html = _nowcast_html(lgb_monthly, tsf, nowcast_figs, cur_ym)
+    anchor_stats = (nc.meeting_anchor_stats(mcd["m2_series"])
+                    if mcd.get("valid") and len(mcd.get("m2_series", [])) else {})
+    meeting_html = _meeting_html(anchor_stats)
     policy_html = _policy_html(policy_events)
 
     asof_txt = asof or f"{datetime.now():%Y-%m-%d %H:%M}"
@@ -420,6 +559,8 @@ def render_china_macro(store, out_path: Path, asof: str = "") -> Path:
         "<h2>① 货币信用(M2/M1/社融)</h2><section>" + money_html + "</section>"
         "<h2>② 利率与流动性(Shibor/FDR007/LPR/中债期限结构/OMO)</h2><section>" + rates_html + "</section>"
         "<h2>③ 政策日历(下次时点+倒计时)</h2><section>" + policy_html + "</section>"
+        "<h2>④ 社融可观测成分(政府债·企业债 nowcast · 观测非预测)</h2><section>" + nowcast_html + "</section>"
+        "<h2>⑤ 会议→M2 转向历史回放(锚点月后 3 个月)</h2><section>" + meeting_html + "</section>"
         "<script>" + _JS + "</script></body></html>")
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

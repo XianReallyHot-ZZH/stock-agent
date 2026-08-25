@@ -286,6 +286,9 @@ CREATE TABLE IF NOT EXISTS china_money_supply ( -- ⑪ 货币条件: M2/M1/M0 �
 CREATE TABLE IF NOT EXISTS china_tsf (           -- 社融增量(月频,金十)——脉冲=增量TTM/M2 的原料;存量同比无免费源
     month   TEXT NOT NULL,                       -- YYYY-MM-01(源滞后货币约 2-3 个月)
     tsf_inc REAL,                                -- 当月社融增量(亿元)
+    rmb_loans REAL,                              -- 其中:人民币贷款(亿元,信贷分项——黑箱的历史对照)
+    corp_bond REAL,                              -- 其中:企业债券(亿元)
+    equity_fin REAL,                             -- 其中:非金融企业境内股票融资(亿元)
     PRIMARY KEY (month)
 );
 CREATE TABLE IF NOT EXISTS shibor_daily (          -- 国内宏观(第七看板) · 利率与流动性: Shibor 定价(金十,2015起)
@@ -320,6 +323,16 @@ CREATE TABLE IF NOT EXISTS cb_balance_monthly (    -- 央行资产负债表(月�
     total_assets REAL,
     PRIMARY KEY (month)
 );
+CREATE TABLE IF NOT EXISTS lgb_bond_issue (        -- 地方政府债发行明细(v2 社融可观测成分·2021-09起,逐券)
+    code TEXT NOT NULL,                            -- 债券代码(主键,重拉幂等)
+    name TEXT,                                     -- 债券简称
+    issue_date TEXT,                               -- 发行起始日(月度聚合用)
+    plan_amt REAL,                                 -- 计划发行总量(亿元)
+    actual_amt REAL,                               -- 实际发行总量(亿元)
+    pay_date TEXT,                                 -- 缴款日
+    PRIMARY KEY (code)
+);
+CREATE INDEX IF NOT EXISTS idx_lgb_issue_date ON lgb_bond_issue(issue_date);
 CREATE TABLE IF NOT EXISTS wm_claims (
     uid          TEXT PRIMARY KEY,   -- 稳定 hash(episode_date|asset|type|statement 规范化)→ 幂等再抽取
     episode_date TEXT NOT NULL,      -- 哪一期说的 (YYYY-MM-DD)
@@ -404,6 +417,9 @@ class Store:
             c.executescript(SCHEMA)
             _ensure_column(c, "daily_prices", "source", "TEXT")
             _ensure_column(c, "etf_earnings", "n_matched", "INTEGER")
+            _ensure_column(c, "china_tsf", "rmb_loans", "REAL")    # v2:社融分项(旧库迁移)
+            _ensure_column(c, "china_tsf", "corp_bond", "REAL")
+            _ensure_column(c, "china_tsf", "equity_fin", "REAL")
 
     # ---- meta ----
     def get_meta(self, key: str, default=None):
@@ -1257,24 +1273,42 @@ class Store:
             return row[0] if row and row[0] else None
 
     def upsert_china_tsf(self, rows: list[dict]) -> int:
-        """rows: {month,tsf_inc}。幂等。"""
-        if not rows:
-            return 0
-        payload = [(r["month"], _num(r.get("tsf_inc"))) for r in rows]
-        with self._conn() as c:
-            c.executemany(
-                "INSERT INTO china_tsf(month,tsf_inc) VALUES(?,?) "
-                "ON CONFLICT(month) DO UPDATE SET tsf_inc=excluded.tsf_inc", payload)
-        return len(payload)
+        """rows: {month,tsf_inc,rmb_loans,corp_bond,equity_fin}。幂等(分项 v2 扩列)。"""
+        return self._upsert_simple("china_tsf",
+                                   ["month", "tsf_inc", "rmb_loans", "corp_bond", "equity_fin"], rows)
 
     def get_china_tsf_series(self) -> pd.DataFrame:
-        """社融增量 DataFrame(month 升序 index=month, cols=tsf_inc)。"""
+        """社融增量 DataFrame(month 升序 index=month,
+        cols=tsf_inc/rmb_loans/corp_bond/equity_fin)。"""
+        return self._get_simple("china_tsf", "month",
+                                ["tsf_inc", "rmb_loans", "corp_bond", "equity_fin"])
+
+    def upsert_lgb_issue(self, rows: list[dict]) -> int:
+        """rows: {code,name,issue_date,plan_amt,actual_amt,pay_date}。逐券,code 主键幂等。"""
+        if not rows:
+            return 0
+        payload = [(r["code"], r.get("name"), r.get("issue_date"),
+                    _num(r.get("plan_amt")), _num(r.get("actual_amt")), r.get("pay_date"))
+                   for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO lgb_bond_issue(code,name,issue_date,plan_amt,actual_amt,pay_date) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET "
+                "name=excluded.name,issue_date=excluded.issue_date,"
+                "plan_amt=excluded.plan_amt,actual_amt=excluded.actual_amt,pay_date=excluded.pay_date",
+                payload)
+        return len(payload)
+
+    def get_lgb_issue(self) -> pd.DataFrame:
+        """地方债发行明细 DataFrame(code 升序 index=code,
+        cols=name/issue_date/plan_amt/actual_amt/pay_date)。月度聚合在 nowcast 纯函数做。"""
         with self._conn() as c:
             df = pd.read_sql_query(
-                "SELECT month,tsf_inc FROM china_tsf ORDER BY month", c)
+                "SELECT code,name,issue_date,plan_amt,actual_amt,pay_date "
+                "FROM lgb_bond_issue ORDER BY issue_date", c)
         if df.empty:
             return pd.DataFrame()
-        return df.set_index("month")
+        return df.set_index("code")
 
     # ---- China rates / cb balance (第七看板 国内宏观 · 利率与流动性,金十源) ----
     def _upsert_simple(self, table: str, cols: list[str], rows: list[dict]) -> int:

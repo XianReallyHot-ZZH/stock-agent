@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from stockagent.china_macro import framework as fw
+from stockagent.china_macro import nowcast as nc
 from stockagent.china_macro import policy
 from stockagent.data import fetcher
 from stockagent.data.store import Store
@@ -162,3 +163,125 @@ def test_rates_html_insufficient_and_tiles():
     cb = pd.DataFrame({"claim_odc": [10.0e4, 10.5e4]}, index=["2026-06-01", "2026-07-01"])
     html2 = fw._rates_html(_repo_df(), None, None, None, cb, [])
     assert "万亿" in html2 and "2026-07" in html2          # OMO 近似 tile
+
+
+# ---------- v2: nowcast 纯函数 ----------
+def test_lgb_monthly_series():
+    detail = pd.DataFrame({
+        "issue_date": ["2026-07-02", "2026-07-15", "2026-08-01", None],
+        "actual_amt": [100.0, 50.0, 30.0, 999.0],
+    }, index=["c1", "c2", "c3", "c4"])
+    s = nc.lgb_monthly_series(detail)
+    assert list(s.index) == ["2026-07", "2026-08"]
+    assert s["2026-07"] == 150.0 and s["2026-08"] == 30.0
+    assert len(nc.lgb_monthly_series(pd.DataFrame(dtype=float))) == 0
+
+
+def test_mtd_progress():
+    idx = [f"2025-{m:02d}" for m in range(9, 13)] + [f"2026-{m:02d}" for m in range(1, 8)]
+    monthly = pd.Series([1000.0] * 11, index=idx)          # 11 个完整月
+    monthly["2026-08"] = 500.0                             # 本月进行时
+    p = nc.mtd_progress(monthly, "2026-08")
+    assert p["cur"] == 500.0 and p["base"] == 1000.0
+    assert p["last_full"] == 1000.0 and p["ratio"] == 0.5
+    # 本月尚无发行 → cur NaN 不抛
+    p2 = nc.mtd_progress(monthly, "2026-09")
+    assert p2["cur"] != p2["cur"]                          # NaN
+    assert len(nc.mtd_progress(pd.Series(dtype=float), "2026-08")) == 4
+
+
+def test_meeting_anchor_stats_direction():
+    """单升序列 → 全锚点上行概率 1.0;末尾锚未走完 ahead 不进统计。"""
+    idx = pd.period_range("2022-01", periods=48, freq="M").strftime("%Y-%m-01")
+    ramp = pd.Series([8.0 + 0.1 * i for i in range(46)] + [10.0, None], index=idx).dropna()
+    # 46 个月(2022-01..2025-10):每年锚点后 3 月必更高(线性升)
+    st = nc.meeting_anchor_stats(ramp, anchors=(12,), ahead=3)
+    s = st[12]
+    assert s["n"] == 3                                     # 2022/2023/2024 年 12 月锚
+    assert s["up_prob"] == 1.0 and s["median_delta"] > 0
+    # 降序列 → 0.0
+    down = pd.Series([10.0 - 0.1 * i for i in range(46)], index=idx[:46])
+    st2 = nc.meeting_anchor_stats(down, anchors=(4,), ahead=3)
+    assert st2[4]["up_prob"] == 0.0
+
+
+def test_meeting_anchor_stats_year_rollover():
+    """12 月锚 +3 月 = 次年 3 月(跨年换算)。序列止于 2023-06 → 只有 2022-12 锚完整。"""
+    idx = pd.period_range("2022-01", periods=18, freq="M").strftime("%Y-%m-01")
+    v = pd.Series(0.0, index=idx)
+    v["2023-03-01"] = 1.0                                  # 只有 2022-12 锚的后值抬高
+    st = nc.meeting_anchor_stats(v, anchors=(12,), ahead=3)
+    assert st[12]["n"] == 1 and st[12]["latest_delta"] == 1.0
+
+
+def test_parse_lgb_issue():
+    df = pd.DataFrame({
+        "债券代码": ["2105798", "", "566862"],
+        "债券简称": ["21湖北债105", "x", "西藏2613"],
+        "发行起始日": [date(2021, 9, 2), date(2021, 9, 3), date(2026, 7, 2)],
+        "计划发行总量": [4.13, 1.0, 1.3],
+        "实际发行总量": [4.13, 1.0, 1.3],
+        "缴款日": [date(2021, 9, 3), None, date(2026, 7, 3)],
+    })
+    rows = fetcher.parse_lgb_issue(df)
+    assert len(rows) == 2                                  # 空代码行跳过
+    by = {r["code"]: r for r in rows}
+    assert by["2105798"]["issue_date"] == "2021-09-02" and by["2105798"]["actual_amt"] == 4.13
+
+
+def test_parse_china_tsf_components():
+    df = pd.DataFrame({"月份": ["202604", "bad"],
+                       "社会融资规模增量": [6245.0, 1.0],
+                       "其中-人民币贷款": [-4006.0, 1.0],
+                       "其中-企业债券": [4520.0, None],
+                       "其中-非金融企业境内股票融资": [835.0, 1.0]})
+    rows = fetcher.parse_china_tsf(df)
+    assert rows == [{"month": "2026-04-01", "tsf_inc": 6245.0,
+                     "rmb_loans": -4006.0, "corp_bond": 4520.0, "equity_fin": 835.0}]
+
+
+def test_store_lgb_and_tsf_components_roundtrip(tmp_path):
+    st = Store(tmp_path / "t.sqlite")
+    assert st.upsert_lgb_issue([{"code": "c1", "name": "西藏2613",
+                                 "issue_date": "2026-07-02", "plan_amt": 1.3,
+                                 "actual_amt": 1.3, "pay_date": "2026-07-03"}]) == 1
+    df = st.get_lgb_issue()
+    assert float(df.loc["c1", "actual_amt"]) == 1.3
+    assert st.upsert_china_tsf([{"month": "2026-04-01", "tsf_inc": 6245.0,
+                                 "rmb_loans": -4006.0, "corp_bond": None,
+                                 "equity_fin": 835.0}]) == 1
+    tsf = st.get_china_tsf_series()
+    assert float(tsf.loc["2026-04-01", "rmb_loans"]) == -4006.0
+    assert pd.isna(tsf.loc["2026-04-01", "corp_bond"])
+    assert "equity_fin" in tsf.columns
+
+
+# ---------- v2: 构建器 ----------
+def test_lgb_figure_and_nowcast_html():
+    monthly = pd.Series({"2026-07": 20000.0, "2026-08": 15000.0})
+    fig = fw._lgb_figure(monthly, "2026-08")
+    assert fig.data[0].type == "bar" and len(fig.data[0].x) == 2
+    html = fw._nowcast_html(monthly, pd.DataFrame(dtype=float), [], "2026-08")
+    assert "月内进行时" in html and "观测非预测" in html
+    assert "数据不足" in fw._nowcast_html(pd.Series(dtype=float), pd.DataFrame(dtype=float), [], "2026-08")
+    tsf = pd.DataFrame({"rmb_loans": [4446.0], "corp_bond": [2000.0], "equity_fin": [500.0]},
+                       index=["2026-04-01"])
+    html2 = fw._nowcast_html(monthly, tsf, [], "2026-08")
+    assert "4,446" in html2 and "社融口径" in html2
+
+
+def test_tsf_comp_figure_traces():
+    tsf = pd.DataFrame({"tsf_inc": [1.0], "rmb_loans": [4446.0], "corp_bond": [2000.0],
+                        "equity_fin": [500.0]}, index=["2026-04-01"])
+    fig = fw._tsf_comp_figure(tsf)
+    names = [t.name or "" for t in fig.data]
+    assert any("人民币贷款" in n for n in names) and any("企业债券" in n for n in names)
+    assert len(fw._tsf_comp_figure(pd.DataFrame(dtype=float)).data) == 0
+
+
+def test_meeting_html_renders():
+    stats = {12: {"label": "12 月(政治局+中央经济工作会议)", "n": 18, "up_prob": 0.56,
+                  "median_delta": 0.3, "latest_ym": "2025-12", "latest_delta": 0.9}}
+    html = fw._meeting_html(stats)
+    assert "上行概率" in html and "56%" in html and "历史对照非因果" in html
+    assert "数据不足" in fw._meeting_html({})

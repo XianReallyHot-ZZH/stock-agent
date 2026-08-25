@@ -23,6 +23,16 @@ lpr_monthly/cn_bond_daily/cb_balance_monthly）+ shell 注册 6→7 + data_check
 （利率>2天·央行表>35天）+ tests/test_china_macro.py(15) + skill `china-macro-dashboard`。
 实际落地与原计划的差异：央行资产负债表（claim_odc 月度差分=OMO 近似）提前进 v1 的 section ②。
 
+### v2 · nowcast 与回放 ✅（2026-08-25 完成）
+④ 社融可观测成分：`nowcast.py` 纯函数 + lgb_bond_issue 表（地方债逐券 2021-09 起 3 万券，
+cninfo 按月窗分段拉，**逐券口径绝对量级未与官方月报交叉校验——只作月度节奏/月内累计相对观察**）
++ china_tsf 扩列分项（人民币贷款/企业债券/股票融资，`_ensure_column` 迁移旧库）；
+企业债 cninfo 代理**弃用**（与社融分项口径不一致，分项历史直接用官方口径）。
+⑤ 会议→M2 转向回放：`meeting_anchor_stats`（锚点月后 3 月方向统计）。
+**首跑实证：四锚点（3两会/4·7政治局/12经济工作会议）会后 3 月 M2 上行概率全 42-44%——
+「12 月定调→来年放水」叙事在 2008-2026 历史上无统计支持**；未走完 ahead 的最新锚不进统计。
+测试 935 全绿。
+
 | 腿 | 用途 | 候选端点 | 结论（2026-08-24 实测） |
 |---|---|---|---|
 | Shibor（同业拆放利率） | 银行间资金面日度脉搏 | `macro_china_shibor_all` | ✅ 2015-05-08 起，O/N~1Y 全 8 期限，日频（金十源） |
@@ -39,7 +49,7 @@ lpr_monthly/cn_bond_daily/cb_balance_monthly）+ shell 注册 6→7 + data_check
 
 ### v1 · 看板落地（已完成——见上方勾销记录，以下为原始设计）
 
-### v2 · nowcast 与回放
+### v2 · nowcast 与回放（已完成——见上方勾销记录，以下为原始设计）
 4. **社融可观测成分**：政府债净融资日度累计 + 企业债 → 「本月社融分子端能提前看见的部分」
    ——**观测（nowcast）非预测**，黑箱成分（信贷/表外）诚实留白
 5. **会议→M2 转向历史统计**：「会后 3 个月 M2 同比方向变化」event-study lite；

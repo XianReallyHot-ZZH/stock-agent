@@ -702,6 +702,19 @@ class DataManager:
             log.warning("cb_balance failed: %s", str(e)[:120])
         return out
 
+    def update_lgb_issue(self) -> dict:
+        """Fetch + store 地方政府债发行明细(v2 社融可观测成分;逐券 code 主键幂等,
+        按月窗全量重拉 ~60 窗 ~1-2min)。失败月跳过不致命(重跑自愈)。"""
+        out = {"lgb": 0}
+        try:
+            rows = fetcher.fetch_lgb_issue()
+            out["lgb"] = self.store.upsert_lgb_issue(rows)
+            self.store.set_meta("last_lgb_issue_update", fetcher.today_str())
+            log.info("lgb_issue: +%d rows", out["lgb"])
+        except Exception as e:  # noqa: BLE001
+            log.warning("lgb_issue failed: %s", str(e)[:120])
+        return out
+
     def update_index_all(self) -> None:
         """Convenience: refresh all index-layer data (daily + PE + PB + market PB + turnover)."""
         self.update_index_daily()

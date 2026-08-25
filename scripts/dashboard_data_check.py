@@ -300,6 +300,13 @@ def main():
     if cb_stale:
         print(f"  央行资产负债表刷新(月频, 当前 {cb_last or '无'})...")
         dm.update_cb_balance()
+    # 6.9) lgb issue (第七看板 v2 · 地方债发行明细,社融可观测成分): refresh if >2 days
+    lgb_last = store.get_meta("last_lgb_issue_update")
+    lgb_stale = lgb_last is None or (
+        (datetime.now() - datetime.strptime(lgb_last, "%Y-%m-%d")).days > 2)
+    if lgb_stale:
+        print(f"  地方债发行明细刷新(v2 社融可观测成分, 当前 {lgb_last or '无'})...")
+        dm.update_lgb_issue()
 
     # 7) candidate-pool spot (V7 第六看板): daily snapshot — universe 的 ST 过滤 + 展示名来源
     spot_last = store.get_meta("last_stock_spot_update")

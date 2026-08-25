@@ -1784,19 +1784,24 @@ def fetch_china_money_supply(retries: int = 3) -> list[dict]:
 
 
 def parse_china_tsf(df) -> list[dict]:
-    """ak.macro_china_shrzgm (社融增量, 月频, '201501') → [{month,tsf_inc}]。
-    只取增量——存量同比无免费源,上层用 增量TTM/M2 作脉冲代理(源滞后货币约 2-3 个月)。"""
+    """ak.macro_china_shrzgm (社融增量, 月频, '201501') → [{month,tsf_inc,rmb_loans,corp_bond,equity_fin}]。
+    增量+三分子项(人民币贷款/企业债券/股票融资——信贷黑箱的历史对照);存量同比无免费源,
+    上层用 增量TTM/M2 作脉冲代理(源滞后货币约 2-3 个月)。"""
     if df is None or len(df) == 0:
         return []
+    _nn = lambda v: None if v is None or v != v else v  # noqa: E731
     out = []
     for _, r in df.iterrows():
         s = str(r.get("月份") or "")
         if len(s) != 6 or not s.isdigit():
             continue
         v = r.get("社会融资规模增量")
-        if v is None or v != v:   # NaN 跳过
+        if v is None or v != v:   # 增量缺 → 整行跳过
             continue
-        out.append({"month": f"{s[:4]}-{s[4:]}-01", "tsf_inc": float(v)})
+        out.append({"month": f"{s[:4]}-{s[4:]}-01", "tsf_inc": float(v),
+                    "rmb_loans": _nn(r.get("其中-人民币贷款")),
+                    "corp_bond": _nn(r.get("其中-企业债券")),
+                    "equity_fin": _nn(r.get("其中-非金融企业境内股票融资"))})
     return out
 
 
@@ -1955,5 +1960,55 @@ def _retry_ak_wrap(parse, fn, retries: int = 3, **kw) -> list[dict]:
             if i < retries:
                 time.sleep(1.5 * (i + 1))
     raise FetchError(f"{getattr(fn, '__name__', 'ak')} 抓取重试耗尽: {last}")
+
+
+def parse_lgb_issue(df) -> list[dict]:
+    """ak.bond_local_government_issue_cninfo (地方债发行明细,按日窗口) → 逐券
+    [{code,name,issue_date,plan_amt,actual_amt,pay_date}]。金额单位亿元(月度聚合在 nowcast 纯函数)。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        code = str(r.get("债券代码") or "").strip()
+        if not code:
+            continue
+        out.append({"code": code, "name": r.get("债券简称"),
+                    "issue_date": _norm_date(r.get("发行起始日")),
+                    "plan_amt": r.get("计划发行总量"),
+                    "actual_amt": r.get("实际发行总量"),
+                    "pay_date": _norm_date(r.get("缴款日"))})
+    return out
+
+
+def fetch_lgb_issue(start: str = "2021-09-01", end: str | None = None,
+                    retries: int = 2) -> list[dict]:
+    """地方债发行明细全史(2021-09 起,源最早窗口)。按月窗口分段拉(同 repo_rate_hist 先例),
+    逐窗容错重试;返回逐券去重由 store(code 主键 upsert)兜底。"""
+    end = end or today_str()
+    out: list[dict] = []
+    y, m = int(start[:4]), int(start[5:7])
+    ey, em = int(end[:4]), int(end[5:7])
+    while (y, m) <= (ey, em):
+        w_start = f"{y:04d}-{m:02d}-01"
+        nm, ny = (m + 1, y) if m < 12 else (1, y + 1)
+        w_end = min(f"{ny:04d}-{nm:02d}-01", end)
+        rows = None
+        last = None
+        for i in range(retries + 1):
+            try:
+                rows = parse_lgb_issue(ak.bond_local_government_issue_cninfo(
+                    start_date=w_start.replace("-", ""), end_date=w_end.replace("-", "")))
+                break
+            except Exception as e:  # noqa: BLE001
+                last = e
+                time.sleep(1.5 * (i + 1))
+        if rows is None:
+            log.warning("lgb_issue %s..%s 重试耗尽(跳过该月,重跑自愈): %s",
+                        w_start, w_end, str(last)[:80])
+        else:
+            out.extend(rows)
+        y, m = ny, nm
+        time.sleep(0.5)
+    return out
 
 
