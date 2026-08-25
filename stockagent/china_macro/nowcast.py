@@ -13,7 +13,7 @@ ANCHOR_LABELS = {3: "3 月(两会)", 4: "4 月末(政治局·经济)",
 
 
 def lgb_monthly_series(detail: pd.DataFrame, amt_col: str = "actual_amt") -> pd.Series:
-    """地方债逐券明细 → 月度实际发行合计(亿元),index 'YYYY-MM' 升序。
+    """逐券发行明细(地方债/国债同构) → 月度实际发行合计(亿元),index 'YYYY-MM' 升序。
     issue_date/金额缺失跳过。口径注记:cninfo 逐券(含再融资/跨市场),绝对量级未与
     官方月报交叉校验——用于月度节奏与月内累计的**相对观察**。"""
     if detail is None or len(detail) == 0 or amt_col not in detail.columns:
@@ -23,6 +23,15 @@ def lgb_monthly_series(detail: pd.DataFrame, amt_col: str = "actual_amt") -> pd.
     s = pd.to_numeric(detail[amt_col], errors="coerce")
     s.index = detail["issue_date"].astype(str).str[:7]
     return s.dropna().groupby(level=0).sum().sort_index()
+
+
+def bond_monthly_stack(lgb_detail: pd.DataFrame, tsy_detail: pd.DataFrame) -> dict:
+    """政府债月度发行(亿) = 国债 + 地方债 堆叠原料。Returns {'tsy','lgb','total'}
+    (total=两者对齐求和,单侧缺月按 0)。"""
+    t = lgb_monthly_series(tsy_detail)
+    l = lgb_monthly_series(lgb_detail)
+    total = t.add(l, fill_value=0.0).sort_index()
+    return {"tsy": t, "lgb": l, "total": total}
 
 
 def mtd_progress(monthly: pd.Series, ym: str, lookback: int = 12) -> dict:

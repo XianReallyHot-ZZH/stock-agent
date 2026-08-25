@@ -1,6 +1,6 @@
 """国内宏观看板渲染(第七看板 data/china_macro.html · 只读旁路 · 永不喂引擎)。
 
-五 section:
+七 section:
 ① 货币信用 —— ⑪ 货币条件完整版(M2/M1 同比+剪刀差+社融脉冲+episode 状态机+事件标记+实证结论
    meta 读)。复用 tracker.diagnose.diagnose_money_conditions 与 tracker.money_conditions 纯函数
    (china_macro→tracker 同向依赖,与 pool→tracker 同礼遇;不反向、不 re-export)。
@@ -8,10 +8,13 @@
    + 央行资产负债表「对其他存款性公司债权」月度差分(OMO/MLF 净投放的滞后近似)。
 ③ 政策日历 —— 硬编码典型时点(政治局 4/7/12 月·中央经济工作会议·货政报告·两会·LPR·金融数据公布)
    → 下次时点+倒计时;只放事实,观点结算归 docs/CLAIMS_LEDGER.md。
-④ 社融可观测成分(nowcast · 观测非预测) —— 地方债逐券月度+月内累计(政府债半程;国债明细无免费源)
-   + 社融分项历史(信贷/企业债/股票,官方口径)做分布对照;信贷黑箱诚实留白。
+④ 社融可观测成分(nowcast · 观测非预测) —— 政府债(国债+地方债逐券)月度堆叠+月内累计
+   vs 近12月均值 + 社融分项历史(信贷/企业债/股票,官方口径)做分布对照;信贷黑箱诚实留白。
 ⑤ 会议→M2 转向历史回放 —— 锚点月(3两会/4·7·12政治局+经济工作会议)后 3 个月 M2 同比方向统计,
    「12月定调→来年放水」叙事的历史对照;历史统计非因果非信号。
+⑥ 通胀 —— CPI/PPI 同比 + PPI−CPI 上下游剪刀差(金十月频,CPI 2008 起/PPI 2006 起)。
+⑦ 实体 —— 官方制造业 PMI(50 荣枯线,2005-2026 双源并接)+社零/工业增加值同比
+   (工业增加值源端滞后约一年,图注说明,读趋势用)。
 
 先行代理未过 event-study 礼遇前一律为观察项,不出现「预测/信号」措辞。
 """
@@ -303,20 +306,22 @@ def _rates_html(repo, shibor, lpr, bond, cb, figs: list[str]) -> str:
 
 
 # ---- ④ 社融可观测成分(nowcast · 观测非预测) ----
-def _lgb_figure(monthly: pd.Series, cur_ym: str) -> go.Figure:
-    """地方债月度实际发行柱(亿元);当前月高亮=月内进行时(不完整月)。"""
+def _gov_figure(stack: dict, cur_ym: str) -> go.Figure:
+    """政府债月度发行堆叠柱(国债+地方债,亿元);当前月高亮=月内进行时(不完整月)。"""
     fig = go.Figure()
-    if monthly is not None and len(monthly):
-        colors = [_PAL["critical"] if ym == cur_ym else _PAL["series_1"]
-                  for ym in monthly.index]
+    for key, nm, base in (("tsy", "国债", _PAL["series_3"]), ("lgb", "地方债", _PAL["series_1"])):
+        s = stack.get(key)
+        if s is None or len(s) == 0:
+            continue
+        colors = [_PAL["critical"] if ym == cur_ym else base for ym in s.index]
         fig.add_trace(go.Bar(
-            x=pd.to_datetime([f"{ym}-01" for ym in monthly.index]),
-            y=monthly.to_numpy(dtype=float), name="月度实际发行(亿)",
-            marker_color=colors,
-            hovertemplate="%{x|%Y-%m}<br>%{y:,.0f} 亿元<extra></extra>"))
-    fig.update_layout(height=300, margin=dict(l=56, r=20, t=20, b=30),
+            x=pd.to_datetime([f"{ym}-01" for ym in s.index]),
+            y=s.to_numpy(dtype=float), name=nm, marker_color=colors,
+            hovertemplate=f"%{{x|%Y-%m}}<br>{nm} %{{y:,.0f}} 亿元<extra></extra>"))
+    fig.update_layout(height=300, margin=dict(l=56, r=20, t=20, b=30), barmode="stack",
                       paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
-                      font=dict(color=_PAL["ink"]), showlegend=False,
+                      font=dict(color=_PAL["ink"]), showlegend=True,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                       yaxis=dict(title_text="亿元", gridcolor=_PAL["grid"]))
     fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
                      rangeslider_visible=True)
@@ -371,19 +376,154 @@ def _nowcast_html(monthly, tsf, figs: list[str], cur_ym: str) -> str:
                      f"{str(s.index[-1])[:7]} 月 · 社融口径", color)
 
     tiles = ("<div class='tiles-row'>"
-             + _tile(f"本月地方债已发行({cur_ym})", cur_txt,
-                     f"vs 近12月完整月均值 {ratio_txt} · 月内进行时", _PAL["critical"])
-             + _tile("上月地方债全月", last_txt, "完整月对照", _PAL["series_1"])
+             + _tile(f"本月政府债已发行({cur_ym})", cur_txt,
+                     f"国债+地方债 · vs 近12月均值 {ratio_txt} · 月内进行时", _PAL["critical"])
+             + _tile("上月政府债全月", last_txt, "完整月对照", _PAL["series_1"])
              + _tsf_tile("rmb_loans", "信贷分项(社融口径)", _PAL["series_1"])
              + _tsf_tile("corp_bond", "企业债分项(社融口径)", _PAL["series_2"])
              + "</div>")
-    hint = ("<b>社融分子端,只有一部分能提前看见</b>:政府债(此处=地方债逐券明细,国债发行明细无免费源→半程)"
-            "与企业债按发行/缴款**日度**可观测;**信贷(最大头)是月度黑箱**——免费票据利率源缺,待补"
-            "(见执行规划)。分项历史为社融官方口径(滞后 2-3 月),做「信贷/企业债通常多大」的分布对照。<br>"
+    hint = ("<b>社融分子端,只有一部分能提前看见</b>:政府债(国债+地方债逐券明细,发行/缴款**日度**可观测)"
+            "是最大的一块可提前观测成分;**信贷(最大头)是月度黑箱**——免费票据利率源缺,永久待补"
+            "(见执行规划终审)。分项历史为社融官方口径(滞后 2-3 月),做「信贷/企业债通常多大」的分布对照。<br>"
             "口径三重诚实:①cninfo 逐券口径(含再融资/跨市场),绝对量级未与官方月报交叉校验——本 section 用于"
             "**月度节奏与月内累计的相对观察**;②当前月是进行时(红柱不完整,和完整月比天然偏低);"
             "③「本月已发行→社融政府债分项」还需净融资(发行−到期)换算,此处只看发行侧。<b>观测非预测,"
             "永不喂引擎。</b>")
+    out = tiles + f"<div class='hint' style='margin-top:10px'>{hint}</div>"
+    out += "".join(f"<div style='margin-top:12px'>{f}</div>" for f in figs if f)
+    return out
+
+
+# ---- ⑥ 通胀 ----
+def _inflation_figure(cpi: pd.Series, ppi: pd.Series) -> go.Figure:
+    """CPI/PPI 同比(%) + PPI−CPI 剪刀差(上下游利润分配 proxy)。"""
+    fig = go.Figure()
+    for s, nm, c in ((cpi, "CPI 同比(下游消费端)", _PAL["series_1"]),
+                     (ppi, "PPI 同比(上游生产端)", _PAL["critical"])):
+        if s is not None and len(s):
+            fig.add_trace(go.Scatter(
+                x=pd.to_datetime(s.index), y=s.to_numpy(dtype=float), name=nm,
+                line=dict(color=c, width=1.8),
+                hovertemplate=f"%{{x|%Y-%m}}<br>{nm[:3]} %{{y:.1f}}%<extra></extra>"))
+    if cpi is not None and ppi is not None and len(cpi) and len(ppi):
+        sp = (ppi.reindex(ppi.index.union(cpi.index)) - cpi.reindex(ppi.index.union(cpi.index))).dropna()
+        if len(sp):
+            fig.add_trace(go.Scatter(
+                x=pd.to_datetime(sp.index), y=sp.to_numpy(dtype=float),
+                name="PPI−CPI 剪刀差(pp)", line=dict(color=_PAL["ink_sec"], width=1.2, dash="dash"),
+                hovertemplate="%{x|%Y-%m}<br>PPI−CPI %{y:+.1f}pp<extra></extra>"))
+    fig.add_hline(y=0, line=dict(color=_PAL["muted"], width=1, dash="dot"))
+    fig.update_layout(height=340, margin=dict(l=48, r=20, t=20, b=30),
+                      paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+                      font=dict(color=_PAL["ink"]), showlegend=True,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                      yaxis=dict(title_text="同比 %", gridcolor=_PAL["grid"],
+                                 zerolinecolor=_PAL["grid"]))
+    fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
+                     rangeslider_visible=True,
+                     rangeselector=dict(buttons=[
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(count=5, label="5年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
+    return fig
+
+
+def _inflation_html(cpi, ppi, fig_html: str) -> str:
+    if (cpi is None or len(cpi) == 0) and (ppi is None or len(ppi) == 0):
+        return ("<p class='hint'>通胀数据不足(先跑 python scripts/backfill_china_macro.py --real)</p>")
+
+    def _v(s):
+        return float(s.iloc[-1]) if s is not None and len(s) else float("nan")
+
+    cv, pv = _v(cpi), _v(ppi)
+    sp = pv - cv if (cv == cv and pv == pv) else float("nan")
+    tiles = ("<div class='tiles-row'>"
+             + _tile("CPI 同比", f"{cv:.1f}%" if cv == cv else "—", "下游消费端·通缩/再通胀观察",
+                     _PAL["series_1"])
+             + _tile("PPI 同比", f"{pv:.1f}%" if pv == pv else "—", "上游生产端·工业品价格",
+                     _PAL["critical"])
+             + _tile("PPI−CPI 剪刀差", f"{sp:+.1f}pp" if sp == sp else "—",
+                     "正=上游涨价难传导下游(利润偏上游)", _PAL["ink_sec"])
+             + "</div>")
+    hint = ("<b>通胀是周期的体温,不是开关</b>:CPI 看下游消费端(低/负=需求弱),PPI 看上游生产端"
+            "(回升=工业需求/商品价修复);<b>PPI−CPI 剪刀差为正=涨价停在产业链中上游</b>,下游利润承压——"
+            "与个股看板的商品 A 类面板(周期上游)互为印证。源:金十(CPI 2008 起/PPI 2006 起),"
+            "月频、次月中旬公布上月。温度计非开关,永不喂引擎。")
+    return tiles + f"<div class='hint' style='margin-top:10px'>{hint}</div>" + (
+        f"<div style='margin-top:12px'>{fig_html}</div>" if fig_html else "")
+
+
+# ---- ⑦ 实体 ----
+def _pmi_figure(pmi: pd.Series) -> go.Figure:
+    """官方制造业 PMI + 50 荣枯线。"""
+    fig = go.Figure()
+    if pmi is not None and len(pmi):
+        fig.add_trace(go.Scatter(
+            x=pd.to_datetime(pmi.index), y=pmi.to_numpy(dtype=float), name="官方制造业 PMI",
+            line=dict(color=_PAL["series_1"], width=1.8),
+            hovertemplate="%{x|%Y-%m}<br>PMI %{y:.1f}<extra></extra>"))
+    fig.add_hline(y=50, line=dict(color=_PAL["critical"], width=1.2, dash="dash"),
+                  annotation_text="50 荣枯线", annotation_font=dict(size=10))
+    fig.update_yaxes(title_text="PMI", gridcolor=_PAL["grid"], zeroline=False, range=[40, 58])
+    return _finish_monthly_fig(fig)
+
+
+def _activity_figure(retail: pd.Series, ind: pd.Series) -> go.Figure:
+    """社零 / 工业增加值 同比(%)。"""
+    fig = go.Figure()
+    for s, nm, c in ((retail, "社零同比(消费)", _PAL["series_2"]),
+                     (ind, "工业增加值同比(生产)", _PAL["series_3"])):
+        if s is not None and len(s):
+            fig.add_trace(go.Scatter(
+                x=pd.to_datetime(s.index), y=s.to_numpy(dtype=float), name=nm,
+                line=dict(color=c, width=1.6),
+                hovertemplate=f"%{{x|%Y-%m}}<br>{nm[:4]} %{{y:.1f}}%<extra></extra>"))
+    fig.add_hline(y=0, line=dict(color=_PAL["muted"], width=1, dash="dot"))
+    fig.update_yaxes(title_text="同比 %", gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"])
+    return _finish_monthly_fig(fig)
+
+
+def _finish_monthly_fig(fig: go.Figure) -> go.Figure:
+    fig.update_layout(height=320, margin=dict(l=48, r=20, t=20, b=30),
+                      paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
+                      font=dict(color=_PAL["ink"]), showlegend=True,
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
+                     rangeslider_visible=True,
+                     rangeselector=dict(buttons=[
+                         dict(count=3, label="3年", step="year", stepmode="backward"),
+                         dict(count=5, label="5年", step="year", stepmode="backward"),
+                         dict(label="全部", step="all"),
+                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
+    return fig
+
+
+def _real_html(pmi, retail, ind, figs: list[str]) -> str:
+    if all(s is None or len(s) == 0 for s in (pmi, retail, ind)):
+        return ("<p class='hint'>实体数据不足(先跑 python scripts/backfill_china_macro.py --real)</p>")
+
+    def _v(s):
+        return float(s.iloc[-1]) if s is not None and len(s) else float("nan")
+
+    mv, rv, iv = _v(pmi), _v(retail), _v(ind)
+    if mv == mv:
+        chip = _chip("扩张(>50)", _PAL["good"]) if mv > 50 else _chip("收缩(<50)", _PAL["critical"])
+        pmi_sub = f"{str(pmi.index[-1])[:7]} 月 · {chip}"
+    else:
+        pmi_sub = "—"
+    tiles = ("<div class='tiles-row'>"
+             + _tile("官方制造业 PMI", f"{mv:.1f}" if mv == mv else "—", pmi_sub, _PAL["series_1"])
+             + _tile("社零同比", f"{rv:.1f}%" if rv == rv else "—", "消费端(最新月)",
+                     _PAL["series_2"])
+             + _tile("工业增加值同比", f"{iv:.1f}%" if iv == iv else "—",
+                     f"生产端(源滞后至 {str(ind.index[-1])[:7] if ind is not None and len(ind) else '—'})",
+                     _PAL["series_3"])
+             + "</div>")
+    hint = ("<b>实体是慢变量,读方向不读单月</b>:PMI 以 50 为荣枯线(>50 扩张),官方制造业口径;"
+            "社零=消费、工业增加值=生产。源:金十(PMI 月份表 2008 起正常更新;**工业增加值走「报告」族,"
+            "源端滞后约一年——图中末段是旧值,读趋势用**;社零 2008 起)。与 ⑥通胀/④社融可观测成分"
+            "互为印证:实体弱→政策托底预期升(③政策日历的会议锚点)。温度计非开关,永不喂引擎。")
     out = tiles + f"<div class='hint' style='margin-top:10px'>{hint}</div>"
     out += "".join(f"<div style='margin-top:12px'>{f}</div>" for f in figs if f)
     return out
@@ -502,7 +642,8 @@ def render_china_macro(store, out_path: Path, asof: str = "") -> Path:
     concl = store.get_meta("china_money_conclusion", "") or ""
     policy_events = policy.policy_calendar(date.today())
     lgb_detail = store.get_lgb_issue()
-    lgb_monthly = nc.lgb_monthly_series(lgb_detail)
+    tsy_detail = store.get_tsy_issue()
+    stack = nc.bond_monthly_stack(lgb_detail, tsy_detail)
     cur_ym = date.today().strftime("%Y-%m")
 
     figs: list[str] = []
@@ -528,7 +669,7 @@ def render_china_macro(store, out_path: Path, asof: str = "") -> Path:
             continue
     rates_html = _rates_html(repo, shibor, lpr, bond, cb, rates_figs)
     nowcast_figs = []
-    for build, args, div in ((_lgb_figure, (lgb_monthly, cur_ym), "cm_lgb"),
+    for build, args, div in ((_gov_figure, (stack, cur_ym), "cm_gov"),
                              (_tsf_comp_figure, (tsf,), "cm_tsfcomp")):
         try:
             f = build(*args)
@@ -537,11 +678,36 @@ def render_china_macro(store, out_path: Path, asof: str = "") -> Path:
                 first = False
         except Exception:  # noqa: BLE001
             continue
-    nowcast_html = _nowcast_html(lgb_monthly, tsf, nowcast_figs, cur_ym)
+    nowcast_html = _nowcast_html(stack.get("total"), tsf, nowcast_figs, cur_ym)
     anchor_stats = (nc.meeting_anchor_stats(mcd["m2_series"])
                     if mcd.get("valid") and len(mcd.get("m2_series", [])) else {})
     meeting_html = _meeting_html(anchor_stats)
     policy_html = _policy_html(policy_events)
+    # 远期批:⑥ 通胀 ⑦ 实体
+    cpi, ppi = store.get_macro_monthly("cpi_yoy"), store.get_macro_monthly("ppi_yoy")
+    pmi = store.get_macro_monthly("pmi")
+    retail, ind = store.get_macro_monthly("retail_yoy"), store.get_macro_monthly("ind_yoy")
+    inflation_html = _inflation_html(cpi, ppi, "")
+    try:
+        inflation_fig = _inflation_figure(cpi, ppi)
+        if len(inflation_fig.data):
+            inflation_html = _inflation_html(
+                cpi, ppi, inflation_fig.to_html(full_html=False, include_plotlyjs=first,
+                                                div_id="cm_infl"))
+            first = False
+    except Exception:  # noqa: BLE001
+        pass
+    real_figs = []
+    for build, args, div in ((_pmi_figure, (pmi,), "cm_pmi"),
+                             (_activity_figure, (retail, ind), "cm_act")):
+        try:
+            f = build(*args)
+            if len(f.data):
+                real_figs.append(f.to_html(full_html=False, include_plotlyjs=first, div_id=div))
+                first = False
+        except Exception:  # noqa: BLE001
+            continue
+    real_html = _real_html(pmi, retail, ind, real_figs)
 
     asof_txt = asof or f"{datetime.now():%Y-%m-%d %H:%M}"
     top_hint = ("第七看板 · 中国本土宏观观测层(与「宏观框架」=海外宏观对称)。"
@@ -559,8 +725,10 @@ def render_china_macro(store, out_path: Path, asof: str = "") -> Path:
         "<h2>① 货币信用(M2/M1/社融)</h2><section>" + money_html + "</section>"
         "<h2>② 利率与流动性(Shibor/FDR007/LPR/中债期限结构/OMO)</h2><section>" + rates_html + "</section>"
         "<h2>③ 政策日历(下次时点+倒计时)</h2><section>" + policy_html + "</section>"
-        "<h2>④ 社融可观测成分(政府债·企业债 nowcast · 观测非预测)</h2><section>" + nowcast_html + "</section>"
+        "<h2>④ 社融可观测成分(政府债 nowcast · 观测非预测)</h2><section>" + nowcast_html + "</section>"
         "<h2>⑤ 会议→M2 转向历史回放(锚点月后 3 个月)</h2><section>" + meeting_html + "</section>"
+        "<h2>⑥ 通胀(CPI/PPI · 上下游剪刀差)</h2><section>" + inflation_html + "</section>"
+        "<h2>⑦ 实体(PMI 荣枯线 · 社零/工业增加值)</h2><section>" + real_html + "</section>"
         "<script>" + _JS + "</script></body></html>")
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)

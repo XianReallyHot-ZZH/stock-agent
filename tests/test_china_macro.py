@@ -259,14 +259,16 @@ def test_store_lgb_and_tsf_components_roundtrip(tmp_path):
 # ---------- v2: 构建器 ----------
 def test_lgb_figure_and_nowcast_html():
     monthly = pd.Series({"2026-07": 20000.0, "2026-08": 15000.0})
-    fig = fw._lgb_figure(monthly, "2026-08")
-    assert fig.data[0].type == "bar" and len(fig.data[0].x) == 2
-    html = fw._nowcast_html(monthly, pd.DataFrame(dtype=float), [], "2026-08")
+    stack = {"tsy": pd.Series({"2026-07": 5000.0, "2026-08": 3000.0}), "lgb": monthly,
+             "total": monthly + [5000.0, 3000.0]}
+    fig = fw._gov_figure(stack, "2026-08")
+    assert fig.data[0].type == "bar" and len(fig.data) == 2
+    html = fw._nowcast_html(stack["total"], pd.DataFrame(dtype=float), [], "2026-08")
     assert "月内进行时" in html and "观测非预测" in html
     assert "数据不足" in fw._nowcast_html(pd.Series(dtype=float), pd.DataFrame(dtype=float), [], "2026-08")
     tsf = pd.DataFrame({"rmb_loans": [4446.0], "corp_bond": [2000.0], "equity_fin": [500.0]},
                        index=["2026-04-01"])
-    html2 = fw._nowcast_html(monthly, tsf, [], "2026-08")
+    html2 = fw._nowcast_html(stack["total"], tsf, [], "2026-08")
     assert "4,446" in html2 and "社融口径" in html2
 
 
@@ -285,3 +287,81 @@ def test_meeting_html_renders():
     html = fw._meeting_html(stats)
     assert "上行概率" in html and "56%" in html and "历史对照非因果" in html
     assert "数据不足" in fw._meeting_html({})
+
+
+# ---------- 远期批:通胀/实体 ----------
+def test_parse_cn_month_value():
+    df = pd.DataFrame({"月份": ["2026年07月份", "x"], "全国-同比增长": [0.5, 9.0]})
+    rows = fetcher.parse_cn_month_value(df, "全国-同比增长")
+    assert rows == [{"month": "2026-07-01", "value": 0.5}]
+
+
+def test_parse_report_monthly_rules():
+    df = pd.DataFrame({"日期": [date(2025, 8, 31), date(2025, 9, 15), date(1990, 3, 1)],
+                       "今值": [49.4, 5.7, 5.0], "前值": [49.3, 6.2, None]})
+    # same(官方PMI): 参考月=日期月
+    assert fetcher.parse_report_monthly(df, "same")[0] == {"month": "2025-08-01", "value": 49.4}
+    # prev_if_mid(工业增加值): day>1 → 日期月−1;day=1 → 日期月
+    prev = fetcher.parse_report_monthly(df, "prev_if_mid")
+    by = {r["month"]: r["value"] for r in prev}
+    assert by == {"2025-07-01": 49.4,    # 08-31 发布 → 7 月值
+                  "2025-08-01": 5.7,     # 09-15 发布 → 8 月值
+                  "1990-03-01": 5.0}     # day=1 旧口径 → 原月
+    # 未来排期行(今值 NaN)跳过
+    df2 = pd.DataFrame({"日期": [date(2026, 9, 15)], "今值": [float("nan")],
+                        "前值": [5.7]})
+    assert fetcher.parse_report_monthly(df2, "prev_if_mid") == []
+
+
+def test_store_tsy_and_macro_monthly_roundtrip(tmp_path):
+    st = Store(tmp_path / "t.sqlite")
+    assert st.upsert_tsy_issue([{"code": "269947", "name": "26贴现国债47",
+                                 "issue_date": "2026-08-05", "plan_amt": 200.0,
+                                 "actual_amt": 200.0, "pay_date": "2026-08-06"}]) == 1
+    assert float(st.get_tsy_issue().loc["269947", "actual_amt"]) == 200.0
+    rows = [{"metric": "cpi_yoy", "month": "2026-07-01", "value": 0.5},
+            {"metric": "pmi", "month": "2026-07-01", "value": 49.2}]
+    assert st.upsert_macro_monthly(rows) == 2
+    s = st.get_macro_monthly("pmi")
+    assert list(s.index) == ["2026-07-01"] and float(s.iloc[0]) == 49.2
+    assert len(st.get_macro_monthly("nope")) == 0
+
+
+def test_bond_monthly_stack():
+    lgb = pd.DataFrame({"issue_date": ["2026-07-02"], "actual_amt": [100.0]}, index=["c1"])
+    tsy = pd.DataFrame({"issue_date": ["2026-07-01", "2026-08-01"],
+                        "actual_amt": [50.0, 30.0]}, index=["t1", "t2"])
+    st = nc.bond_monthly_stack(lgb, tsy)
+    assert st["total"]["2026-07"] == 150.0 and st["total"]["2026-08"] == 30.0
+    assert list(st["total"].index) == ["2026-07", "2026-08"]
+
+
+def test_gov_figure_stacked():
+    stack = {"tsy": pd.Series({"2026-07": 50.0}), "lgb": pd.Series({"2026-07": 100.0}),
+             "total": pd.Series({"2026-07": 150.0})}
+    fig = fw._gov_figure(stack, "2026-07")
+    assert fig.data[0].type == "bar" and len(fig.data) == 2
+    assert fig.layout.barmode == "stack"
+
+
+def test_inflation_builders():
+    cpi = pd.Series([0.5, 0.6], index=["2026-06-01", "2026-07-01"])
+    ppi = pd.Series([3.4, 3.5], index=["2026-06-01", "2026-07-01"])
+    html = fw._inflation_html(cpi, ppi, "")
+    assert "CPI 同比" in html and "0.6%" in html and "剪刀差" in html and "+2.9pp" in html
+    fig = fw._inflation_figure(cpi, ppi)
+    names = [t.name or "" for t in fig.data]
+    assert any("CPI" in n for n in names) and any("PPI−CPI" in n for n in names)
+    assert "数据不足" in fw._inflation_html(pd.Series(dtype=float), pd.Series(dtype=float), "")
+
+
+def test_real_builders():
+    pmi = pd.Series([49.9, 49.2], index=["2026-06-01", "2026-07-01"])
+    retail = pd.Series([0.4, 0.6], index=["2026-06-01", "2026-07-01"])
+    ind = pd.Series([5.8], index=["2025-07-01"])
+    html = fw._real_html(pmi, retail, ind, [])
+    assert "49.2" in html and "收缩(<50)" in html and "源滞后至 2025-07" in html
+    assert len(fw._pmi_figure(pmi).data) == 1
+    act = fw._activity_figure(retail, ind)
+    assert len(act.data) == 2
+    assert "数据不足" in fw._real_html(None, None, None, [])

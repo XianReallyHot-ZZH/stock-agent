@@ -2,14 +2,17 @@
 
 Shibor(2015起) + FR/FDR 回购定盘利率(2020-09起,按年分段) + LPR(1991起)
 + 中债国债期限结构(1990起) + 央行资产负债表(1993起,月频)
-+ 地方政府债发行明细(2021-09起,逐券,v2 社融可观测成分).
++ 地方政府债发行明细(2021-09起,逐券,v2 社融可观测成分)
++ 国债发行明细(2021-09起,逐券,远期批) + 通胀/实体五腿月度(CPI/PPI/官方PMI/社零/工业增加值).
 Idempotent — 全量重拉 upsert 覆盖. Safe to re-run.
 
 Usage:
-  python scripts/backfill_china_macro.py          # 全部六腿
+  python scripts/backfill_china_macro.py          # 全部(发行明细腿较慢)
   python scripts/backfill_china_macro.py --rates  # 只四条利率腿
   python scripts/backfill_china_macro.py --cb     # 只央行资产负债表
   python scripts/backfill_china_macro.py --lgb    # 只地方债发行明细(月窗分段 ~1-2min)
+  python scripts/backfill_china_macro.py --tsy    # 只国债发行明细(月窗分段)
+  python scripts/backfill_china_macro.py --real   # 只通胀/实体五腿(月度)
 """
 from __future__ import annotations
 
@@ -45,6 +48,19 @@ def _summary(dm: DataManager):
               f"{lgb['issue_date'].min()}..{lgb['issue_date'].max()}")
     else:
         print("  地方债明细: (无)")
+    tsy = store.get_tsy_issue()
+    if len(tsy):
+        print(f"  {'国债明细':8}: {len(tsy)} 券, "
+              f"{tsy['issue_date'].min()}..{tsy['issue_date'].max()}")
+    else:
+        print("  国债明细: (无)")
+    for metric in ("cpi_yoy", "ppi_yoy", "pmi", "retail_yoy", "ind_yoy"):
+        s = store.get_macro_monthly(metric)
+        if len(s):
+            print(f"  {metric:10}: {len(s)} 月, {s.index.min()}..{s.index.max()} | "
+                  f"最新={float(s.iloc[-1]):.1f}")
+        else:
+            print(f"  {metric:10}: (无)")
     tsf = store.get_china_tsf_series()
     if len(tsf) and "rmb_loans" in tsf.columns and tsf["rmb_loans"].notna().any():
         print(f"  社融分项  : {int(tsf['rmb_loans'].notna().sum())} 月有分项(贷款/企业债/股票)")
@@ -55,11 +71,13 @@ def main():
     ap.add_argument("--rates", action="store_true", help="only 利率四腿(shibor/repo/lpr/cnbond)")
     ap.add_argument("--cb", action="store_true", help="only 央行资产负债表(月频)")
     ap.add_argument("--lgb", action="store_true", help="only 地方债发行明细(月窗分段 ~1-2min)")
+    ap.add_argument("--tsy", action="store_true", help="only 国债发行明细(月窗分段)")
+    ap.add_argument("--real", action="store_true", help="only 通胀/实体五腿(CPI/PPI/PMI/社零/工业)")
     args = ap.parse_args()
     setup_logging()
     dm = DataManager(config=get_config())
 
-    selective = args.rates or args.cb or args.lgb
+    selective = args.rates or args.cb or args.lgb or args.tsy or args.real
     if args.rates or not selective:
         res = dm.update_china_rates()
         if not any(res.values()):
@@ -70,6 +88,10 @@ def main():
         res = dm.update_lgb_issue()
         if not res.get("lgb"):
             print("⚠️ 地方债明细失败(cninfo 限流?重跑自愈)")
+    if args.tsy or not selective:
+        dm.update_tsy_issue()
+    if args.real or not selective:
+        dm.update_china_real()
 
     _summary(dm)
 

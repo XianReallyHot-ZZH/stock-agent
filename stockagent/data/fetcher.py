@@ -1963,7 +1963,7 @@ def _retry_ak_wrap(parse, fn, retries: int = 3, **kw) -> list[dict]:
 
 
 def parse_lgb_issue(df) -> list[dict]:
-    """ak.bond_local_government_issue_cninfo (地方债发行明细,按日窗口) → 逐券
+    """ak.bond_local_government_issue_cninfo / bond_treasure_issue_cninfo(同构 15 列) → 逐券
     [{code,name,issue_date,plan_amt,actual_amt,pay_date}]。金额单位亿元(月度聚合在 nowcast 纯函数)。"""
     if df is None or len(df) == 0:
         return []
@@ -1980,11 +1980,8 @@ def parse_lgb_issue(df) -> list[dict]:
     return out
 
 
-def fetch_lgb_issue(start: str = "2021-09-01", end: str | None = None,
-                    retries: int = 2) -> list[dict]:
-    """地方债发行明细全史(2021-09 起,源最早窗口)。按月窗口分段拉(同 repo_rate_hist 先例),
-    逐窗容错重试;返回逐券去重由 store(code 主键 upsert)兜底。"""
-    end = end or today_str()
+def _fetch_bond_issue_cninfo(ak_fn, start: str, end: str, retries: int) -> list[dict]:
+    """cninfo 发行明细通用分段拉取(月窗+逐窗重试,失败月跳过重跑自愈;去重由 store code 主键兜底)。"""
     out: list[dict] = []
     y, m = int(start[:4]), int(start[5:7])
     ey, em = int(end[:4]), int(end[5:7])
@@ -1996,19 +1993,109 @@ def fetch_lgb_issue(start: str = "2021-09-01", end: str | None = None,
         last = None
         for i in range(retries + 1):
             try:
-                rows = parse_lgb_issue(ak.bond_local_government_issue_cninfo(
-                    start_date=w_start.replace("-", ""), end_date=w_end.replace("-", "")))
+                rows = parse_lgb_issue(ak_fn(start_date=w_start.replace("-", ""),
+                                             end_date=w_end.replace("-", "")))
                 break
             except Exception as e:  # noqa: BLE001
                 last = e
                 time.sleep(1.5 * (i + 1))
         if rows is None:
-            log.warning("lgb_issue %s..%s 重试耗尽(跳过该月,重跑自愈): %s",
-                        w_start, w_end, str(last)[:80])
+            log.warning("%s %s..%s 重试耗尽(跳过该月,重跑自愈): %s",
+                        getattr(ak_fn, "__name__", "cninfo"), w_start, w_end, str(last)[:80])
         else:
             out.extend(rows)
         y, m = ny, nm
         time.sleep(0.5)
     return out
+
+
+def fetch_lgb_issue(start: str = "2021-09-01", end: str | None = None,
+                    retries: int = 2) -> list[dict]:
+    """地方债发行明细全史(2021-09 起,源最早窗口)。"""
+    return _fetch_bond_issue_cninfo(ak.bond_local_government_issue_cninfo,
+                                    start, end or today_str(), retries)
+
+
+def fetch_tsy_issue(start: str = "2021-09-01", end: str | None = None,
+                    retries: int = 2) -> list[dict]:
+    """国债发行明细全史(bond_treasure_issue_cninfo,同构;远期批补齐政府债另一半)。"""
+    return _fetch_bond_issue_cninfo(ak.bond_treasure_issue_cninfo,
+                                    start, end or today_str(), retries)
+
+
+# ---- 通胀/实体月度序列 (远期批 · 金十各族,2026-08-25 探针验证) ----
+def parse_cn_month_value(df, value_col: str) -> list[dict]:
+    """'YYYY年MM月份' 式月份表(金十 CPI/PPI/社零族) → [{month,value}]。值缺跳过。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        m = _MONEY_MONTH_RE.match(str(r.get("月份") or ""))
+        v = r.get(value_col)
+        if not m or v is None or v != v:
+            continue
+        out.append({"month": f"{m.group(1)}-{int(m.group(2)):02d}-01", "value": float(v)})
+    return out
+
+
+def parse_report_monthly(df, ref_month: str = "same") -> list[dict]:
+    """'商品/日期/今值' 式报告表(官方 PMI/工业增加值族) → [{month,value}]。
+    ref_month: 'same'=参考月=日期月(官方 PMI:月末发布当月值,旧数据 1 日标签同月);
+    'prev_if_mid'=day=1 → 日期月,day>1 → 日期月−1(工业增加值:月中发布上月值,旧数据 1 日标签当月)。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        d = r.get("日期")
+        v = r.get("今值")
+        if v is None or v != v:
+            continue                                     # 未来排期行(今值空)跳过
+        d = _norm_date(d)
+        if not d:
+            continue
+        y, mm, dd = int(d[:4]), int(d[5:7]), int(d[8:10])
+        if ref_month == "prev_if_mid" and dd > 1:
+            t = y * 12 + (mm - 1) - 1
+            y, mm = t // 12, t % 12 + 1
+        out.append({"month": f"{y:04d}-{mm:02d}-01", "value": float(v)})
+    return out
+
+
+def fetch_china_real(retries: int = 2) -> dict:
+    """通胀/实体五腿一次拉齐(逐腿独立容错):cpi_yoy/ppi_yoy/pmi(官方制造业)/retail_yoy/ind_yoy。
+    Returns {metric: rows}。财新 PMI 弃用(源日期语义混杂,新旧行发布日/参考月口径不一,防错位)。"""
+    legs = [
+        ("cpi_yoy", lambda: parse_cn_month_value(
+            _call(ak.macro_china_cpi, retries), "全国-同比增长")),
+        ("ppi_yoy", lambda: parse_cn_month_value(
+            _call(ak.macro_china_ppi, retries), "当月同比增长")),
+        ("retail_yoy", lambda: parse_cn_month_value(
+            _call(ak.macro_china_consumer_goods_retail, retries), "同比增长")),
+        ("pmi", lambda: parse_cn_month_value(
+            _call(ak.macro_china_pmi, retries), "制造业-指数")),   # 月份表口径 2008起正常更新
+        # (macro_china_pmi_yearly 2005起但源停更至2025-08,弃;工业增加值同族滞后至2025-07,图注说明)
+        ("ind_yoy", lambda: parse_report_monthly(
+            _call(ak.macro_china_industrial_production_yoy, retries), "prev_if_mid")),
+    ]
+    out: dict = {}
+    for metric, leg in legs:
+        try:
+            out[metric] = leg()
+        except Exception as e:  # noqa: BLE001
+            log.warning("china_real %s failed: %s", metric, str(e)[:100])
+            out[metric] = None
+    return out
+
+
+def _call(fn, retries: int = 2):
+    """金十单调用重试壳(供 fetch_china_real 的 lambda 用,不带解析)。"""
+    last = None
+    for i in range(retries + 1):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(1.5 * (i + 1))
+    raise FetchError(f"{getattr(fn, '__name__', 'ak')} 重试耗尽: {last}")
 
 

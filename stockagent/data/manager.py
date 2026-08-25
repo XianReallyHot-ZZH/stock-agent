@@ -715,6 +715,33 @@ class DataManager:
             log.warning("lgb_issue failed: %s", str(e)[:120])
         return out
 
+    def update_tsy_issue(self) -> dict:
+        """Fetch + store 国债发行明细(远期批:政府债另一半;同 lgb 逐券幂等)。"""
+        out = {"tsy": 0}
+        try:
+            rows = fetcher.fetch_tsy_issue()
+            out["tsy"] = self.store.upsert_tsy_issue(rows)
+            self.store.set_meta("last_tsy_issue_update", fetcher.today_str())
+            log.info("tsy_issue: +%d rows", out["tsy"])
+        except Exception as e:  # noqa: BLE001
+            log.warning("tsy_issue failed: %s", str(e)[:120])
+        return out
+
+    def update_china_real(self) -> dict:
+        """Fetch + store 通胀/实体五腿月度(cpi_yoy/ppi_yoy/pmi/retail_yoy/ind_yoy,金十各族)。
+        逐腿独立容错;幂等。Returns {metric: rows}(失败腿=0)。"""
+        res = fetcher.fetch_china_real()
+        out = {k: 0 for k in ("cpi_yoy", "ppi_yoy", "pmi", "retail_yoy", "ind_yoy")}
+        for metric, rows in res.items():
+            if not rows:
+                continue
+            payload = [{"metric": metric, **r} for r in rows]
+            out[metric] = self.store.upsert_macro_monthly(payload)
+            log.info("china_real %s: +%d rows", metric, out[metric])
+        if any(out.values()):
+            self.store.set_meta("last_china_real_update", fetcher.today_str())
+        return out
+
     def update_index_all(self) -> None:
         """Convenience: refresh all index-layer data (daily + PE + PB + market PB + turnover)."""
         self.update_index_daily()

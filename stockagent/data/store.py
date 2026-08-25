@@ -333,6 +333,19 @@ CREATE TABLE IF NOT EXISTS lgb_bond_issue (        -- 地方政府债发行明�
     PRIMARY KEY (code)
 );
 CREATE INDEX IF NOT EXISTS idx_lgb_issue_date ON lgb_bond_issue(issue_date);
+CREATE TABLE IF NOT EXISTS tsy_bond_issue (        -- 国债发行明细(远期批·bond_treasure_issue_cninfo,2021-09起)
+    code TEXT NOT NULL,                            -- 与 lgb 同构,code 主键幂等
+    name TEXT, issue_date TEXT,
+    plan_amt REAL, actual_amt REAL, pay_date TEXT,
+    PRIMARY KEY (code)
+);
+CREATE INDEX IF NOT EXISTS idx_tsy_issue_date ON tsy_bond_issue(issue_date);
+CREATE TABLE IF NOT EXISTS china_macro_monthly (  -- 通胀/实体月度序列(远期批·金十各族,长表)
+    metric TEXT NOT NULL,                          -- cpi_yoy/ppi_yoy/pmi/pmi_cx/retail_yoy/ind_yoy
+    month TEXT NOT NULL,                           -- YYYY-MM-01
+    value REAL,
+    PRIMARY KEY (metric, month)
+);
 CREATE TABLE IF NOT EXISTS wm_claims (
     uid          TEXT PRIMARY KEY,   -- 稳定 hash(episode_date|asset|type|statement 规范化)→ 幂等再抽取
     episode_date TEXT NOT NULL,      -- 哪一期说的 (YYYY-MM-DD)
@@ -1283,8 +1296,8 @@ class Store:
         return self._get_simple("china_tsf", "month",
                                 ["tsf_inc", "rmb_loans", "corp_bond", "equity_fin"])
 
-    def upsert_lgb_issue(self, rows: list[dict]) -> int:
-        """rows: {code,name,issue_date,plan_amt,actual_amt,pay_date}。逐券,code 主键幂等。"""
+    def _upsert_bond_issue(self, table: str, rows: list[dict]) -> int:
+        """lgb/tsy 逐券发行明细通用 upsert(rows={code,name,issue_date,plan_amt,actual_amt,pay_date})。幂等。"""
         if not rows:
             return 0
         payload = [(r["code"], r.get("name"), r.get("issue_date"),
@@ -1292,23 +1305,57 @@ class Store:
                    for r in rows]
         with self._conn() as c:
             c.executemany(
-                "INSERT INTO lgb_bond_issue(code,name,issue_date,plan_amt,actual_amt,pay_date) "
+                f"INSERT INTO {table}(code,name,issue_date,plan_amt,actual_amt,pay_date) "
                 "VALUES(?,?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET "
                 "name=excluded.name,issue_date=excluded.issue_date,"
                 "plan_amt=excluded.plan_amt,actual_amt=excluded.actual_amt,pay_date=excluded.pay_date",
                 payload)
         return len(payload)
 
+    def upsert_lgb_issue(self, rows: list[dict]) -> int:
+        """地方债逐券明细。幂等。"""
+        return self._upsert_bond_issue("lgb_bond_issue", rows)
+
     def get_lgb_issue(self) -> pd.DataFrame:
-        """地方债发行明细 DataFrame(code 升序 index=code,
-        cols=name/issue_date/plan_amt/actual_amt/pay_date)。月度聚合在 nowcast 纯函数做。"""
+        """地方债发行明细 DataFrame(code index,cols=name/issue_date/plan_amt/actual_amt/pay_date)。"""
         with self._conn() as c:
             df = pd.read_sql_query(
                 "SELECT code,name,issue_date,plan_amt,actual_amt,pay_date "
                 "FROM lgb_bond_issue ORDER BY issue_date", c)
+        return df.set_index("code") if len(df) else pd.DataFrame()
+
+    def upsert_tsy_issue(self, rows: list[dict]) -> int:
+        """国债逐券明细(bond_treasure_issue_cninfo,同构)。幂等。"""
+        return self._upsert_bond_issue("tsy_bond_issue", rows)
+
+    def get_tsy_issue(self) -> pd.DataFrame:
+        """国债发行明细 DataFrame(同 get_lgb_issue 结构)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT code,name,issue_date,plan_amt,actual_amt,pay_date "
+                "FROM tsy_bond_issue ORDER BY issue_date", c)
+        return df.set_index("code") if len(df) else pd.DataFrame()
+
+    def upsert_macro_monthly(self, rows: list[dict]) -> int:
+        """rows: {metric,month,value}。通胀/实体月度长表,幂等。"""
+        if not rows:
+            return 0
+        payload = [(r["metric"], r["month"], _num(r.get("value"))) for r in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO china_macro_monthly(metric,month,value) VALUES(?,?,?) "
+                "ON CONFLICT(metric,month) DO UPDATE SET value=excluded.value", payload)
+        return len(payload)
+
+    def get_macro_monthly(self, metric: str) -> pd.Series:
+        """单指标月度 Series(value,index=month 升序)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT month,value FROM china_macro_monthly WHERE metric=? ORDER BY month",
+                c, params=(metric,))
         if df.empty:
-            return pd.DataFrame()
-        return df.set_index("code")
+            return pd.Series(dtype=float)
+        return pd.to_numeric(df.set_index("month")["value"], errors="coerce").dropna()
 
     # ---- China rates / cb balance (第七看板 国内宏观 · 利率与流动性,金十源) ----
     def _upsert_simple(self, table: str, cols: list[str], rows: list[dict]) -> int:

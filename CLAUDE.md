@@ -6,7 +6,7 @@ A股板块轮动 ETF 决策助手。规则引擎出决策、大模型出解释�
 
 ```bash
 # 开发
-python -m pytest tests/ -q                    # 跑全部测试（935 个）
+python -m pytest tests/ -q                    # 跑全部测试（942 个）
 python scripts/run_backtest.py                 # 单次回测（默认信号）
 python scripts/sweep_params.py                 # 参数扫描（全部信号）
 python scripts/walk_forward.py                 # 样本外验证
@@ -57,11 +57,11 @@ python scripts/stock_report.py --push-alerts      # 生成看板 + 推送个股�
 python scripts/ai_eval_server.py                  # 🤖AI评估本地服务（首个长驻·127.0.0.1:8765，看板🤖按钮点击时实时调LLM生成；先起它再点🤖）
 
 # 国内宏观看板（china_macro，第七看板 · 只读旁路 · 与宏观框架=海外宏观对称 · 规划见 docs/EXECUTION_PLAN-国内宏观.md）
-python scripts/backfill_china_macro.py        # 回填 利率四腿(Shibor 2015起/FDR007定盘 2020-09起按年分段/LPR 1991起/中债期限结构 1990起) + 央行资产负债表(月频1993起,OMO/MLF余额) + 地方债发行明细(2021-09起逐券,--lgb 单刷 ~1-2min)（幂等·金十/cninfo源）
-python scripts/china_macro_report.py          # 生成 data/china_macro.html（五 section：①货币信用=⑪完整版[M2/M1/剪刀差/社融脉冲/状态机+实证结论meta读] ②利率与流动性[FDR007/Shibor/LPR/10Y−2Y+OMO月度净投放近似] ③政策日历[下次时点+倒计时] ④社融可观测成分[地方债月度+月内累计nowcast+社融分项·观测非预测·信贷黑箱留白] ⑤会议→M2转向回放[锚点月后3月上行概率——2026-08实证:四锚点全42-44%,会后放水叙事无统计支持]；深浅色可切）
+python scripts/backfill_china_macro.py        # 回填 利率四腿(Shibor 2015起/FDR007定盘 2020-09起按年分段/LPR 1991起/中债期限结构 1990起) + 央行资产负债表(月频1993起,OMO/MLF余额) + 政府债发行明细(地方+国债,2021-09起逐券,--lgb/--tsy 单刷 ~1-2min/腿) + 通胀/实体五腿(CPI/PPI/官方PMI/社零/工业增加值,--real 单刷)（幂等·金十/cninfo源）
+python scripts/china_macro_report.py          # 生成 data/china_macro.html（七 section：①货币信用=⑪完整版 ②利率与流动性 ③政策日历 ④社融可观测成分[政府债=国债+地方债堆叠+月内累计nowcast+社融分项·观测非预测·信贷黑箱留白] ⑤会议→M2转向回放[四锚点上行概率全42-44%,会后放水叙事无统计支持] ⑥通胀[CPI/PPI+PPI−CPI上下游剪刀差] ⑦实体[PMI荣枯线+社零/工业增加值,工业源端滞后~1年图注]；深浅色可切）
 
 # 国内宏观看板（china_macro · 第七看板 data/china_macro.html · 只读旁路 · 与宏观框架=海外宏观对称 · 规划与端点真相见 docs/EXECUTION_PLAN-国内宏观.md）
-- **`stockagent/china_macro/` + `scripts/china_macro_report.py`**：中国本土宏观观测层，五 section——①货币信用（M2/M1 同比+剪刀差+社融脉冲+episode 状态机+实证结论 meta 读=指数择时 ⑪ 的完整版）②利率与流动性（FDR007=DR 系定盘·央行政策目标利率区[2020-09 起]/Shibor[2015 起 8 期限]/LPR[1991 起]/中债期限结构 10Y−2Y[1990 起]+央行资产负债表「对其他存款性公司债权」月度差分=OMO/MLF 净投放滞后近似[1993 起·月频]）③政策日历（`policy.py` 纯函数·硬编码典型时点：政治局经济会议 4/7/12 月·中央经济工作会议·货政报告季度·两会·LPR 每月 20 日·金融数据公布每月 10-15 日→下次时点+倒计时；只放事实，观点结算归 docs/CLAIMS_LEDGER.md）④社融可观测成分（`nowcast.py` 纯函数：地方债逐券月度+**月内累计 vs 近12月均值**[lgb_bond_issue 表 2021-09 起 3 万券·cninfo 逐券口径绝对量级未与官方交叉校验,只作相对观察]+社融分项历史[china_tsf 扩列 贷款/企业债/股票,官方口径分布对照]——**观测非预测,信贷黑箱诚实留白**）⑤会议→M2 转向历史回放（`nowcast.meeting_anchor_stats`：锚点月[3两会/4·7·12政治局+经济工作会议]后 3 月 M2 同比方向统计；**2026-08 实证:四锚点上行概率全 42-44%,「会后放水」叙事在 18 年历史上无统计支持**·未走完 ahead 的最新锚不进统计防半程假读）。数据腿 `backfill_china_macro.py`（六表 shibor_daily/repo_fix_daily/lpr_monthly/cn_bond_daily/cb_balance_monthly/lgb_bond_issue，金十+cninfo 源幂等；FDR 按年/lgb 按月分段拉；已并入 dashboard_data_check --fix[利率·地方债>2天·央行表>35天门控]）。**待补三项**（免费源缺，诚实标注不硬凑）：日度 OMO 净投放/票据转贴利率/国债发行明细。**纪律**：先行代理未过 event-study 礼遇前一律观察项、不出现「预测/信号」措辞（M2 拐点实证已示公布滞后吃掉几乎全部 edge）；**永不喂引擎；隔离要点**：china_macro→tracker 仅 import money_conditions/diagnose 纯函数（与 pool→tracker 同向），不 re-export
+- **`stockagent/china_macro/` + `scripts/china_macro_report.py`**：中国本土宏观观测层，五 section——①货币信用（M2/M1 同比+剪刀差+社融脉冲+episode 状态机+实证结论 meta 读=指数择时 ⑪ 的完整版）②利率与流动性（FDR007=DR 系定盘·央行政策目标利率区[2020-09 起]/Shibor[2015 起 8 期限]/LPR[1991 起]/中债期限结构 10Y−2Y[1990 起]+央行资产负债表「对其他存款性公司债权」月度差分=OMO/MLF 净投放滞后近似[1993 起·月频]）③政策日历（`policy.py` 纯函数·硬编码典型时点：政治局经济会议 4/7/12 月·中央经济工作会议·货政报告季度·两会·LPR 每月 20 日·金融数据公布每月 10-15 日→下次时点+倒计时；只放事实，观点结算归 docs/CLAIMS_LEDGER.md）④社融可观测成分（`nowcast.py` 纯函数：**政府债=国债+地方债逐券堆叠**月度+**月内累计 vs 近12月均值**[lgb_bond_issue+tsy_bond_issue 表 2021-09 起·cninfo 逐券口径绝对量级未与官方交叉校验,只作相对观察]+社融分项历史[china_tsf 扩列 贷款/企业债/股票,官方口径分布对照]——**观测非预测,信贷黑箱留白**）⑤会议→M2 转向历史回放（`nowcast.meeting_anchor_stats`：锚点月[3两会/4·7·12政治局+经济工作会议]后 3 月 M2 同比方向统计；**2026-08 实证:四锚点上行概率全 42-44%,「会后放水」叙事在 18 年历史上无统计支持**·未走完 ahead 的最新锚不进统计防半程假读）⑥通胀（CPI/PPI 同比+**PPI−CPI 上下游剪刀差**[china_macro_monthly 长表·金十·CPI 2008起/PPI 2006起·2026-07 读数 CPI 0.5%/PPI 3.5%=剪刀差+3.0pp 上游涨价难传导]）⑦实体（官方制造业 PMI[月份表 2008 起正常更新+双源并接至 2005·50 荣枯线 chip]+社零/工业增加值同比[**工业增加值金十「报告」族源端滞后~1 年,图注说明读趋势用**]）。数据腿 `backfill_china_macro.py`（八表 shibor_daily/repo_fix_daily/lpr_monthly/cn_bond_daily/cb_balance_monthly/lgb_bond_issue/tsy_bond_issue/china_macro_monthly，金十+cninfo 源幂等；FDR 按年/债券按月分段拉；已并入 dashboard_data_check --fix[利率·政府债>2天·央行表·实体>35天门控]）。**待补终审（2026-08-25）**：日度 OMO 净投放/票据转贴利率=免费源确认无→**永久待补**（央行表月度差分近似 OMO 已够用）；国债发行明细已于远期批补齐（bond_treasure_issue_cninfo）；财新 PMI 弃用（源日期语义混杂防错位）。**纪律**：先行代理未过 event-study 礼遇前一律观察项、不出现「预测/信号」措辞（M2 拐点实证已示公布滞后吃掉几乎全部 edge）；**永不喂引擎；隔离要点**：china_macro→tracker 仅 import money_conditions/diagnose 纯函数（与 pool→tracker 同向），不 re-export
 
 # 西方宏观预测台账（western_macro · Phase 3 只读旁路 · ADR-0001）
 # 两面: ①预测台账(claim→edge打分,度量预测者) ②宏观框架看板(北向目标·纯数据沿因果链跟踪分析,不再抠命中率)。永不喂引擎

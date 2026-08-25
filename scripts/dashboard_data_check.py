@@ -173,6 +173,12 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
     cb_last = _fetch(conn, "SELECT MAX(month) FROM cb_balance_monthly")[0]
     print(f"  利率腿 Shibor {str(sb_last):12} FDR {str(fdr_last):12} LPR {str(lpr_last):12}"
           f" 中债 {str(bond_last):12} 央行表 {str(cb_last)[:7] if cb_last else '（无）'}(第七看板)")
+    lgb_n = _fetch(conn, "SELECT COUNT(*) FROM lgb_bond_issue")[0]
+    tsy_n = _fetch(conn, "SELECT COUNT(*) FROM tsy_bond_issue")[0]
+    cpi_last = _fetch(conn, "SELECT MAX(month) FROM china_macro_monthly WHERE metric='cpi_yoy'")[0]
+    pmi_last = _fetch(conn, "SELECT MAX(month) FROM china_macro_monthly WHERE metric='pmi'")[0]
+    print(f"  政府债明细 地方债 {lgb_n} 券 · 国债 {tsy_n} 券 | 通胀/实体 cpi .."
+          f"{str(cpi_last)[:7] if cpi_last else '（无）'} pmi ..{str(pmi_last)[:7] if pmi_last else '（无）'}(第七看板)")
 
     # ---- candidate pool (V7 第六看板 · 候选个股池) ----
     pool_info: dict = {"universe": [], "universe_n": 0}
@@ -300,13 +306,21 @@ def main():
     if cb_stale:
         print(f"  央行资产负债表刷新(月频, 当前 {cb_last or '无'})...")
         dm.update_cb_balance()
-    # 6.9) lgb issue (第七看板 v2 · 地方债发行明细,社融可观测成分): refresh if >2 days
+    # 6.9) lgb+tsy issue (第七看板 · 政府债发行明细,社融可观测成分): refresh if >2 days
     lgb_last = store.get_meta("last_lgb_issue_update")
     lgb_stale = lgb_last is None or (
         (datetime.now() - datetime.strptime(lgb_last, "%Y-%m-%d")).days > 2)
     if lgb_stale:
-        print(f"  地方债发行明细刷新(v2 社融可观测成分, 当前 {lgb_last or '无'})...")
+        print(f"  政府债发行明细刷新·地方+国债(社融可观测成分, 当前 {lgb_last or '无'})...")
         dm.update_lgb_issue()
+        dm.update_tsy_issue()
+    # 6.10) china real (第七看板远期批 · 通胀/实体月度五腿): refresh if >35 days
+    real_last = store.get_meta("last_china_real_update")
+    real_stale = real_last is None or (
+        (datetime.now() - datetime.strptime(real_last, "%Y-%m-%d")).days > 35)
+    if real_stale:
+        print(f"  通胀/实体月度刷新·CPI/PPI/PMI/社零/工业(当前 {real_last or '无'})...")
+        dm.update_china_real()
 
     # 7) candidate-pool spot (V7 第六看板): daily snapshot — universe 的 ST 过滤 + 展示名来源
     spot_last = store.get_meta("last_stock_spot_update")
