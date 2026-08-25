@@ -1744,7 +1744,7 @@ def fetch_economic_calendar(days_back: int = 7, days_forward: int = 45, retries:
     return out
 
 
-# ---- 中国货币条件 (⑪ 货币条件 · M2/M1/社融 月频, 金十源) ----
+# ---- 中国货币条件 (货币条件 · M2/M1/社融 月频, 金十源;国内宏观看板①数据腿) ----
 _MONEY_MONTH_RE = re.compile(r"(\d{4})年(\d{1,2})月份")
 _MONEY_COLS = {
     "m2_amt": "货币和准货币(M2)-数量(亿元)", "m2_yoy": "货币和准货币(M2)-同比增长",

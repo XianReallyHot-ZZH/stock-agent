@@ -1,4 +1,4 @@
-"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 十一件套(V4 tracker)。
+"""指数择时层交互式 HTML 看板(plotly,离线自包含)— 十件套(V4 tracker)。
 
 ① 偏离极值曲线(close+MA60 主图 / 偏离度副图+历史极值线+历史极值事件标注「第k」)
 ② 7宽基趋势状态表(60日线上下/均线趋势/突破跌破档位/震荡市)
@@ -11,8 +11,7 @@
 ⑨ 恐惧贪婪指数(动量/流动性/波动/估值/杠杆 5成分 → 0-100 复合;市场情绪温度计,只读不喂引擎)
 ⑩ 关键位监测(平台顶+前低规则选位 → 支撑测试状态机 + 下/上第一档;实证:破位后20日波动抬升,
    回撤中位/胜率无 edge —— 温度计不是开关,永不喂引擎)
-⑪ 货币条件(M2/M1 同比+剪刀差+社融脉冲 月度;episode 状态机:下行确认/触底回升/见顶回落;
-   「M2 定大盘」叙事的观测层——纯数据跟踪,实证结论 meta 活注入,永不喂引擎)
+(货币条件 M2/M1 曾为 ⑪,2026-08-25 移至国内宏观看板①,纯核心 tracker/money_conditions.py 留仓)
 
 配色遵循 dataviz skill 中性参考调色板:文字用 ink token 不穿 series 色;状态用 status
 chip(icon+label,不单靠色);A股语义下正偏离(超买)暖红、负偏离(超卖)冷蓝。
@@ -30,7 +29,6 @@ from plotly.subplots import make_subplots
 from . import diagnose as dz
 from . import fear_greed as fg
 from . import indicators as ti
-from . import money_conditions as mcm
 from . import support_levels as slv
 
 # ---- palette (dataviz reference, light mode) ----
@@ -897,127 +895,6 @@ def _key_levels_html(snap: dict | None, fig_html: str = "") -> str:
     return out
 
 
-# ---- ⑪ 货币条件 ----
-_MONEY_EVENT_STYLE = {
-    "top_turn": ("triangle-down", _PAL["pos_extreme"], "见顶回落"),
-    "bottom_turn": ("triangle-up", _PAL["good"], "触底回升"),
-    "down_confirm": ("diamond", _PAL["warning"], "下行确认"),
-}
-
-
-def _money_figure(mc: dict) -> go.Figure:
-    """M2/M1 同比 + M1−M2 剪刀差(左轴) + 社融脉冲(右轴) 月度图 + M1 口径断点 + episode 事件标记。"""
-    fig = go.Figure()
-    m2, m1 = mc["m2_series"], mc["m1_series"]
-    sc, pu = mc["scissor_series"], mc["pulse_series"]
-    fig.add_trace(go.Scatter(
-        x=pd.to_datetime(m2.index), y=m2.to_numpy(dtype=float), name="M2 同比%",
-        line=dict(color=_PAL["series_1"], width=2.2),
-        hovertemplate="%{x|%Y-%m}<br>M2 同比 %{y:.1f}%<extra></extra>"))
-    if len(m1):
-        fig.add_trace(go.Scatter(
-            x=pd.to_datetime(m1.index), y=m1.to_numpy(dtype=float), name="M1 同比%(2024-01起不可比)",
-            line=dict(color=_PAL["warning"], width=1.4),
-            hovertemplate="%{x|%Y-%m}<br>M1 同比 %{y:.1f}%<extra></extra>"))
-    if len(sc):
-        fig.add_trace(go.Scatter(
-            x=pd.to_datetime(sc.index), y=sc.to_numpy(dtype=float), name="剪刀差 M1−M2",
-            line=dict(color=_PAL["ink_sec"], width=1.2, dash="dash"),
-            hovertemplate="%{x|%Y-%m}<br>剪刀差 %{y:.1f}pp<extra></extra>"))
-    if len(pu):
-        fig.add_trace(go.Scatter(
-            x=pd.to_datetime(pu.index), y=pu.to_numpy(dtype=float), name="社融脉冲%(右轴)",
-            yaxis="y2", line=dict(color=_PAL["good"], width=1.6),
-            hovertemplate="%{x|%Y-%m}<br>社融脉冲 %{y:.1f}%<extra></extra>"))
-    # episode 事件标记(与状态机/validator 同规则,标在 M2 线上)
-    m2_map = {str(m)[:7]: float(v) for m, v in m2.items()}
-    for kind, (sym, color, label) in _MONEY_EVENT_STYLE.items():
-        ev = [e for e in mc.get("events", []) if e["kind"] == kind]
-        if not ev:
-            continue
-        xs = pd.to_datetime([e["month"] for e in ev])
-        ys = [m2_map.get(e["month"][:7], e["yoy"]) for e in ev]
-        fig.add_trace(go.Scatter(
-            x=xs, y=ys, name=label, mode="markers",
-            marker=dict(symbol=sym, size=10, color=color,
-                        line=dict(color=_PAL["ink"], width=0.5)),
-            customdata=[[e["yoy"]] for e in ev],
-            hovertemplate=("<b>%{x|%Y-%m}</b> " + label + "<br>当时 M2 同比 %{customdata[0]:.1f}%"
-                           "<extra></extra>")))
-    fig.add_vline(x=pd.to_datetime(mcm.M1_BREAK), line_dash="dot", line_color=_PAL["muted"],
-                  annotation_text="M1 换新口径(含个人活期)", annotation_font=dict(size=10))
-    fig.update_layout(
-        height=380, margin=dict(l=44, r=48, t=20, b=30),
-        paper_bgcolor=_PAL["surface"], plot_bgcolor=_PAL["surface"],
-        font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        yaxis=dict(title_text="同比 %", gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"]),
-        yaxis2=dict(title_text="社融脉冲 %(TTM增量/M2)", overlaying="y", side="right",
-                    gridcolor="rgba(0,0,0,0)", zeroline=False, showgrid=False))
-    fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
-                     rangeslider_visible=True,
-                     rangeselector=dict(buttons=[
-                         dict(count=3, label="3年", step="year", stepmode="backward"),
-                         dict(count=5, label="5年", step="year", stepmode="backward"),
-                         dict(label="全部", step="all"),
-                     ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
-    return fig
-
-
-def _money_html(mc: dict, fig_html: str = "", conclusion: str = "") -> str:
-    """⑪ 货币条件:当前值 tiles + 状态机 chip + 口径注记 + 实证结论活注入。纯观察,不喂引擎。"""
-    if not mc.get("valid"):
-        return ("<p class='hint'>货币条件数据不足(需 china_money_supply ≥24 个月;先跑 "
-                "python scripts/backfill_index.py --money)</p>")
-    st = mc["state"]
-    # 状态着色:水在退(下行系)=琥珀提醒 / 水在加(上行系)=绿 / 走平=灰——中性观察色,非买卖信号
-    zc = (_PAL["warning"] if st.get("direction") == "down"
-          else _PAL["good"] if st.get("direction") == "up" else _PAL["ink_sec"])
-    msl = st.get("months_since_last")
-    msl_txt = f"距上次事件 {msl} 个月" if msl is not None else "历史无事件"
-
-    def _tile(label: str, val: str, sub: str, color: str = _PAL["ink_sec"]) -> str:
-        return (f"<div class='tile'><div class='tile-label'>{label}</div>"
-                f"<div class='tile-value' style='color:{color};font-size:20px'>{val}</div>"
-                f"<div class='tile-sub'>{sub}</div></div>")
-
-    m2v, m1v = mc["m2_yoy"], mc["m1_yoy"]
-    scv = (float(mc["scissor_series"].iloc[-1]) if len(mc["scissor_series"])
-           and not pd.isna(mc["scissor_series"].iloc[-1]) else float("nan"))
-    puv = (float(mc["pulse_series"].iloc[-1]) if len(mc["pulse_series"])
-           and not pd.isna(mc["pulse_series"].iloc[-1]) else float("nan"))
-    tsf_sub = f"截至 {mc['tsf_last'][:7]}" if mc.get("tsf_last") else "(缺社融数据)"
-    month_disp = mc["month_last"][:7]
-    m2_txt, m1_txt, sc_txt, pu_txt = (f"{m2v:.1f}%", f"{m1v:.1f}%",
-                                      f"{scv:+.1f}pp", f"{puv:.1f}%")
-    tiles = (
-        f"<div class='tiles-row'>"
-        f"{_tile('M2 同比(最新)', m2_txt, month_disp + ' · 全社会的钱的增速', _PAL['series_1'])}"
-        f"{_tile('M1 同比(最新)', m1_txt, '现金+活期=随时能花的活钱(新口径·2023前不可比)', _PAL['warning'])}"
-        f"{_tile('剪刀差 M1−M2', sc_txt, '企业活钱 vs 总池(负=钱沉淀)', _PAL['ink_sec'])}"
-        f"{_tile('社融脉冲', pu_txt, tsf_sub + ' · 增量TTM/M2 代理', _PAL['good'])}"
-        f"<div class='tile' style='min-width:220px'><div class='tile-label'>episode 状态机</div>"
-        f"<div class='tile-value' style='color:{zc};font-size:18px'>{mc['state_label']}</div>"
-        f"<div class='tile-sub'>{_chip('2月动量口径', zc)} {msl_txt}</div></div></div>")
-    concl = (conclusion or "").strip()
-    concl_html = (f"<b>实证(event-study)</b> [臂数字 = 事件后 60 日<b>上涨概率</b>% / 中位涨跌% (n=历史次数);"
-                  f"基线 = 无条件随机日]: {concl}" if concl
-                  else "<b>实证(event-study)</b>: 未运行 python scripts/validate_m2_timing.py —— 结论注入占位")
-    hint = ("<b>M2 = 广义货币(全社会的钱)的同比增速,「放水」水位计</b>:增速上行=信用扩张在加,增速回落=水在退。"
-            "<b>M1 = 现金 + 活期存款 = 社会的「活钱」</b>(企业活化程度代理;2024-01 起口径纳入个人活期,与之前不可比)。"
-            "主流叙事「M2 定大盘」(下行=难有全面牛、触底=加仓点)在此只作<b>纯数据跟踪</b>——怎么用由你综合"
-            "③估值/⑧地量/⑨恐贪/⑩关键位自行决定。<b>温度计非开关,永不喂交易引擎</b>。<br>"
-            "口径:金十源·央行金融统计数据·月频(次月中旬才公布上月,看图天然滞后 2-6 周);"
-            f"事件标记=2月动量 run 状态机(连降{mcm.DOWN_RUN}月=下行确认/大段后反向{mcm.TURN_RUN}月=拐点,"
-            "与 validate_m2_timing 同规则);M1 于 2024-01 换新口径(纳入个人活期)——前后不可比,只作展示不进研究;"
-            "社融脉冲=增量TTM/M2 代理(存量同比无免费源,源滞后 2-3 月)。<br>"
-            f"{concl_html}")
-    out = tiles + f"<div class='hint' style='margin-top:10px'>{hint}</div>"
-    if fig_html:
-        out += f"<div style='margin-top:12px'>{fig_html}</div>"
-    return out
-
-
 _CSS = """
 :root{--surface:#fcfcfb;--plane:#f9f9f7;--ink:#0b0b0b;--ink-sec:#52514e;--muted:#898781;--grid:#e1e0d9;--hover:#f4f3ef}
 [data-theme="dark"]{--surface:#1a1a19;--plane:#0d0d0d;--ink:#ffffff;--ink-sec:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--hover:#262624}
@@ -1160,17 +1037,6 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
                     full_html=False, include_plotlyjs=False)
     except Exception:  # noqa: BLE001
         kl_snap, kl_fig_html = None, ""
-    # ⑪ 货币条件: M2/M1 同比+剪刀差+社融脉冲+episode 状态机(plotly.js 已由前面图承载)
-    mc_diag = diag.get("money") or {}
-    mc_fig_html = ""
-    if mc_diag.get("valid"):
-        try:
-            mc_fig_html = _money_figure(mc_diag).to_html(
-                full_html=False, include_plotlyjs=False)
-        except Exception:  # noqa: BLE001
-            mc_fig_html = ""
-    # 实证结论活注入(validator set_meta → 这里 get_meta;未运行显示占位——tracker 看板首个 meta 读)
-    money_concl = store.get_meta("china_money_conclusion", "") or ""
     figs_html, first = [], (val_fig_html == "" and price_fig_html == "" and rc_fig_html == "")   # ③/⑦ 已加载 plotly.js → ① 首图不再重复
     for sym, nm in dz.BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -1194,7 +1060,6 @@ def render_index_timing(store, output_path, period: int = ti.MA_PERIOD,
         f"<h2>⑧ 成交量地量监测</h2><section>{_turnover_html(tv, tv_fig_html)}</section>"
         f"<h2>⑨ 恐惧贪婪指数</h2><section>{_fear_greed_html(fg_diag, fg_fig_html)}</section>"
         f"<h2>⑩ 关键位监测</h2><section>{_key_levels_html(kl_snap, kl_fig_html)}</section>"
-        f"<h2>⑪ 货币条件·M2/M1</h2><section>{_money_html(mc_diag, mc_fig_html, money_concl)}</section>"
         f"<h2>④ 蓝筹 vs 成长 仓位倾向</h2><section>{_style_card_html(diag['style'])}</section>"
         f"<h2>② 趋势状态</h2><section>{_trend_table_html(diag)}</section>"
         f"<h2>⑤ 有效突破/跌破信号</h2><section>{_signals_html(diag)}"

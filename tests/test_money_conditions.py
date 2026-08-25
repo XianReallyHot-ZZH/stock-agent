@@ -5,12 +5,10 @@ lag0/lag15 公布日对齐(周末滚动/跨年/数据末端),合成中文列 Dat
 构建器测试与 ⑩ 同款(_money_html 子串/_money_figure traces)。
 """
 import pandas as pd
-import plotly.graph_objects as go
 import pytest
 
 from stockagent.data import fetcher
 from stockagent.data.store import Store
-from stockagent.tracker import dashboard as d
 from stockagent.tracker import money_conditions as mc
 from stockagent.tracker.diagnose import diagnose_money_conditions
 
@@ -197,59 +195,3 @@ def test_diagnose_money_conditions_valid(tmp_path):
     assert out["state_label"] and "连升" in out["state_label"]
     assert len(out["scissor_series"]) == len(vals)
     assert len(out["pulse_series"]) == 0                     # 无社融数据 → 空序列不抛
-
-
-# ---------- 看板构建器(⑩ 同款) ----------
-def _mc_diag():
-    vals = [8, 8, 8, 8, 8, 8, 8.5, 9.0, 9.5, 10.0, 10.5, 11.0,
-            10.0, 9.0, 8.0, 7.0, 6.0, 5.5, 6.0, 6.5, 7.0, 7.5]
-    yoy = _monthly(vals, start="2020-01")
-    state = mc.episode_state(yoy)
-    return {"valid": True, "months": len(vals), "month_last": str(yoy.index[-1]),
-            "m2_yoy": float(yoy.iloc[-1]), "m1_yoy": float(yoy.iloc[-1]) - 3.0,
-            "m2_series": yoy, "m1_series": yoy - 3.0, "scissor_series": yoy * 0 - 3.0,
-            "pulse_series": _monthly([10.0] * 12, start="2020-01"),
-            "events": mc.m2_episode_events(yoy), "state": state,
-            "state_label": mc.state_label(state), "tsf_last": "2020-12-01"}
-
-
-def test_money_html_insufficient():
-    assert "数据不足" in d._money_html({"valid": False})
-    assert "backfill_index.py --money" in d._money_html({})
-
-
-def test_money_html_renders_with_placeholder():
-    html = d._money_html(_mc_diag(), "")
-    assert "M2 同比(最新)" in html and "7.5%" in html
-    assert "episode 状态机" in html and "结论注入占位" in html   # 未跑 validator → 占位
-    assert "活钱" in html                                        # M1 有人读解释(同 M2)
-    assert "温度计非开关" in html and "永不喂交易引擎" in html
-
-
-def test_money_html_conclusion_injected():
-    html = d._money_html(_mc_diag(), "", conclusion="XYZ实证结论")
-    assert "XYZ实证结论" in html and "结论注入占位" not in html
-    assert "上涨概率" in html                                     # 数字格式图例(胜率歧义修正)
-
-
-def test_money_figure_traces():
-    fig = d._money_figure(_mc_diag())
-    assert isinstance(fig, go.Figure)
-    names = [t.name or "" for t in fig.data]
-    assert any("M2 同比" in n for n in names)
-    assert any("M1 同比" in n and "2024-01" in n for n in names)   # 口径断点进图例
-    assert any("剪刀差" in n for n in names)
-    assert any("社融脉冲" in n for n in names)
-    assert any("见顶回落" in n for n in names)                     # 事件标记
-    assert any("触底回升" in n for n in names)
-    assert any("下行确认" in n for n in names)
-
-
-def test_money_figure_empty_series_tolerated():
-    mc_diag = _mc_diag()
-    mc_diag["m1_series"] = pd.Series(dtype=float)
-    mc_diag["pulse_series"] = pd.Series(dtype=float)
-    fig = d._money_figure(mc_diag)                                # 缺腿不抛
-    names = [t.name or "" for t in fig.data]
-    assert any("M2 同比" in n for n in names)
-    assert not any("社融脉冲" in n for n in names)

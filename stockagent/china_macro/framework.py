@@ -1,8 +1,8 @@
 """国内宏观看板渲染(第七看板 data/china_macro.html · 只读旁路 · 永不喂引擎)。
 
 七 section:
-① 货币信用 —— ⑪ 货币条件完整版(M2/M1 同比+剪刀差+社融脉冲+episode 状态机+事件标记+实证结论
-   meta 读)。复用 tracker.diagnose.diagnose_money_conditions 与 tracker.money_conditions 纯函数
+① 货币信用 —— M2/M1/社融完整观测(M2/M1 同比+剪刀差+社融脉冲+episode 状态机+事件标记+实证结论
+   meta 读;原指数择时 ⑪ 已于 2026-08-25 移除,此处为唯一入口)。复用 tracker.diagnose.diagnose_money_conditions 与 tracker.money_conditions 纯函数
    (china_macro→tracker 同向依赖,与 pool→tracker 同礼遇;不反向、不 re-export)。
 ② 利率与流动性 —— Shibor / FDR007(DR 系定盘=央行政策目标利率) / LPR / 中债期限结构(10Y−2Y)
    + 央行资产负债表「对其他存款性公司债权」月度差分(OMO/MLF 净投放的滞后近似)。
@@ -154,7 +154,7 @@ def _money_html(mcd: dict, fig_html: str, conclusion: str) -> str:
                   else "<b>实证(event-study)</b>: 未运行 python scripts/validate_m2_timing.py —— 结论注入占位")
     hint = ("<b>M2 = 广义货币的同比增速,「放水」水位计</b>;M1 = 现金+活期存款 = 社会的「活钱」。"
             "「M2 定大盘」叙事在此只作<b>纯数据跟踪</b>——怎么用由你综合各看板自行决定。"
-            "<b>温度计非开关,永不喂交易引擎</b>(指数择时看板 ⑪ 为同源择时摘要)。<br>"
+            "<b>温度计非开关,永不喂交易引擎</b>(原指数择时 ⑪ 已移除,此处为唯一入口)。<br>"
             f"口径:金十源·月频(次月中旬公布上月,天然滞后 2-6 周);事件标记=2月动量 run 状态机"
             f"(连降{mcm.DOWN_RUN}月=下行确认/大段后反向{mcm.TURN_RUN}月=拐点,与 validate_m2_timing 同规则);"
             "M1 于 2024-01 换新口径(含个人活期)——前后不可比,只展示不进研究;"

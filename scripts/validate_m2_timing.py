@@ -1,4 +1,4 @@
-"""⑪ M2 拐点 event-study 报告(只读诊断):实证「M2 定大盘」主流叙事的可交易性。
+"""M2 拐点 event-study 报告(只读诊断):实证「M2 定大盘」主流叙事的可交易性。
 
 事件 = money_conditions 月度状态机(2月动量 run:连降4月=下行确认/大段后反向2月=拐点),
 对历史每次事件算上证综指前向收益,vs 无条件基线。**双口径防前视**是本研究相对叙事复盘的增量:
@@ -116,7 +116,7 @@ def main():
     # ---- console summary ----
     from collections import Counter
     cnt = Counter(r["kind"] for r in detail)
-    print(f"=== ⑪ M2 拐点 event-study (基准 {args.index} · 事件 {dict(cnt)} · 基线抽样 "
+    print(f"=== M2 拐点 event-study (基准 {args.index} · 事件 {dict(cnt)} · 基线抽样 "
           f"{baseline[FOCUS]['n'] if baseline.get(FOCUS) else 0} 点) ===")
     for name, s15 in stats15.items():
         s0 = stats0.get(name, {})
@@ -260,7 +260,7 @@ def main():
             "纯 trailing 规则、无前视;见顶回落与下行确认可能在同一下行段先后触发(前=早信号,后=确认)。<br>"
             f"· 公布日近似=次月 {mcm.PUB_DAY} 日(央行实际 9-15 日);lag0/lag15 双口径即敏感性分析。<br>"
             "· 样本 n 每臂仅 5-9 → 读方向不读精度,不 bootstrap 显著性(⑧⑨ 同礼遇);结论(含无 edge)"
-            "写 meta 注入指数择时看板 ⑪ 读图说明。<br>"
+            "写 meta 注入国内宏观看板 ① 读图说明。<br>"
             "· 数据:金十源(央行金融统计),偶有历史修订;M1 口径断点不影响 M2 主信号;指数用 raw close 不复权"
             "(仓库口径)。金十 M2 序列 2008 起——2008 前的周期(如 04-07)不在样本。<br>"
             "· 温度计非开关,永不喂交易引擎。</div>")
@@ -270,7 +270,7 @@ def main():
         f"<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
         f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>M2 拐点 event-study</title><style>{_CSS}</style></head><body>"
-        f"<h1>⑪ M2 拐点 event-study</h1>"
+        f"<h1>M2 拐点 event-study</h1>"
         f"<div class='meta'>「M2 定大盘」实证 · 基准 {args.index} · M2 序列 {str(m2.index[0])[:7]}.."
         f"{str(m2.index[-1])[:7]} · 指数截至 {last_px} · 事件 {len(detail)}</div>"
         f"<div class='hint'><b>结论(headline=公布口径):</b> {concl}</div>"
@@ -290,7 +290,7 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
     st.set_meta("china_money_conclusion", concl)
-    print(f"\n报告 -> {out}\n结论已写 meta(china_money_conclusion) → 指数择时看板 ⑪ 活注入")
+    print(f"\n报告 -> {out}\n结论已写 meta(china_money_conclusion) → 国内宏观看板 ① 活注入")
 
 
 if __name__ == "__main__":

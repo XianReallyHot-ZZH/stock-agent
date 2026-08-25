@@ -2,16 +2,16 @@
 
 ## ⚡ 快速恢复（先读这段，30 秒定位）
 
-**状态（2026-08-24）**：指数择时看板 `data/index_timing.html` 已扩到 **11 节**（③PE/PB图/⑦周期律/⑧地量 为 2026-07 批次：⑦`5ff9087`/⑧`78d4f14`/③图`e01b3de`；⑨恐惧贪婪 `9f9b6ae`；2026-08-15 新增 ⑩关键位监测 + 支撑位实证 + A股观点台账，宽基 6→7 只·增中证1000 `1879979`；**2026-08-24 新增 ⑪货币条件 M2/M1/社融 + M2拐点双口径实证**）。全量测试绿（910）。
+**状态（2026-08-25）**：指数择时看板 `data/index_timing.html` 现 **10 节**（⑪货币条件已于 2026-08-25 移至国内宏观看板①,纯核心/验证器留仓;历史沿革：③PE/PB图/⑦周期律/⑧地量 为 2026-07 批次：⑦`5ff9087`/⑧`78d4f14`/③图`e01b3de`；⑨恐惧贪婪 `9f9b6ae`；2026-08-15 新增 ⑩关键位监测 + 支撑位实证 + A股观点台账，宽基 6→7 只·增中证1000 `1879979`；**2026-08-24 曾增 ⑪货币条件 M2/M1/社融 + M2拐点双口径实证**）。全量测试绿（942）。
 
 **6 条命令验证一切在跑**：
 ```bash
-python -m pytest tests/ -q                     # 全绿(910)
+python -m pytest tests/ -q                     # 全绿(942)
 python scripts/backfill_index.py               # 7宽基(含000001·000852)+沪深300PE/PB+全市场PB+两市成交额+货币条件(幂等)
-python scripts/index_timing_report.py          # → data/index_timing.html(11节,~10MB)
+python scripts/index_timing_report.py          # → data/index_timing.html(10节,~10MB)
 python scripts/validate_volume_bottom.py       # → data/volume_bottom_study.html(⑧地量 event-study 深度报告)
 python scripts/validate_support_break.py       # → data/support_break_study.html(⑩关键位 event-study 深度报告)
-python scripts/validate_m2_timing.py           # → data/m2_timing_study.html(⑪M2拐点 event-study 深度报告)
+python scripts/validate_m2_timing.py           # → data/m2_timing_study.html(M2拐点 event-study 深度报告;结论注入国内宏观看板①)
 ```
 
 **文件地图**：
@@ -19,15 +19,15 @@ python scripts/validate_m2_timing.py           # → data/m2_timing_study.html(�
 |---|---|
 | 指标(纯函数) | `stockagent/tracker/indicators.py`：⑦`relative_spread_series/cycle_extremes/classify_cycle/relative_momentum/consecutive_run/linear_fit_line`；⑧`turnover_percentile/turnover_dry_events/volume_bottom_stats/turnover_new_low_years` |
 | ⑩关键位原语 | `stockagent/tracker/support_levels.py`：`detect_platforms`(平台顶) / `pivot_lows+low_retest_events`(前低) / `breakout_retest_events` / `merged_events`(合并去重) / `_resolve_outcome`(三结局判定) / `forward_risk_rows+group_summary+bootstrap_median_diff`(event-study) / `monitor_snapshot`(⑩看板数据·状态机) |
-| ⑪货币条件原语 | `stockagent/tracker/money_conditions.py`：`_scan`(共用扫描:三臂事件+末态) / `m2_episode_events` / `episode_state+state_label` / `event_trade_date`(lag0/lag15 公布日对齐) / `scissor_series` / `tsf_pulse_series` |
-| 诊断组装 | `stockagent/tracker/diagnose.py`：`diagnose_relative_cycle` / `diagnose_turnover` / `diagnose_money_conditions`(⑪) / 挂 `diagnose_layer`；`_binom_p_one_sided`；`BROAD_INDICES`(7只·顺序=看板展示序) |
-| 看板渲染 | `stockagent/tracker/dashboard.py`：`_valuation_figure`(③) / `_relative_cycle_figure`(⑦) / `_turnover_figure`(⑧) / `_key_levels_figure+_key_levels_html`(⑩) / `_money_figure+_money_html`(⑪·meta 活注入) + 各 `_section_html` + `render_index_timing` 接线 |
+| 货币条件原语(留仓,消费方=国内宏观看板①) | `stockagent/tracker/money_conditions.py`：`_scan`(共用扫描:三臂事件+末态) / `m2_episode_events` / `episode_state+state_label` / `event_trade_date`(lag0/lag15 公布日对齐) / `scissor_series` / `tsf_pulse_series` |
+| 诊断组装 | `stockagent/tracker/diagnose.py`：`diagnose_relative_cycle` / `diagnose_turnover` / `diagnose_money_conditions`(留仓,消费方=国内宏观看板①,已不挂 diagnose_layer) / 挂 `diagnose_layer`；`_binom_p_one_sided`；`BROAD_INDICES`(7只·顺序=看板展示序) |
+| 看板渲染 | `stockagent/tracker/dashboard.py`：`_valuation_figure`(③) / `_relative_cycle_figure`(⑦) / `_turnover_figure`(⑧) / `_key_levels_figure+_key_levels_html`(⑩) / 各 `_section_html` + `render_index_timing` 接线 |
 | 提醒 | `stockagent/tracker/alerts.py`：E5(⑦周期极点) / V1(⑧地量) —— **仅经 research/stock 推送通路触发**(index_timing_report.py 无 `--push-alerts`) |
-| 数据 | `data/store.py`(`market_turnover` 表 + `index_daily` 含 000001/000852 + `china_money_supply`/`china_tsf` 月度表⑪) / `fetcher.py::fetch_market_turnover`(baostock) + `fetch_china_money_supply/fetch_china_tsf`(金十⑪) / `manager.py::update_market_turnover` + `update_china_money` |
-| 脚本 | `scripts/backfill_index.py` / `scripts/validate_volume_bottom.py` / `scripts/validate_support_break.py` / `scripts/validate_m2_timing.py`(新⑪) |
+| 数据 | `data/store.py`(`market_turnover` 表 + `index_daily` 含 000001/000852 + `china_money_supply`/`china_tsf` 月度表,国内宏观①数据腿) / `fetcher.py::fetch_market_turnover`(baostock) + `fetch_china_money_supply/fetch_china_tsf`(金十) / `manager.py::update_market_turnover` + `update_china_money` |
+| 脚本 | `scripts/backfill_index.py` / `scripts/validate_volume_bottom.py` / `scripts/validate_support_break.py` / `scripts/validate_m2_timing.py`(货币条件实证,留仓) |
 | 台账 | `docs/CLAIMS_LEDGER.md`：A股观点预登记(claim→可证伪定义→到期结算;Claim 001=3700~3800强支撑,窗至2026-10-31) |
 | 测试 | `tests/test_tracker_indicators.py` / `tests/test_alerts.py` / `tests/test_support_levels.py`(新·16个) / `tests/test_index_valuation_discipline.py`(⑩渲染) |
-| skill | `.claude/skills/tracker-dashboard` / `dashboards`（已同步到 11 节） |
+| skill | `.claude/skills/tracker-dashboard` / `dashboards`（已同步到 10 节） |
 
 **恢复后第一步**：继续开发 → 挑下面「可选增强」；验证 → 跑上面 4 条命令；懂某块 → 读对应 docstring（中文注释详尽）+ 本文件「关键实证/决策弯路」段。
 
@@ -57,7 +57,7 @@ python scripts/validate_m2_timing.py           # → data/m2_timing_study.html(�
 - **⑩ 看板**：`monitor_snapshot` 状态机 + 下方第一支撑（未破位·现价下最近）/ 上方第一压力（已破位·现价上最近·翻空为压）+ 近2年价格图（位横线做成 trace，可点图例隔离）+ 三幕剧本提示（幕0预承诺）。
 - **⑩ 与台账口径不同、各司其职**：看板状态机破位阈值=位−1%（研究口径）；Claim 001 失效=收盘<3760 且3日不收（更严，叙事口径）。
 
-### ⑪ 货币条件 + M2 拐点实证（2026-08-24）
+### 货币条件 + M2 拐点实证（2026-08-24;⑪ section 已于 2026-08-25 移至国内宏观看板①,以下为历史记录）
 - **起源**：主流叙事「M2 定大盘」（7月 M2 同比跌破 8% → 上证难回前高、加仓点=M2 触底）。数据跟踪（⑪ section）+ 一次 event-study 礼遇。
 - **弯路1（事件定义）**：严格环比连升连降（k=1）在 18 年真实序列上只出 **7/2/1** 个事件——M2 月度锯齿（如 2025-04 +1.0 → 05 −0.1 → 06 +0.4）把 run 切碎 → 改 **2 月动量口径**（sign(v[t]−v[t−2])，k=2·连降 4 月=下行确认/大段后反向 2 月=拐点）：9/7/5 事件，且 2025-10 见顶/2024-09 触底/2025 秋假下行（12月反转打断）全读对。k=3 试过=34 事件过碎。**单月反抽不打断 run** 是 k=2 的卖点（有测试钉死）。
 - **实证（上证 2008-2026，n=9/7/5，基线=每10日抽样「随便哪天买」）**：触底回升 lag0 60日胜率 **86%**/中位+4.5% → **公布口径 lag15 塌缩至 57%/+0.2%**——「等数据确认时行情已走完」被直接量化；下行确认 33%/−3.3% 是最稳的弱信号（水退确认后 60 日弱）；见顶回落 60%（conclusion_text 判「温和分离+10pp」但 n=5）。**温度计非开关**。

@@ -645,7 +645,7 @@ class DataManager:
         return n
 
     def update_china_money(self) -> dict:
-        """Fetch + store 中国货币条件月度数据(⑪: M2/M1/M0 + 社融增量, 金十源)。
+        """Fetch + store 中国货币条件月度数据(国内宏观看板①: M2/M1/M0 + 社融增量, 金十源)。
         两源独立容错(社融源滞后/偶发被拦不拖垮货币腿);源返回全历史 → 全量 upsert 幂等。
         Returns {money: rows, tsf: rows}。"""
         out = {"money": 0, "tsf": 0}

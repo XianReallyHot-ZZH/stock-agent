@@ -5,12 +5,12 @@ description: One-click refresh + generate + open all seven read-only diagnostic 
 
 # 七看板一键刷新 + 打开（统一入口 · 冷启动感知）
 
-六个**只读诊断**看板的统一入口（都不碰交易引擎），**fresh clone 也能一键起**：
+七个**只读诊断**看板的统一入口（都不碰交易引擎），**fresh clone 也能一键起**：
 
 | 看板 | 产物 | 单看板 skill |
 |---|---|---|
 | ETF 行业研究（择时跟踪·偏离度/剪刀差/筹码/资金流向/业绩预期） | `data/research_report.html` | `research-dashboard` |
-| 指数择时（估值开关·趋势·相对周期·地量·偏离·恐贪·货币条件） | `data/index_timing.html` | `tracker-dashboard` |
+| 指数择时（估值开关·趋势·相对周期·地量·偏离·恐贪） | `data/index_timing.html` | `tracker-dashboard` |
 | 个股诊断（三类·S07 归因·S10 戴维斯·S08 避坑·时序图·🤖AI评估） | `data/stock_diagnose.html` | （无，本 skill 覆盖） |
 | 宏观框架（因果链 利率→曲线→美元→金属→能源→权益 · 🥇黄金阶段定位器 · 微观紧缺） | `data/macro_framework.html` | （无，本 skill 覆盖） |
 | 国内宏观（货币信用 M2/M1/社融 · 利率与流动性 Shibor/FDR007/LPR/中债期限结构/OMO · 政策日历） | `data/china_macro.html` | `china-macro-dashboard` |
@@ -50,7 +50,7 @@ else:
 ```bash
 # ETF 行业研究：全套历史(价格+份额+净值；PE 已不用)+ 渲染 research_report.html（自含依赖/.env 检查）
 PYTHONIOENCODING=utf-8 python scripts/setup_research_dashboard.py --skip-pe   # PE 已不用，跳过省 ~30min
-# 指数择时（全量幂等：7 宽基日线含000001+000852 + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 融资融券 + 货币条件⑪）
+# 指数择时（全量幂等：7 宽基日线含000001+000852 + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 融资融券 + 货币条件[国内宏观①数据腿]）
 PYTHONIOENCODING=utf-8 python scripts/backfill_index.py
 # 个股诊断（全量幂等：日线 / baidu PE·PB / sina 财报 / 分红 / eastmoney 预告）
 PYTHONIOENCODING=utf-8 python scripts/backfill_stock_data.py
@@ -91,13 +91,13 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_economic_calendar.py
 ```
 任一步失败不影响其余（各自独立）；所有 backfill 幂等，中断重跑即可。
 
-### 2. 生成五个 HTML
+### 2. 生成七个 HTML
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/research_report.py        # 冷启动时已由 setup 渲染过,这里重跑无妨(秒级);纯可视化(无 LLM/无告警)
-PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（11 section，深浅色可切）
+PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（10 section，深浅色可切）
 PYTHONIOENCODING=utf-8 python scripts/stock_report.py           # 个股诊断（卡片+弹窗时序图+🤖按钮，深浅色可切；生成不调LLM，🤖点击时实时生成）
 PYTHONIOENCODING=utf-8 python scripts/macro_framework_report.py --no-open # 宏观框架（总览表+🥇黄金阶段定位器+微观紧缺+因果链分节点图，纯数据无LLM）；--no-open 必须：脚本默认会自动开浏览器，不加会与第3步重复弹两次
-PYTHONIOENCODING=utf-8 python scripts/china_macro_report.py --no-open   # 国内宏观（①货币信用⑪完整版 ②利率与流动性 ③政策日历；纯数据无LLM；--no-open 同上）
+PYTHONIOENCODING=utf-8 python scripts/china_macro_report.py --no-open   # 国内宏观（七 section：①货币信用 ②利率与流动性 ③政策日历 ④社融nowcast ⑤会议→M2回放 ⑥通胀 ⑦实体；纯数据无LLM；--no-open 同上）
 PYTHONIOENCODING=utf-8 python scripts/position_report.py        # 仓位管理（估值档×预案对照；数据腿=backfill_index.py 已回填的 index_pe/pb，无新回填；预案表在 config/params.yaml position_plan）
 PYTHONIOENCODING=utf-8 python scripts/stock_pool_report.py      # 候选个股池（六表；首次自动带 stage-2 候选腿周度刷新~5-8min，--no-stage2 跳过）
 ```
@@ -105,13 +105,13 @@ PYTHONIOENCODING=utf-8 python scripts/stock_pool_report.py      # 候选个股�
 
 ### 3. 生成并打开总入口壳页（七看板合一个页面 · 左侧导航 iframe · `data/index.html`）
 ```bash
-PYTHONIOENCODING=utf-8 python scripts/dashboard_home.py   # 生成壳页 + 打开（无数据依赖·秒级；只读六个 HTML 的 mtime 标 as_of/新鲜度）
+PYTHONIOENCODING=utf-8 python scripts/dashboard_home.py   # 生成壳页 + 打开（无数据依赖·秒级；只读七个 HTML 的 mtime 标 as_of/新鲜度）
 ```
 壳页内点左侧导航切七看板（iframe 切回不重载，保留滚动/交互状态；记住上次选择；绿点=今日已生成/黄点=过期/灰点=未生成并给生成命令）。仍可单独开某看板：双击 `data/xxx.html`。
 
 ### 4. 汇报（给用户）
 - 走的是 **COLD 还是 WARM**（让用户知道这次是不是首次大回填）
-- 总入口壳页路径（`data/index.html`）+ 六个看板各自一行关键结论：
+- 总入口壳页路径（`data/index.html`）+ 七个看板各自一行关键结论：
   - 研究：参与排名 N/总数、顶部「偏离度极端区」（超买/超卖各哪些）+ 剪刀差分化 ETF + 板块资金流向标签 + 📡申赎异动（各窗口事件数、🌊连环潮汐领衔条目、今日/当时口径差异）+ 业绩预期（预告 label 分布、一致预期 g N/36 出数、修正动量冷启动进度 X/4）
   - 指数：估值 zone + 大小盘温差 + ⑦相对周期位置 + ⑧地量状态 + ⑨恐惧贪婪读数(0-100/五档) + 是否有有效突破/跌破信号
   - 个股：观察池触发提醒数 + 周期 tab 商品面板（哪些商品向上/背离/向下）+ 埋伏候选（门槛线≥30 上下）+ 任何异常（避坑/戴维斯/预告拐点/M1-M2 商品背离）

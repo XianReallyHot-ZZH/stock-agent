@@ -276,7 +276,7 @@ CREATE TABLE IF NOT EXISTS economic_calendar (   -- 经济日历/事件·框架�
     importance INTEGER,                          -- 重要性 1/2/3(筛 ≥2)
     PRIMARY KEY (date, time, event)
 );
-CREATE TABLE IF NOT EXISTS china_money_supply ( -- ⑪ 货币条件: M2/M1/M0 月度(金十·央行金融统计数据) · 月频
+CREATE TABLE IF NOT EXISTS china_money_supply ( -- 货币条件: M2/M1/M0 月度(金十·央行金融统计数据;国内宏观看板①数据腿) · 月频
     month   TEXT NOT NULL,                       -- YYYY-MM-01
     m2_amt  REAL, m2_yoy REAL,                   -- M2 余额(亿元)/同比(%) —— 口径 2008 以来一致,event-study 主信号
     m1_amt  REAL, m1_yoy REAL,                   -- M1(2024-01 起新口径含个人活期——序列有断点,仅展示不进研究)
@@ -1252,7 +1252,7 @@ class Store:
             row = c.execute("SELECT MAX(date) FROM market_margin").fetchone()
             return row[0] if row and row[0] else None
 
-    # ---- China money (⑪ 货币条件 · M2/M1/社融 月频, 金十源) ----
+    # ---- China money (货币条件 · M2/M1/社融 月频, 金十源;国内宏观看板①数据腿) ----
     def upsert_china_money(self, rows: list[dict]) -> int:
         """rows: {month,m2_amt,m2_yoy,m1_amt,m1_yoy,m0_amt,m0_yoy}。幂等(全量重拉覆盖,月频仅~220行)。"""
         if not rows:

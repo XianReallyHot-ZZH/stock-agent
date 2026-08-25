@@ -6,8 +6,9 @@
   diagnose_style(store)       — 蓝筹 vs 成长 → 仓位倾向(S13)
   diagnose_relative_cycle(store) — ⑦相对周期律: 创业板 vs 上证 点差在包络内的位置 → 极点/中枢
   diagnose_fear_greed(store)  — ⑨恐惧贪婪指数: 5成分(动量/流动性/波动/估值/杠杆) → 0-100 复合(只读温度计)
-  diagnose_money_conditions(store) — ⑪货币条件: M2/M1同比+剪刀差+社融脉冲+episode状态机(只读温度计)
-  diagnose_layer(store)       — 顶层:遍历6宽基 + 估值 + 风格 + 相对周期 + 恐贪 + 货币,返回完整指数择时诊断
+  diagnose_money_conditions(store) — 货币条件: M2/M1同比+剪刀差+社融脉冲+episode状态机
+    (消费方=国内宏观看板①;曾为指数择时⑪,2026-08-25 从该看板移除)
+  diagnose_layer(store)       — 顶层:遍历6宽基 + 估值 + 风格 + 相对周期 + 恐贪,返回完整指数择时诊断
 """
 from __future__ import annotations
 
@@ -290,9 +291,9 @@ def diagnose_fear_greed(store, index_sym: str = "000001") -> dict:
 
 
 def diagnose_money_conditions(store) -> dict:
-    """⑪ 货币条件(只读诊断旁路): M2/M1 同比 + M1−M2 剪刀差 + 社融脉冲 + episode 状态机。
-    「M2 定大盘」主流叙事的观测层落地——温度计非开关,永不喂引擎;实证结论由
-    validate_m2_timing 写 meta、dashboard 活注入读图说明。"""
+    """货币条件(只读诊断旁路): M2/M1 同比 + M1−M2 剪刀差 + 社融脉冲 + episode 状态机。
+    「M2 定大盘」主流叙事的观测层落地——温度计非开关,永不喂引擎;消费方=国内宏观看板①
+    (china_macro.framework),实证结论由 validate_m2_timing 写 meta、其 ① 活注入读图说明。"""
     from . import money_conditions as mcm
     df = store.get_china_money_series()
     if len(df) < mcm.MIN_MONTHS:
@@ -330,7 +331,7 @@ def diagnose_layer(store, period: int = ti.MA_PERIOD,
     """顶层:整个指数择时层诊断(给 dashboard)。
 
     返回 {indices: {symbol: {name, close_last, date_last, diagnosis, valid}},
-          valuation, market_temp, style, relative_cycle, turnover, fear_greed, money, period}."""
+          valuation, market_temp, style, relative_cycle, turnover, fear_greed, period}."""
     indices = {}
     for sym, nm in BROAD_INDICES:
         df = store.get_index_daily_series(sym)
@@ -353,6 +354,5 @@ def diagnose_layer(store, period: int = ti.MA_PERIOD,
         "relative_cycle": diagnose_relative_cycle(store),
         "turnover": diagnose_turnover(store),
         "fear_greed": diagnose_fear_greed(store),
-        "money": diagnose_money_conditions(store),
         "period": period,
     }
