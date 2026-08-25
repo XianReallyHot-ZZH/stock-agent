@@ -12,6 +12,7 @@
   calendar   披露日历 v2(正式报截止 + 窗口A/B 状态机)
   revision   一致预期修正动量·个股版(E4 同口径)
   pead       预告超预期漂移(point-in-time 双腿,无前视)
+  forecast_industry 预告行业选股 event-study(行业预喜率门+榜内 TopN,法定截止出场近似)
   facechange 业绩变脸检测(跳档/连亏/趋势破位/拐头向上;同尾比较防累计口径失真)
   study      event-study 纯核心(验证器共用)
   screen     装配层(唯一读 store)

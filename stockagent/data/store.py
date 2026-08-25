@@ -1799,6 +1799,15 @@ class Store:
             return pd.DataFrame(columns=["industry"])
         return df.drop_duplicates("code", keep="first").set_index("code")[["industry"]]
 
+    def industry_members(self) -> pd.DataFrame:
+        """全量板块成员 [industry, code, name]（单快照,upsert 时已删旧）。行业层级回滚
+        (pool.forecast_industry.industry_rollup)要全量——industry_map 的最具体板去重
+        会丢父子包含信息。空表 → 空帧。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT industry, code, name FROM industry_member", c)
+        return df
+
     def industry_boards(self) -> list[str]:
         """当前快照的板块名清单(升序)——stock_industry.yaml 未映射 diff 用。"""
         with self._conn() as c:

@@ -65,6 +65,21 @@ def dividend_adjusted_close(close: pd.Series, dividends: pd.DataFrame | None,
     return adj, events
 
 
+def dividend_adjusted_open(open_: pd.Series, close: pd.Series,
+                           dividends: pd.DataFrame | None) -> pd.Series:
+    """分红前复权·open 列(纯)。除权因子与 close 同式(prev close 算,dividend_adjusted_close
+    的 events 输出直接复用),ex_date 之前的全部 open ×= factor——open/close 共用一套因子。
+    flagged 事件同样跳过(宁可不调不加噪)。dividends=None → 原序列原样返回。
+    forecast_industry 事件研究用(入场/出场都在开盘)。"""
+    _, events = dividend_adjusted_close(close, dividends)
+    out = open_.astype(float).copy()
+    for ev in events:
+        if ev["flagged"] or ev.get("factor") is None:
+            continue
+        out.loc[out.index < ev["date"]] *= ev["factor"]
+    return out
+
+
 def unexplained_cliffs(close: pd.Series, dividends: pd.DataFrame | None,
                        lo: float = 0.05, hi: float = 0.12,
                        nearby_days: int = 5) -> list[str]:
