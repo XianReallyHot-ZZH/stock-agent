@@ -763,6 +763,46 @@ def test_earnings_alert_banner_history_block():
     assert "历史窗口台账" not in h3
 
 
+def _msnap(mlabel="业绩高增", label="业绩改善", **kw):
+    """_esnap + 三环混合头条键（mixed_*）：两套口径并存，渲染端按 _earn_mixed_active 切换。"""
+    s = _esnap(0.5, 0.0, label=label)
+    s.update({"mixed_label": mlabel, "mixed_yoy": 45.0, "mixed_bull": 0.8, "mixed_bear": 0.1,
+              "mixed_cov": 0.9, "mixed_period": "20260630",
+              "mixed_rings": {"forecast": 0.2, "express": 0.0, "actual": 0.8}})
+    s.update(kw)
+    return s
+
+
+def test_earnings_cell_mixed_live():
+    # 混合口径生效：mixed label/yoy + 短期名 + 环占比；不再显示冻结的预告口径
+    html = rep._earnings_cell(_msnap())
+    assert "业绩高增" in html and "+45%" in html
+    assert "多80%/空10%" in html
+    assert "2026中报 ·" in html and "环预20%/快0%/正80%" in html
+    assert "中报预告" not in html and "⚠覆盖偏低" not in html
+
+
+def test_earnings_cell_mixed_insufficient_falls_back():
+    # 混合口径未过覆盖门（数据不足）→ 回退纯预告口径（earnings_* + 全称期名）
+    html = rep._earnings_cell(_msnap(mlabel="数据不足"))
+    assert "业绩改善" in html and "2026中报预告" in html
+    assert "环预" not in html
+
+
+def test_earnings_cell_no_mixed_unchanged():
+    # 无 mixed_* 键（如跨境 ETF 无指数成分）→ 与旧格式逐结构一致（回归锚）
+    html = rep._earnings_cell(_esnap(0.5, 0.0))
+    assert "业绩高增" in html and "2026中报预告 · 覆盖 60%" in html
+    assert "环预" not in html
+
+
+def test_detail_chips_earnings_prefers_mixed():
+    # 收起态 chips 的业绩 chip 随混合口径切换；未过门回退 earnings_label
+    assert "业绩高增" in rep._detail_chips(_msnap())
+    assert "业绩改善" in rep._detail_chips(_msnap(mlabel="数据不足"))
+    assert "业绩高增" in rep._detail_chips(_esnap(0.5, 0.0))
+
+
 def test_fmt_pctile_extreme_one_decimal():
     """极端分位显示一位小数——:.0% 把 99.56% 圆成 100% 会暗示「史上最大」
     （2026-08 实例：科创50 08-19 +5.2% 实为自身历史第 7 大申购日）。"""

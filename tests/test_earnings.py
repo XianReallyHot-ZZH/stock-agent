@@ -24,6 +24,13 @@ def _forecast(items: dict) -> pd.DataFrame:
         {"yoy": [items[c][0] for c in codes], "type": [items[c][1] for c in codes]},
         index=codes)
 
+def _perf(items: dict) -> pd.DataFrame:
+    # items: {code: (np_yoy, rev_yoy)} — 快报/正式报帧契约（get_stock_express/report_period）
+    codes = list(items)
+    return pd.DataFrame(
+        {"np_yoy": [items[c][0] for c in codes], "rev_yoy": [items[c][1] for c in codes]},
+        index=codes)
+
 
 # ---------- aggregate_earnings ----------
 def test_aggregate_weighted_median_buckets_coverage():
@@ -68,6 +75,74 @@ def test_aggregate_drops_nan_yoy_but_keeps_others():
     s = er.aggregate_earnings(h, fc)
     assert s["n_matched"] == 1                 # B dropped (NaN yoy)
     assert s["coverage"] == 0.5
+
+
+# ---------- best_ring_earnings (三环混合头条: 逐名字取最精化环) ----------
+def test_best_ring_refinement_order():
+    h = _holdings({"A": 10, "B": 20, "C": 30, "D": 40})   # D 三环全缺
+    fc = _forecast({"A": (50, "预增"), "C": (10, "略增")})
+    ex = _perf({"A": (60, 20), "B": (5, 3)})              # A 快报也有 → 正式报优先
+    ac = _perf({"A": (45, 15)})
+    s = er.best_ring_earnings(h, fc, ex, ac)
+    assert s["n_matched"] == 3 and s["n_holdings"] == 4
+    assert math.isclose(s["weighted_yoy"], (45 * 10 + 5 * 20 + 10 * 30) / 60)
+    assert s["n_ring"] == {"forecast": 1, "express": 1, "actual": 1}
+    assert math.isclose(sum(s["ring_mix"].values()), 1.0)
+    assert math.isclose(s["ring_mix"]["forecast"], 30 / 60)
+    assert s["coverage"] == 0.6
+
+
+def test_best_ring_breadth_semantics():
+    # 预告环名字按类型桶（「减亏」∈BULL 负 yoy 仍计多·不计空）; 快报/正式环按 YoY 符号
+    h = _holdings({"A": 10, "B": 20, "C": 30, "E": 40})
+    fc = _forecast({"A": (-30, "减亏")})
+    ac = _perf({"B": (25, 0), "C": (-15, 0), "E": (0, 0)})  # 正/负/零
+    s = er.best_ring_earnings(h, fc, None, ac)
+    assert s["n_matched"] == 4                              # E 的 0 值入聚合
+    assert math.isclose(s["bull_ratio"], 30 / 100)          # A(类型) + B(>0)
+    assert math.isclose(s["bear_ratio"], 30 / 100)          # C(<0); E(=0) 不计
+
+
+def test_best_ring_nan_falls_through():
+    # store 契约: 正式报行可只带 rev_yoy（np_yoy=NULL）→ 落次精化环
+    h = _holdings({"A": 10, "B": 20})
+    fc = _forecast({"A": (10, "预增"), "B": (20, "略增")})
+    ex = _perf({"A": (15, 5)})
+    ac = _perf({"A": (None, 7)})
+    s = er.best_ring_earnings(h, fc, ex, ac)
+    assert s["n_ring"] == {"forecast": 1, "express": 1, "actual": 0}
+    assert math.isclose(s["weighted_yoy"], (15 * 10 + 20 * 20) / 30)
+
+
+def test_best_ring_empty_inputs():
+    s = er.best_ring_earnings(None, None, None, None)
+    assert s["n_matched"] == 0
+    assert s["ring_mix"] == {"forecast": 0.0, "express": 0.0, "actual": 0.0}
+    assert s["n_ring"] == {"forecast": 0, "express": 0, "actual": 0}
+    s2 = er.best_ring_earnings(_holdings({"A": 10}), None, None, None)
+    assert s2["n_holdings"] == 1 and s2["coverage"] == 0.0
+
+
+def test_best_ring_superset_monotonic():
+    # 回退不降级的根据: mixed 已匹配集 ⊇ 纯预告环（权重·家数单调）
+    h = _holdings({"A": 10, "B": 20, "C": 30})
+    fc = _forecast({"A": (50, "预增")})
+    pure = er.aggregate_earnings(h, fc)
+    mix = er.best_ring_earnings(h, fc, _perf({"B": (5, 1)}), _perf({"C": (7, 2)}))
+    assert mix["coverage"] >= pure["coverage"] and mix["coverage"] > pure["coverage"]
+    assert mix["n_matched"] >= pure["n_matched"]
+
+
+def test_best_ring_expands_score_gate_coverage():
+    # 渲染端「mixed 失效回退 earnings_*」: 同一覆盖门下 mixed 过门集 ⊇ 纯预告过门集
+    weights = {c: 10 for c in "ABCDE"}
+    fc = _forecast({"A": (50, "预增")})                     # 预告只盖 1/5 → 纯预告不过门
+    _, pure_label = er.earnings_score(er.aggregate_earnings(_holdings(weights), fc), PARAMS)
+    assert pure_label == er.LABEL_INSUFF
+    ac = _perf({c: (20, 5) for c in "BCDE"})                # 正式报补齐 → mixed 过门
+    _, mix_label = er.earnings_score(er.best_ring_earnings(_holdings(weights), fc, None, ac),
+                                     PARAMS)
+    assert mix_label != er.LABEL_INSUFF
 
 
 # ---------- earnings_score ----------
@@ -138,6 +213,19 @@ def test_period_label_known_windows(period, want):
 def test_period_label_malformed_falls_back(period):
     out = er.period_label(period)
     assert out == "—" or out.startswith("2026报告期(")   # unknown suffix → fallback, not blank
+
+
+@pytest.mark.parametrize("period, want", [
+    ("20251231", "2025年报"), ("20260331", "2026一季报"),
+    ("20260630", "2026中报"), ("20260930", "2026三季报"),
+])
+def test_period_label_short(period, want):
+    assert er.period_label(period, short=True) == want
+    assert er.period_label(period) != want             # 缺省仍带「预告」后缀
+
+
+def test_period_label_short_malformed_falls_back():
+    assert er.period_label("20260713", short=True).startswith("2026报告期(")
 
 
 # ---------- latest_report_period (interim-aware, B 方案) ----------

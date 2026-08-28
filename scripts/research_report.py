@@ -162,6 +162,18 @@ def build_snapshots(store: Store, cfg, symbols: list[str], as_of: str | None):
             snap["chain"] = ern.earnings_chain(cons, chain_fc, chain_ex, chain_ac,
                                                asof=datetime.now())
             snap["chain_period"] = chain_period
+            # 三环混合头条 (live 口径): 逐名字取最精化环渲染时重算——etf_earnings(earnings_*)
+            # 只在换季重算·预告环冻结(如 8 月底中报正式季仍停在 7 月预告); mixed_* 随周度
+            # 链数据精化。横幅/历史台账仍纯预告口径(与逐日回放可比)。
+            mix = ern.best_ring_earnings(cons, chain_fc, chain_ex, chain_ac)
+            _mscore, mlabel = ern.earnings_score(mix, cfg.params)   # 同覆盖门 0.30/5只
+            snap["mixed_label"] = mlabel            # 数据不足 → 渲染端回退 earnings_*
+            snap["mixed_yoy"] = mix["weighted_yoy"]
+            snap["mixed_bull"] = mix["bull_ratio"]
+            snap["mixed_bear"] = mix["bear_ratio"]
+            snap["mixed_cov"] = mix["coverage"]
+            snap["mixed_period"] = chain_period
+            snap["mixed_rings"] = mix["ring_mix"]   # {forecast, express, actual} 权重占比
 
         # 修正动量 (E4, informational): 4周快照差分·同财年对齐 — 冷启动期「累积中」
         if cons is not None and len(cons):

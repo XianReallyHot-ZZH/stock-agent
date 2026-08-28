@@ -33,18 +33,22 @@ LABEL_INSUFF = "数据不足"
 # YYYYMMDD report-period suffix → Chinese 业绩预告 window name.
 _PERIOD_NAME = {"1231": "年报预告", "0331": "一季报预告",
                 "0630": "中报预告", "0930": "三季报预告"}
+# 去预告后缀版（三环混合头条口径——数据未必来自预告环）.
+_PERIOD_SHORT = {"1231": "年报", "0331": "一季报", "0630": "中报", "0930": "三季报"}
 
 
-def period_label(period: Optional[str]) -> str:
+def period_label(period: Optional[str], short: bool = False) -> str:
     """Map a YYYYMMDD report_period to a Chinese label, e.g. '20260630' → '2026中报预告'.
 
     Used to surface which disclosure window the earnings signal draws from (freshness). Unknown /
     malformed periods fall back to 'YYYY报告期(MMDD)' so the dashboard never shows a blank.
+    short=True → 去预告后缀（'2026中报'）——三环混合头条的数据未必来自预告环，期名不带环假设.
     """
     if not period or not isinstance(period, str) or len(period) != 8 or not period.isdigit():
         return "—"
     y, tail = period[:4], period[4:]
-    return f"{y}{_PERIOD_NAME[tail]}" if tail in _PERIOD_NAME else f"{y}报告期({tail})"
+    names = _PERIOD_SHORT if short else _PERIOD_NAME
+    return f"{y}{names[tail]}" if tail in names else f"{y}报告期({tail})"
 
 
 def latest_report_period(now: datetime) -> str:
@@ -423,6 +427,87 @@ def earnings_chain(constituents: Optional[pd.DataFrame],
                 "optimistic": float(pairs.loc[d < -10, "weight"].sum() / w),
             }
     return out
+
+
+def best_ring_earnings(constituents: Optional[pd.DataFrame],
+                       forecast: Optional[pd.DataFrame],
+                       express: Optional[pd.DataFrame],
+                       actual: Optional[pd.DataFrame]) -> dict:
+    """三环逐名字取最精化环的头条聚合（live 口径, pure, no I/O）.
+
+    aggregate_earnings 是纯预告口径（强制披露门槛样本偏极端，预告窗一关就冻结）；本函数把
+    E3 的「三环逐步精化」延伸到头条聚合——每个成分名字取已披露的最精化环:
+    正式报 np_yoy > 快报 np_yoy > 预告 yoy; 某环值 NaN = 未披露 → 落次精化环
+    （store 契约: 快报/正式报行可只带 rev_yoy, np_yoy 为 NULL）。
+    广度: 预告环名字按 type∈BULL/BEAR（「减亏」负 yoy 仍计多——类型桶语义，样本偏极端所以
+    只看广度）; 快报/正式环名字按 YoY 符号（>0 多 / <0 空 / =0 不计）。
+    单调性: 同 constituents 下 已匹配集（权重·家数）= 三环并集 ⊇ 纯预告环 → 过
+    earnings_score 覆盖门者 ⊇ 纯预告口径 → 渲染端「mixed 失效回退 earnings_*」永不降级。
+    Data contracts: constituents DataFrame[code(str), weight]（code 唯一）; forecast indexed
+    by code [yoy, type]; express/actual indexed by code [np_yoy, ...]（get_stock_*_period）。
+    Returns: aggregate_earnings 同形 dict + ring_mix{ring: 已匹配权重内占比（互斥分割）}
+             + n_ring{ring: 家数}。
+    """
+    out = _empty_signal(0 if constituents is None else len(constituents))
+    out["ring_mix"] = {r: 0.0 for r in _RING_NAMES}
+    out["n_ring"] = {r: 0 for r in _RING_NAMES}
+    if constituents is None or not len(constituents):
+        return out
+
+    h = constituents[["code", "weight"]].copy()
+    h["code"] = h["code"].astype(str).str.zfill(6)          # 与 earnings_chain 同防御
+    h["weight"] = pd.to_numeric(h["weight"], errors="coerce").fillna(0.0)
+    total_w = float(h["weight"].sum())
+    if total_w <= 0:
+        return out
+    m = h.set_index("code")
+
+    # 逐环取值列 reindex 到成分 code（缺失环 = 全 NaN 列 = 该环无人披露）
+    v = {}
+    for ring, df, col in (("forecast", forecast, "yoy"),
+                          ("express", express, "np_yoy"),
+                          ("actual", actual, "np_yoy")):
+        if df is None or not len(df) or col not in df.columns:
+            v[ring] = pd.Series(dtype=float, index=m.index)
+        else:
+            s = pd.to_numeric(df[col], errors="coerce")
+            s.index = s.index.astype(str).str.zfill(6)
+            v[ring] = s.reindex(m.index)
+    if forecast is not None and len(forecast) and "type" in forecast.columns:
+        t = forecast["type"].astype(str)
+        t.index = t.index.astype(str).str.zfill(6)
+        m["type"] = t.reindex(m.index).fillna("")
+    else:
+        m["type"] = ""
+
+    # 低→高精化依次覆写 best_ring（高环可用才覆盖）——与 best_yoy 的 combine_first 序一致
+    m["best_ring"] = ""
+    for ring in _RING_NAMES:                               # ("forecast", "express", "actual")
+        m.loc[v[ring].notna(), "best_ring"] = ring
+    m["best_yoy"] = v["actual"].combine_first(v["express"]).combine_first(v["forecast"])
+
+    matched = m[m["best_yoy"].notna()]
+    matched_w = float(matched["weight"].sum())
+    if matched_w <= 0 or not len(matched):
+        return out
+    yoy = matched["best_yoy"].astype(float)
+    is_fc = matched["best_ring"] == "forecast"
+    bull_w = (float(matched.loc[is_fc & matched["type"].isin(BULL), "weight"].sum())
+              + float(matched.loc[~is_fc & (yoy > 0), "weight"].sum()))
+    bear_w = (float(matched.loc[is_fc & matched["type"].isin(BEAR), "weight"].sum())
+              + float(matched.loc[~is_fc & (yoy < 0), "weight"].sum()))
+    return {
+        "weighted_yoy": float((yoy * matched["weight"]).sum() / matched_w),
+        "median_yoy": float(yoy.median()),
+        "bull_ratio": bull_w / matched_w,
+        "bear_ratio": bear_w / matched_w,
+        "coverage": matched_w / total_w,
+        "n_holdings": int(len(h)),
+        "n_matched": int(len(matched)),
+        "ring_mix": {r: float(matched.loc[matched["best_ring"] == r, "weight"].sum()) / matched_w
+                     for r in _RING_NAMES},
+        "n_ring": {r: int((matched["best_ring"] == r).sum()) for r in _RING_NAMES},
+    }
 
 
 # ---------------- 修正动量 (E4, docs/EXECUTION_PLAN-ETF业绩预期.md §6) ----------------

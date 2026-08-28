@@ -256,15 +256,31 @@ _EARN_CLASS = {
 _EARN_LOW_COV = 0.60
 
 
+def _earn_mixed_active(snap: dict) -> bool:
+    """三环混合头条是否生效：mixed 存在且过覆盖门（label=数据不足 → 回退纯预告口径）。
+
+    单调性保证回退不降级：mixed 已匹配集 ⊇ 纯预告环（earnings.best_ring_earnings docstring）
+    ——过门的预告头条其 mixed 必然也过门，回退只发生在两边都不足时。"""
+    ml = snap.get("mixed_label")
+    return bool(ml) and ml != ern.LABEL_INSUFF
+
+
 def _earnings_freshness_line(snap: dict) -> str:
-    period = snap.get("earnings_period")
-    plabel = ern.period_label(period)
-    cov = snap.get("earnings_cov")
+    active = _earn_mixed_active(snap)
+    period = snap.get("mixed_period") if active else snap.get("earnings_period")
+    plabel = ern.period_label(period, short=active)   # mixed → "2026中报"(不带环假设)
+    cov = snap.get("mixed_cov") if active else snap.get("earnings_cov")
     cov_s = f"{cov:.0%}" if isinstance(cov, (int, float)) and not _nan(cov) else "—"
     low = isinstance(cov, (int, float)) and not _nan(cov) and cov < _EARN_LOW_COV
     warn = " · ⚠覆盖偏低" if low else ""
     cls = "warn-txt" if low else ""
-    return (f"<br><span class='fresh {cls}'>{plabel} · 覆盖 {cov_s}{warn}</span>")
+    rings = ""
+    if active:
+        rg = snap.get("mixed_rings") or {}
+        parts = [f"预{rg.get('forecast', 0):.0%}", f"快{rg.get('express', 0):.0%}",
+                 f"正{rg.get('actual', 0):.0%}"]
+        rings = f" · 环{'/'.join(parts)}"
+    return (f"<br><span class='fresh {cls}'>{plabel} · 覆盖 {cov_s}{rings}{warn}</span>")
 
 
 # 一致预期(E2) label → 色 class（复用业绩预告的 en-* 语义色）
@@ -303,17 +319,20 @@ def _consensus_line(snap: dict) -> str:
 
 
 def _earnings_cell(snap: dict) -> str:
-    """业绩预期 cell — 纯信息列（上: 业绩预告口径 + 覆盖度; 下: 一致预期增速 E2）。"""
+    """业绩预期 cell — 纯信息列（上: 三环混合头条——逐名字取最精化环（正式报>快报>预告），
+    未过覆盖门回退纯预告口径 etf_earnings; 下: 一致预期增速 E2）。"""
     cons = _consensus_line(snap)
-    label = snap.get("earnings_label")
+    mixed = _earn_mixed_active(snap)
+    pre = "mixed_" if mixed else "earnings_"
+    label = snap.get(pre + "label")
     if not label:
         if cons:
             return f"<td class='c'>{cons}</td>"
         return "<td class='c'><span class='ghost'>—</span></td>"
     cls = _EARN_CLASS.get(label, "en-flat")
-    yoy = snap.get("earnings_yoy")
+    yoy = snap.get(pre + "yoy")
     yoy_s = f"{yoy:+.0f}%" if isinstance(yoy, (int, float)) and not _nan(yoy) else "—"
-    bull, bear = snap.get("earnings_bull"), snap.get("earnings_bear")
+    bull, bear = snap.get(pre + "bull"), snap.get(pre + "bear")
     bb = ""
     if isinstance(bull, (int, float)) and not _nan(bull):
         bb = (f"<br><span class='sub2'>归母YoY {yoy_s}"
@@ -1245,7 +1264,7 @@ def _detail_chips(snap: dict) -> str:
     if qk:
         title, cond = _QUAD_INFO[qk]
         chips.append(f'<span class="chip quad-{qk}">{title}·{cond}</span>')
-    label = snap.get("earnings_label")
+    label = snap.get("mixed_label") if _earn_mixed_active(snap) else snap.get("earnings_label")
     if label:
         chips.append(f'<span class="chip {_EARN_CLASS.get(label, "en-flat")}">{label}</span>')
     g = snap.get("consensus_g")
@@ -1902,12 +1921,16 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
                   + ("⑤ <b>申赎异动台账</b>：近1月扫描 日增减% 进入自身<b>方向</b>历史99%分位（申购日比申购日·赎回日比赎回日·2026-08 与排名表「日申赎」列统一口径·同日数字互证） 且 ≥1亿 的单日大额"
                      "申赎事件，最新8条滚动展示（新事件顶旧事件·供回检）；全历史分位·纯观察不防前视；"
                      "流入≠看好。点击条目跳该ETF的日度净申赎图看事件细节。<br>" if flow_events_html else ""))
-    earn_guide = ("⑥ <b>业绩预期列（信息层）</b>：上=最新披露窗口的<b>业绩预告</b>聚合（多/空=预喜/预亏类型"
-                  "的权重占比·广度口径——强制披露门槛使样本天然偏极端，只看广度不看水平，覆盖=披露进度"
-                  "与门槛筛过的混合）；下=<b>一致预期</b> g=Σ(官方权重×成分股 EPS 次年/当年−1)（东财研报"
+    earn_guide = ("⑥ <b>业绩预期列（信息层）</b>：上=<b>业绩三环混合</b>聚合——逐名字取最精化披露环"
+                  "（正式报＞快报＞预告），多/空=预告环按预喜/预亏类型、快报/正式环按归母YoY符号的权重占比；"
+                  "时效行括注环占比（环预x/快y/正z·已匹配权重内的互斥分割，与明细⛓链块「占成分总权重·可重叠」"
+                  "口径不同）；覆盖=三环混合披露进度（⊇预告覆盖——披露季中段如8月底，正式报逐日落库而纯预告"
+                  "口径仍冻结在预告窗截止日）。混合口径未过覆盖门（0.30/5只）→ 回退纯预告聚合（etf_earnings·"
+                  "换季重算）；<b>📈横幅与📖历史台账仍纯预告口径</b>（与逐日 point-in-time 回放同口径可比）。"
+                  "下=<b>一致预期</b> g=Σ(官方权重×成分股 EPS 次年/当年−1)（东财研报"
                   "摘录口径·研报数≥3·财年滚动对齐·<b>水平值非变化量</b>——4周修正另示于同行：自建周度快照"
                   "差分·同财年对齐防年末翻滚·冷启动4周显示「累积中」；覆盖权重门"
-                  "40%）。两行互补：预告=已披露的区间事实，预期=分析师前瞻（日更·软信息·系统性乐观需"
+                  "40%）。两行互补：披露事实（混合环）=已落地的区间数字，预期=分析师前瞻（日更·软信息·系统性乐观需"
                   "横向比较）。观察坐标·不喂引擎。<br>"
                   "④' <b>📈 业绩预期提醒横幅</b>（提醒区只收事件不收状态）：A5=一致预期4周加权下修"
                   "&lt;-3%且覆盖≥40%（变化量才有信息·Womack 1996 下调>上调）；交叉=偏离极端分位×预告"
