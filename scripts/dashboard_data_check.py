@@ -195,6 +195,9 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="Research-dashboard data check (+--fix)")
     ap.add_argument("--fix", action="store_true", help="backfill stale/missing data to current")
+    ap.add_argument("--pool", action="store_true",
+                    help="候选个股池数据腿已暂停(2026-08-29)——传 --pool 恢复第7-9步"
+                         "(spot/行业·分红/日线增量, 重启看板时用)")
     ap.add_argument("--symbols", nargs="*", default=None)
     args = ap.parse_args()
     cfg = get_config()
@@ -322,45 +325,52 @@ def main():
         print(f"  通胀/实体月度刷新·CPI/PPI/PMI/社零/工业(当前 {real_last or '无'})...")
         dm.update_china_real()
 
-    # 7) candidate-pool spot (V7 第六看板): daily snapshot — universe 的 ST 过滤 + 展示名来源
-    spot_last = store.get_meta("last_stock_spot_update")
-    if spot_last != datetime.now().strftime("%Y%m%d"):
-        print(f"  候选池现货快照(当前 {spot_last or '无'})...")
-        n = dm.update_stock_spot()
-        print(f"  stock_spot: {n} 只" if n else "  ⚠️ spot 失败(退最后快照,不阻塞)")
+    # 7-9) candidate-pool legs (V7 第六看板): spot/行业/分红/日线 —— 默认暂停
+    #      (2026-08-29 用户指令: 看板现阶段价值有限待迭代, 数据冻结在 2026-08-27;
+    #       重启时用户会说 → 恢复跑法 `--fix --pool`, 一次性补齐落后增量)。
+    if not args.pool:
+        print("  候选个股池数据更新暂停(2026-08-29,等用户指令重启;看板数据冻结在 08-27) "
+              "— 恢复: dashboard_data_check.py --fix --pool")
+    else:
+        # 7) candidate-pool spot (V7 第六看板): daily snapshot — universe 的 ST 过滤 + 展示名来源
+        spot_last = store.get_meta("last_stock_spot_update")
+        if spot_last != datetime.now().strftime("%Y%m%d"):
+            print(f"  候选池现货快照(当前 {spot_last or '无'})...")
+            n = dm.update_stock_spot()
+            print(f"  stock_spot: {n} 只" if n else "  ⚠️ spot 失败(退最后快照,不阻塞)")
 
-    # 8) candidate-pool industry (月更) + dividends (周更;运行时前复权事件源)
-    ind_last = store.last_industry_snapshot()
-    if ind_last is None or (datetime.now() - datetime.strptime(ind_last, "%Y-%m-%d")).days > INDUSTRY_STALE_DAYS:
-        print(f"  候选池行业成分(缺失或>{INDUSTRY_STALE_DAYS}天, 当前 {ind_last or '无'})...")
-        n = dm.update_industry_members()
-        print(f"  industry_member: {n} 行" if n else "  ⚠️ industry 失败(策略2 降级,不阻塞)")
-    if info.get("pool_universe") and store.get_meta("pool_prices_ready") == "1":
-        div_days = int((get_config().params.get("stock_pool", {}) or {})
-                       .get("prices", {}).get("dividend_refresh_days", 7))
-        div_last = store.get_meta("last_pool_dividend_update")  # YYYY-MM-DD
-        stale = div_last is None or (
-            datetime.now() - datetime.strptime(div_last, "%Y-%m-%d")).days > div_days
-        if stale:
-            print(f"  候选池分红明细(当前 {div_last or '无'})...")
-            res = dm.update_pool_dividends(info["pool_universe"])
-            print(f"  stock_dividend: +{sum(res.values())} 行")
+        # 8) candidate-pool industry (月更) + dividends (周更;运行时前复权事件源)
+        ind_last = store.last_industry_snapshot()
+        if ind_last is None or (datetime.now() - datetime.strptime(ind_last, "%Y-%m-%d")).days > INDUSTRY_STALE_DAYS:
+            print(f"  候选池行业成分(缺失或>{INDUSTRY_STALE_DAYS}天, 当前 {ind_last or '无'})...")
+            n = dm.update_industry_members()
+            print(f"  industry_member: {n} 行" if n else "  ⚠️ industry 失败(策略2 降级,不阻塞)")
+        if info.get("pool_universe") and store.get_meta("pool_prices_ready") == "1":
+            div_days = int((get_config().params.get("stock_pool", {}) or {})
+                           .get("prices", {}).get("dividend_refresh_days", 7))
+            div_last = store.get_meta("last_pool_dividend_update")  # YYYY-MM-DD
+            stale = div_last is None or (
+                datetime.now() - datetime.strptime(div_last, "%Y-%m-%d")).days > div_days
+            if stale:
+                print(f"  候选池分红明细(当前 {div_last or '无'})...")
+                res = dm.update_pool_dividends(info["pool_universe"])
+                print(f"  stock_dividend: +{sum(res.values())} 行")
 
-    # 9) candidate-pool prices (日更·大头 ~45-75min): gate=冷启动已 ready;只补 universe 内落后者。
-    #    放最后一步——失败/超时不遮蔽其余修复;增量游标次日自愈。
-    if store.get_meta("pool_prices_ready") == "1" and info.get("pool_universe"):
-        years = int((get_config().params.get("stock_pool", {}) or {})
-                    .get("prices", {}).get("history_years", 3))
-        stale_codes = [c for c in info["pool_universe"]
-                       if (store.last_date(c) or "") < (target or "9999-12-31")]
-        if stale_codes:
-            print(f"  候选池日线日更({len(stale_codes)}/{len(info['pool_universe'])} 只落后,"
-                  f"约 {len(stale_codes) * 1.2 / 60:.0f}-{len(stale_codes) * 2 / 60:.0f}min)...")
-            res = dm.update_stock_daily(stale_codes, history_years=years)
-            store.set_meta("last_pool_price_update", datetime.now().strftime("%Y-%m-%d"))
-            print(f"  候选池日线: +{sum(res.values())} 行")
-    elif store.get_meta("pool_prices_ready") != "1":
-        print("  候选池日线: 未冷启动(不阻塞) — python scripts/backfill_stock_pool.py --all")
+        # 9) candidate-pool prices (日更·大头 ~45-75min): gate=冷启动已 ready;只补 universe 内落后者。
+        #    放最后一步——失败/超时不遮蔽其余修复;增量游标次日自愈。
+        if store.get_meta("pool_prices_ready") == "1" and info.get("pool_universe"):
+            years = int((get_config().params.get("stock_pool", {}) or {})
+                        .get("prices", {}).get("history_years", 3))
+            stale_codes = [c for c in info["pool_universe"]
+                           if (store.last_date(c) or "") < (target or "9999-12-31")]
+            if stale_codes:
+                print(f"  候选池日线日更({len(stale_codes)}/{len(info['pool_universe'])} 只落后,"
+                      f"约 {len(stale_codes) * 1.2 / 60:.0f}-{len(stale_codes) * 2 / 60:.0f}min)...")
+                res = dm.update_stock_daily(stale_codes, history_years=years)
+                store.set_meta("last_pool_price_update", datetime.now().strftime("%Y-%m-%d"))
+                print(f"  候选池日线: +{sum(res.values())} 行")
+        elif store.get_meta("pool_prices_ready") != "1":
+            print("  候选池日线: 未冷启动(不阻塞) — python scripts/backfill_stock_pool.py --all")
 
     print("\n=== 补齐后复查 ===")
     report(conn, cfg, syms, store=store)

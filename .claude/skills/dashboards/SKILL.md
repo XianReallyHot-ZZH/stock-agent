@@ -1,6 +1,6 @@
 ---
 name: dashboards
-description: One-click refresh + generate + open all seven read-only diagnostic dashboards (ETF 行业研究 research_report.html / 指数择时 index_timing.html / 个股诊断 stock_diagnose.html / 宏观框架 macro_framework.html / 国内宏观 china_macro.html / 仓位管理 position.html / 候选个股池 stock_pool.html), then serve them from one combined shell page data/index.html (left-nav iframe switcher from scripts/dashboard_home.py). Auto-detects COLD-START (empty/thin DB → full backfill ~1hr, works on a fresh clone) vs WARM daily incremental refresh. Use when the user wants to update/refresh ALL dashboards at once, do a 盘前/周五全套看板 review, just cloned the repo and wants the dashboards running ("一键起看板 / fresh start"), or asks to "一键看板 / 刷新所有看板 / 把看板都更新一下并打开". Refreshes data, regenerates the 7 HTMLs, opens the combined shell page in the default browser.
+description: One-click refresh + generate + open all seven read-only diagnostic dashboards (ETF 行业研究 research_report.html / 指数择时 index_timing.html / 个股诊断 stock_diagnose.html / 宏观框架 macro_framework.html / 国内宏观 china_macro.html / 仓位管理 position.html / 候选个股池 stock_pool.html), then serve them from one combined shell page data/index.html (left-nav iframe switcher from scripts/dashboard_home.py). Auto-detects COLD-START (empty/thin DB → full backfill ~1hr, works on a fresh clone) vs WARM daily incremental refresh. Use when the user wants to update/refresh ALL dashboards at once, do a 盘前/周五全套看板 review, just cloned the repo and wants the dashboards running ("一键起看板 / fresh start"), or asks to "一键看板 / 刷新所有看板 / 把看板都更新一下并打开". Refreshes data, regenerates the 7 HTMLs, opens the combined shell page in the default browser. 候选个股池 stock_pool.html 的数据更新与生成已暂停 (2026-08-29, 等用户指令重启; 数据冻结在 08-27, 旧 HTML 仍可在壳页查看)——本 skill 现刷六个看板, 恢复时先 `dashboard_data_check.py --fix --pool` 补数据再 `stock_pool_report.py` 重渲染.
 ---
 
 # 七看板一键刷新 + 打开（统一入口 · 冷启动感知）
@@ -15,7 +15,7 @@ description: One-click refresh + generate + open all seven read-only diagnostic 
 | 宏观框架（因果链 利率→曲线→美元→金属→能源→权益 · 🥇黄金阶段定位器 · 微观紧缺） | `data/macro_framework.html` | （无，本 skill 覆盖） |
 | 国内宏观（货币信用 M2/M1/社融 · 利率与流动性 Shibor/FDR007/LPR/中债期限结构/OMO · 政策日历） | `data/china_macro.html` | `china-macro-dashboard` |
 | 仓位管理（估值档×预案对照·档位统计·切换事件·温度计非开关） | `data/position.html` | （无，本 skill 覆盖；数据腿复用 backfill_index.py，零新增回填） |
-| 候选个股池（覆盖池~2300 只筛选漏斗·六策略表：超卖/猛×深跌/修正动量/PEAD/变脸/双击） | `data/stock_pool.html` | （无，本 skill 覆盖；冷启动= backfill_stock_pool.py --all ~2-3.5h，此后日度增量已并入 dashboard_data_check --fix） |
+| 候选个股池（覆盖池~2300 只筛选漏斗·六策略表：超卖/猛×深跌/修正动量/PEAD/变脸/双击）⏸**数据更新已暂停(2026-08-29,等用户指令重启)** | `data/stock_pool.html`（冻结在 08-27，仍可看） | （无；恢复时 `--fix --pool` 补数据 + `stock_pool_report.py` 重渲染） |
 
 七看板还有一个**总入口壳页** `data/index.html`（`scripts/dashboard_home.py` 生成，左侧导航 + iframe 装载七看板，切换不重载/记住上次选择/as_of 新鲜度标注；无数据依赖，重跑秒级）。
 
@@ -64,8 +64,7 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_western_macro.py
 PYTHONIOENCODING=utf-8 python scripts/backfill_gold_micro.py
 # 宏观框架·经济日历（近7天已公布+未来45天排期·美国重要性≥2·数据真伪surprise+FOMC/CPI/非农催化剂）
 PYTHONIOENCODING=utf-8 python scripts/backfill_economic_calendar.py
-# 候选个股池（冷启动大头：spot→行业→覆盖池日线~2300只×3年(断点续跑)→分红；此后日度增量由 dashboard_data_check --fix 自动带）
-PYTHONIOENCODING=utf-8 python scripts/backfill_stock_pool.py --all
+# ⏸ 候选个股池：数据更新已暂停(2026-08-29,等用户指令重启)——冷启动腿 backfill_stock_pool.py --all 跳过不跑
 ```
 
 ### 1b. 日常增量（数据已存在 · 几分钟）
@@ -86,12 +85,12 @@ PYTHONIOENCODING=utf-8 python scripts/backfill_western_macro.py
 PYTHONIOENCODING=utf-8 python scripts/backfill_gold_micro.py
 # 宏观框架·经济日历（同冷启动：近7天已公布+未来45天排期·美国重要性≥2）
 PYTHONIOENCODING=utf-8 python scripts/backfill_economic_calendar.py
-# 候选个股池：日度腿(spot/价格增量/行业月度门/分红周度门)已并入 --fix 第7-9步（gate=pool_prices_ready，
-#   未冷启动只打印冷启动命令不阻塞）；首次需单独跑过 backfill_stock_pool.py --all
+# ⏸ 候选个股池：数据更新已暂停(2026-08-29,等用户指令重启)——--fix 默认跳过第7-9步(spot/行业·分红/日线
+#   增量)并打印暂停提示, 顺带省掉 ~45-75min 的日线大头；恢复时跑 `--fix --pool` 一次性补齐落后增量
 ```
 任一步失败不影响其余（各自独立）；所有 backfill 幂等，中断重跑即可。
 
-### 2. 生成七个 HTML
+### 2. 生成 HTML（当前六个 · 候选个股池暂停中不生成）
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/research_report.py        # 冷启动时已由 setup 渲染过,这里重跑无妨(秒级);纯可视化(无 LLM/无告警)
 PYTHONIOENCODING=utf-8 python scripts/index_timing_report.py    # 指数择时（10 section，深浅色可切）
@@ -99,7 +98,8 @@ PYTHONIOENCODING=utf-8 python scripts/stock_report.py           # 个股诊断�
 PYTHONIOENCODING=utf-8 python scripts/macro_framework_report.py --no-open # 宏观框架（总览表+🥇黄金阶段定位器+微观紧缺+因果链分节点图，纯数据无LLM）；--no-open 必须：脚本默认会自动开浏览器，不加会与第3步重复弹两次
 PYTHONIOENCODING=utf-8 python scripts/china_macro_report.py --no-open   # 国内宏观（七 section：①货币信用 ②利率与流动性 ③政策日历 ④社融nowcast ⑤会议→M2回放 ⑥通胀 ⑦实体；纯数据无LLM；--no-open 同上）
 PYTHONIOENCODING=utf-8 python scripts/position_report.py        # 仓位管理（估值档×预案对照；数据腿=backfill_index.py 已回填的 index_pe/pb，无新回填；预案表在 config/params.yaml position_plan）
-PYTHONIOENCODING=utf-8 python scripts/stock_pool_report.py      # 候选个股池（六表；首次自动带 stage-2 候选腿周度刷新~5-8min，--no-stage2 跳过）
+# ⏸ 候选个股池 data/stock_pool.html 暂停生成(数据冻结在 08-27,旧 HTML 仍可看)；重启时先 --fix --pool 补数据再跑:
+# PYTHONIOENCODING=utf-8 python scripts/stock_pool_report.py    # （六表；首次自动带 stage-2 候选腿周度刷新~5-8min，--no-stage2 跳过）
 ```
 要推送信号提醒：指数/个股看板加 `--push-alerts`（触发时推微信/飞书）；研究看板的 `--push-alerts` 已退役（仅可视化），传了也是 no-op；候选池 v1 无推送（看板 only）。
 
@@ -117,7 +117,7 @@ PYTHONIOENCODING=utf-8 python scripts/dashboard_home.py   # 生成壳页 + 打�
   - 个股：观察池触发提醒数 + 周期 tab 商品面板（哪些商品向上/背离/向下）+ 埋伏候选（门槛线≥30 上下）+ 任何异常（避坑/戴维斯/预告拐点/M1-M2 商品背离）
   - 宏观框架：🥇黄金阶段定位器（阶段 + bull_intact 底层 + 置信度 + 操作建议）+ 利率节点（实际利率/期限溢价方向）+ 微观（COMEX库存/CFTC投机是否泡沫·商业是否逼空/央行购金节奏）+ 📰经济日历（近7天美国高重要性数据公布vs预期surprise + 未来FOMC/CPI/非农催化剂时点）
   - 仓位：当前估值档（+进入日/在档天数）+ 该档预案权益%区间 + 最近一次档位切换 + 环境注记（⑨恐贪/⑧地量/⑩关键位）
-  - 候选池：universe 规模/行业映射覆盖 + ①偏离超卖触发数（护栏拦下几个）+ ②猛×深跌资格数（窗口态）+ 修正动量冷启动 X/4 + PEAD 超预期条数 + 变脸↑/↓ 数 + 读图说明里两份 validator 实证结论（可能显示「无 edge」——那是诚实非故障）
+  - 候选池：⏸ 已暂停(2026-08-29,数据冻结在 08-27)——不汇报、不刷新；用户说重启后恢复（--fix --pool 补数据 + 重渲染 + 恢复本行汇报）
 - 本轮数据问题（某 ETF 缺失、某股 PE 稀疏、legulegu 限流需重跑等）
 
 ## 何时用统一 skill vs 单看板 skill
