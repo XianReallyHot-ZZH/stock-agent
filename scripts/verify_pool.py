@@ -37,7 +37,7 @@ def main():
     for s in (cfg.benchmark_symbol, cfg.risk_off_symbol):
         if s not in seen:
             seen.add(s); order.append(s)
-    for s in cfg.rotation_symbols():
+    for s in cfg.tracked_symbols():  # 含 research_only(校验器也查观察标的)
         if s not in seen:
             seen.add(s); order.append(s)
 

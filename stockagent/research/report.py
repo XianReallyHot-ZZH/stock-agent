@@ -723,15 +723,15 @@ def _earnings_alert_banner(snapshots: dict, meta: dict, as_of: str,
 # 板块资金流向 section（份额视角 · research/flow.py 算好的 payload 驱动，本模块不算数）
 # ---------------------------------------------------------------------------
 
-# 行业组色环（25 组行业级分组；浅色底可辨；深色主题下线条色不变，仅纸底/轴色切换）
+# 行业组色环（26 组行业级分组·末位金色给黄金组；浅色底可辨；深色主题下线条色不变，仅纸底/轴色切换）
 _FLOW_COLORS = ["#2563eb", "#ea580c", "#16a34a", "#9333ea", "#0891b2", "#dc2626", "#d97706",
                 "#4f46e5", "#65a30d", "#db2777", "#0d9488", "#7c3aed", "#ca8a04", "#059669",
                 "#b91c1c", "#1d4ed8", "#f472b6", "#14b8a6", "#8b5cf6", "#a16207", "#4d7c0f",
-                "#9f1239", "#0f766e", "#6d28d9", "#be123c"]
+                "#9f1239", "#0f766e", "#6d28d9", "#be123c", "#d69e2e"]
 
-# 25 条线的 unified 悬浮框（全组横截面对比）：模板只给数值（unified 自动带
+# 26 条线的 unified 悬浮框（全组横截面对比）：模板只给数值（unified 自动带
 # 顶部日期 + 每行彩色组名——模板里再写日期/组名会每行重复、框高翻倍被裁），
-# 字号压 9 → 单行×25 ≈ 410px；图高 600（有效绘图区 ≈450px）留足余量
+# 字号压 9 → 单行×26 ≈ 428px；图高 600（有效绘图区 ≈450px）仍在余量内
 _FLOW_HEIGHT_LINES = 600
 
 
@@ -785,7 +785,7 @@ def flow_lines_figure(flow: dict) -> go.Figure:
     # 模板里写日期会每行重复、行高翻倍被裁，框顶格式由 xaxis.hoverformat 控）
     fig.update_layout(hoverlabel=dict(font=dict(size=9)))
     # 图内 legend 移除：tile 的组 chips 即图例（带色点+点击开关+双击独显，见 _PAGE_JS）
-    # —— 省掉 25 项换行图例的 2-3 行空间，绘图区更高、悬浮框也更从容
+    # —— 省掉 26 项换行图例的 2-3 行空间，绘图区更高、悬浮框也更从容
     fig.update_layout(showlegend=False, margin=dict(t=64, l=54, r=54, b=28))
     # 默认视图 1 年（此 plotly 版本 rangeselector 无 active 属性 → 显式设 x 初始
     # range；按钮高亮不跟随初始 range 属版本限制，全历史走底部滑块/「全部」按钮）

@@ -51,7 +51,25 @@ class Config:
         return self.params["regime"]["risk_off_symbol"]
 
     def rotation_symbols(self) -> list[str]:
-        """Unique, ordered rotation-pool symbols (deduped, preserves first occurrence)."""
+        """Unique, ordered rotation-pool symbols (deduped, preserves first occurrence).
+
+        Excludes rows tagged research_only — this is the *engine* universe
+        (backtest / live signals / morning report). Pure-tracking observers
+        (e.g. 518880 黄金ETF, T+0) must not enter it."""
+        seen, out = set(), []
+        for row in self.pool.get("rotation_pool", []):
+            if row.get("research_only"):
+                continue
+            s = str(row["symbol"])
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+        return out
+
+    def tracked_symbols(self) -> list[str]:
+        """All rotation-pool symbols incl. research_only rows — the research-dashboard
+        universe. Superset of rotation_symbols(); data legs (prices/shares/nav)
+        and the research report iterate this."""
         seen, out = set(), []
         for row in self.pool.get("rotation_pool", []):
             s = str(row["symbol"])
@@ -76,8 +94,8 @@ class Config:
         return meta
 
     def all_symbols(self) -> list[str]:
-        """All symbols the system must track (rotation + benchmark + risk-off)."""
-        s = list(dict.fromkeys(self.rotation_symbols()))
+        """All symbols the system must track (rotation incl. research_only + benchmark + risk-off)."""
+        s = list(dict.fromkeys(self.tracked_symbols()))
         for extra in (self.benchmark_symbol, self.risk_off_symbol):
             if extra not in s:
                 s.append(extra)

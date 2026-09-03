@@ -281,7 +281,7 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
                        as_of: str | None) -> dict | None:
     """组装「板块资金流向」payload（research/flow.py 纯函数）。
 
-    组聚合用 etf_pool.yaml 的 group 字段（9 行业组，插入序=pool 顺序即规范序）；
+    组聚合用 etf_pool.yaml 的 group 字段（动态 N 组·2026-09 起 26 组，插入序=pool 顺序即规范序）；
     旧池无 group → None（render 端 section 静默省略，优雅降级）。阈值读
     params.yaml research.flow，缺省走 flow.py 内置默认（旧 params 不崩）。
     """
@@ -393,7 +393,7 @@ def main():
         do_backfill(dm, args.backfill, args.start, end, args.step, args.sleep, args.source)
         return
 
-    symbols = args.symbols or cfg.rotation_symbols()
+    symbols = args.symbols or cfg.tracked_symbols()  # 含 research_only(如黄金518880);引擎宇宙=rotation_symbols()不含
     as_of = args.as_of
     snapshots, series_map, meta = build_snapshots(store, cfg, symbols, as_of)
 

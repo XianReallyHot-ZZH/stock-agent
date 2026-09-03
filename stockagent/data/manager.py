@@ -108,7 +108,7 @@ class DataManager:
         Sector name comes from config.symbol_meta()[sym]['sector'].
         """
         meta = self.config.symbol_meta()
-        syms = symbols or self.config.rotation_symbols()
+        syms = symbols or self.config.tracked_symbols()  # 含 research_only(数据腿覆盖观察标的)
         results: dict[str, int] = {}
         for i, sym in enumerate(syms):
             sector = meta.get(sym, {}).get("sector")
@@ -264,7 +264,7 @@ class DataManager:
 
     def update_etf_nav(self, symbols: Optional[list[str]] = None) -> dict:
         """Daily incremental NAV per ETF. Returns {symbol: rows_added}."""
-        syms = symbols or self.config.rotation_symbols()
+        syms = symbols or self.config.tracked_symbols()  # 含 research_only(研究看板标的也要净值)
         results: dict[str, int] = {}
         end = fetcher.today_str().replace("-", "")
         for i, sym in enumerate(syms):
@@ -754,7 +754,7 @@ class DataManager:
     def update_etf_dividend(self, symbols: Optional[list[str]] = None) -> dict:
         """Fetch + store ETF 分红历史(sina)。覆盖稀疏——部分 ETF 无分红数据,正常跳过(0 行)。
         价值型股息率 = 近 12 月单次分红之和(累计差分) ÷ 当前价格。"""
-        syms = symbols or self.config.rotation_symbols()
+        syms = symbols or self.config.tracked_symbols()  # 含 research_only
         results: dict[str, int] = {}
         for i, sym in enumerate(syms):
             if i > 0:

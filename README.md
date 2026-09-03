@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Tests](https://img.shields.io/badge/tests-942%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-958%20passing-brightgreen.svg)
 ![Data](https://img.shields.io/badge/data-AkShare-orange.svg)
 ![Status](https://img.shields.io/badge/status-shadow%20only-lightgrey.svg)
 
@@ -46,7 +46,7 @@
 - **仓位管理看板**：估值档 × 预案表对照器——沪深300 PE+PB 10 年滚动分位四档逐日回放（2005 起，与指数看板 ④ 同口径）+ 档位统计（历史占比/前向 1y·3y 收益中位/年化波动）+ 切换事件台账 + 环境注记（恐贪/地量/关键位）；预案表 = `params.yaml position_plan` 用户自定义的档位→权益仓位%区间，看板只对照「现在在哪格」，温度计非开关·不喂引擎。
 - **候选个股池看板**：研报覆盖池（~2300 只·consensus∩非ST）的**筛选漏斗**——六张策略表：①偏离超卖复合分（自身百分位触发+护栏+企稳，防飞刀）②业绩预期猛×深跌（周期=商品驱动+g确认 / 成长=三腿；披露窗口A全类型+B仅周期）③一致预期修正动量（个股版 E4）④PEAD 预告超预期（point-in-time 双腿无前视）⑤业绩变脸监测（跳档/趋势破位/连亏/拐头，陈老师方法论系统化）⑥戴维斯双击候选（stage-2 按需腿）；raw+分红运行时前复权防除息假极值；配 event-study 验证器（结论含无 edge 也注入读图说明）。
 - **自律度对账**：记录目标持仓 vs 实际执行，量化自己的纪律。
-- **纯函数 + 配置驱动 + 全测试覆盖**（942 个 pytest），回测与实盘共用同一引擎函数。
+- **纯函数 + 配置驱动 + 全测试覆盖**（958 个 pytest），回测与实盘共用同一引擎函数。
 
 ---
 
@@ -132,7 +132,7 @@ python scripts/backfill_economic_calendar.py           # 经济日历(美国高�
 ### 验证安装
 
 ```bash
-python -m pytest tests/ -q          # 942 个测试全过即环境 OK
+python -m pytest tests/ -q          # 958 个测试全过即环境 OK
 ```
 
 ---
@@ -161,7 +161,7 @@ rotation:
 
 ### 2. ETF 行业研究·择时跟踪看板
 
-每只 ETF 跟踪 ① 净值-MA60 偏离度（当前偏离 + 历史百分位分位 + 第几极值）② 份额-净值剪刀差分化 ③ 筹码方向（份额申赎 5/10/20/30/60 日投票 → 偏离×筹码四象限提醒）④ 板块资金流向（行业级 25 组净申赎 + 增量vs存量分解 + 📡申赎异动横幅：窗口 1/3/6/12 月可切（默认 1 月）+ 今日尺度/当时口径双口径（当时=point-in-time·长窗⊇今日尺度）+ ≥3月窗按ETF汇总/🌊连环潮汐行 + 点条目下钻日度申赎图带▲▼事件标记）⑤ **行业业绩预期**（业绩预告 bull/bear 广度 + 一致预期增速 g=指数官方成分权重×东财研报EPS 次年/当年−1·研报数≥3·覆盖权重门40% + 明细面板「⛓业绩预期链」三环披露时钟（预告→快报→正式报+快报落点±10pp）+ 4周一致预期修正动量（周度快照差分·冷启动4周·A5下修告警只提醒））。纯跟踪、不标买卖点、人决策。顶部「偏离度极端区」横幅（超卖绿/超买红）+ 价值/成长/周期 真 tab 分页排名（记住上次选择·表头点击排序含预期g）+ 逐标的明细折叠面板（默认收起·置顶展开·摘要 chips·下拉快速跳转·回顶部；懒渲染、rangeslider + 快捷窗口按钮），深浅色可切。置顶 ETF 改 `config/params.yaml` 的 `research.pinned_etfs`。
+每只 ETF 跟踪 ① 净值-MA60 偏离度（当前偏离 + 历史百分位分位 + 第几极值）② 份额-净值剪刀差分化 ③ 筹码方向（份额申赎 5/10/20/30/60 日投票 → 偏离×筹码四象限提醒）④ 板块资金流向（行业级 26 组净申赎 + 增量vs存量分解 + 📡申赎异动横幅：窗口 1/3/6/12 月可切（默认 1 月）+ 今日尺度/当时口径双口径（当时=point-in-time·长窗⊇今日尺度）+ ≥3月窗按ETF汇总/🌊连环潮汐行 + 点条目下钻日度申赎图带▲▼事件标记）⑤ **行业业绩预期**（业绩预告 bull/bear 广度 + 一致预期增速 g=指数官方成分权重×东财研报EPS 次年/当年−1·研报数≥3·覆盖权重门40% + 明细面板「⛓业绩预期链」三环披露时钟（预告→快报→正式报+快报落点±10pp）+ 4周一致预期修正动量（周度快照差分·冷启动4周·A5下修告警只提醒））。纯跟踪、不标买卖点、人决策。顶部「偏离度极端区」横幅（超卖绿/超买红）+ 价值/成长/周期 真 tab 分页排名（记住上次选择·表头点击排序含预期g）+ 逐标的明细折叠面板（默认收起·置顶展开·摘要 chips·下拉快速跳转·回顶部；懒渲染、rangeslider + 快捷窗口按钮），深浅色可切。置顶 ETF 改 `config/params.yaml` 的 `research.pinned_etfs`。
 
 ```bash
 python scripts/research_report.py             # 生成 data/research_report.html（纯可视化，无 LLM/无告警推送）
@@ -243,7 +243,7 @@ python scripts/china_macro_report.py            # 生成 data/china_macro.html�
 | 文件 | 作用 |
 |---|---|
 | `config/params.yaml` | 策略参数（K、动量窗口、止损、择时、各信号参数、三类分类阈值） |
-| `config/etf_pool.yaml` | ETF 池（36 只：行业映射 29 + 宽基/跨境/风格卫星 7，带 `style` 标签 + `index_code` 跟踪指数码表（业绩预期成分底座）+ 行业组 `group`；黄金已移除，由宏观框架看板跟踪） |
+| `config/etf_pool.yaml` | ETF 池（36 只可交易 + 1 只 research-only 跟踪：行业映射 29 + 宽基/跨境/风格卫星 7，带 `style` 标签 + `index_code` 跟踪指数码表（业绩预期成分底座）+ 行业组 `group`；`research_only: true` 行只上研究看板不进引擎——黄金 518880 以此方式跟踪，宏观框架看板定位器仍在） |
 | `.env` | LLM key + 推送 webhook（由 `.env.example` 复制，**gitignored**） |
 
 **LLM 可选**：留空则报告走模板回退。支持 DeepSeek / 智谱 GLM / OpenAI（按填的 `*_API_KEY` 自动识别，可用 `LLM_PROVIDER` 强制）。

@@ -6,11 +6,17 @@
 # 主类型 style 驱动主指标路径;次类型 style_alt 仅附加展示(软分类)。
 # 依据 PRD §4.3 草案 + 课程 S09-11。模糊标的(食品饮料/医药/家电)走主+次。
 #
-# group (板块资金流向聚合, 2026-08): 行业级分组 25 组——每个行业独立、只合并真正相近的
+# group (板块资金流向聚合, 2026-08): 行业级分组 26 组——每个行业独立、只合并真正相近的
 # 行业（跨境与大A分开：恒生医疗/纳指各自独立、港股科技=恒科+中概；通信与传媒分开；
-# 有色与煤炭分开（商品周期不同源）；新能源=电力设备同族；中游材料=钢铁+建材+化工）。
+# 有色与煤炭分开（商品周期不同源）；新能源=电力设备同族；中游材料=钢铁+建材+化工；
+# 黄金=单成员组·research_only·2026-09 加入）。
 # 仅驱动 research 看板「板块资金流向」section 的份额净申赎聚合(research/flow.py)，
 # 不参与交易引擎。
+#
+# research_only (2026-09): 该 ETF 只上研究看板、不进交易引擎——rotation_symbols() 会
+# 过滤掉这类行（引擎/回测/晨报宇宙不含它），tracked_symbols()/all_symbols() 包含
+# （研究看板标的清单 + 价格/份额/净值数据腿覆盖它）。用途：纯跟踪观察标的（如黄金
+# T+0 品种，与引擎 T+1 假设不合）。缺省（不写）= 可交易，行为不变。
 #
 # index_code / index_expect (E1 成分股底座, 2026-08): 跟踪指数代码(中证体系) + 名称哨兵关键词。
 # 用途: index_stock_cons_weight_csindex 拉官方全成分+权重(月度快照) → index_constituents 表 →
@@ -79,3 +85,5 @@ rotation_pool:
   - {symbol: "159941", name: "纳指ETF",     sector: "纳指",     group: "纳指", style: "growth", style_alt: []}  # 美股源+汇率+ADR,彻底放弃(调研§3.6)
   # 防御/收益（策略宽基，无单一行业，不走估值因子）
   - {symbol: "512890", name: "红利低波ETF", sector: "红利",     group: "红利", style: "value",  style_alt: [], index_code: "H30269", index_expect: "红利低波"}
+  # 商品（research-only 跟踪，不进引擎——见顶部 research_only 说明）
+  - {symbol: "518880", name: "黄金ETF",     sector: "黄金",     group: "黄金", style: "cyclic", style_alt: [], research_only: true}  # 华安·全市场最大商品ETF(~1100亿);T+0品种(引擎假设T+1,故不进宇宙);无业绩成分(不写index_code→预期列降级);2026-09 回归=研究看板跟踪专用(201d9f7 曾整体移除),宏观框架看板另有🥇黄金定位器

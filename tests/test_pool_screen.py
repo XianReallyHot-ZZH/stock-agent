@@ -11,8 +11,12 @@ from stockagent.data.store import Store
 from stockagent.pool.screen import build_pool_snapshot
 
 
+_ASOF = "2026-08-15"  # 冻结日历:种子数据与 snapshot 的 asof 同锚——period/窗口A-B 断言
+                     # 不随真实墙钟跨季翻转(2026-09-01 起 current_period→20260930 曾炸)
+
+
 def _now() -> datetime:
-    return datetime.now()
+    return datetime.strptime(_ASOF, "%Y-%m-%d")
 
 
 def _bdate(n: int, end=None) -> list[str]:
@@ -79,7 +83,7 @@ def _store_seeded() -> Store:
 
 
 def test_full_pipeline_assembles():
-    snap = build_pool_snapshot(_store_seeded())
+    snap = build_pool_snapshot(_store_seeded(), asof=_ASOF)
     # universe: 2 只全通过
     assert snap["universe_stats"]["n"] == 2
     assert snap["universe_stats"]["n_cyclic"] == 1 and snap["universe_stats"]["n_typed"] == 2

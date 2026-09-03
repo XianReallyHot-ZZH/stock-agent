@@ -203,7 +203,7 @@ def main():
     cfg = get_config()
     store = Store(cfg.db_path)
     dm = DataManager(store=store, config=cfg)
-    syms = args.symbols or cfg.rotation_symbols()
+    syms = args.symbols or cfg.tracked_symbols()  # 含 research_only(如黄金518880)——研究看板数据新鲜度全覆盖
 
     conn = sqlite3.connect(str(cfg.db_path))
     print("=== 数据新鲜度检查 ===")

@@ -93,7 +93,7 @@ def main():
     cfg = get_config()
     store = Store(cfg.db_path)
     meta = cfg.symbol_meta()
-    symbols = args.symbols or cfg.rotation_symbols()
+    symbols = args.symbols or cfg.tracked_symbols()  # 含 research_only 观察标的
 
     plots = []
     for sym in symbols:
