@@ -21,7 +21,10 @@ def lgb_monthly_series(detail: pd.DataFrame, amt_col: str = "actual_amt") -> pd.
     if "issue_date" not in detail.columns:
         return pd.Series(dtype=float)
     s = pd.to_numeric(detail[amt_col], errors="coerce")
-    s.index = detail["issue_date"].astype(str).str[:7]
+    ym = detail["issue_date"].astype(str).str[:7]
+    keep = ym.str.fullmatch(r"\d{4}-\d{2}", na=False)   # issue_date 缺失(None/NaN)→桶 'None'/'nan',剔除
+    s, ym = s[keep], ym[keep]
+    s.index = ym
     return s.dropna().groupby(level=0).sum().sort_index()
 
 

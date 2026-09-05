@@ -1,6 +1,7 @@
 """Tests for stock_report HTML renderer (Phase 2 交付通道)。
 No network — synthetic diagnose dicts only(实盘看板另跑 stock_report.py 验)。"""
 import math
+import re
 
 import pandas as pd
 
@@ -208,16 +209,135 @@ def test_render_commodity_panel_and_modal_7th():
     assert h2.count('class="modal-chart"') == 6
 
 
+def test_commodity_chart_enlarge_modal():
+    """点击小图 → comm-modal 放大视图:客户端复用 COMM 数据改样式,放大后带 rangeslider+快捷窗。
+    守卫两处易碎点:①放大容器不得带 class="modal-chart"(否则被个股模态 purge/隐藏成零尺寸);
+    ②COMM 数据只传一份(放大=改样式不重复传图,JSON 里数据数组不翻倍)。"""
+    idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    series = pd.Series([100.0 + i * 0.5 for i in range(300)], index=idx, dtype=float)
+
+    class _ComStore(_StubStore):
+        def get_commodity_series(self, variety):
+            return series
+
+    h = srep.render({"002466": _diag()}, [], as_of="2026-07-22",
+                    names={"002466": "天齐"}, store=_ComStore())
+    # 小图点击可放大 + 放大模态存在 + 交互函数齐备
+    assert 'onclick="openCommChart(0)"' in h
+    assert 'id="comm-modal"' in h and "closeCommChart" in h
+    # 放大视图的横轴伸缩:rangeslider 拖拽 + 五档快捷窗(与个股叠加图 _RANGE_BUTTONS 同档)
+    assert "rangeslider" in h and "rangeselector" in h
+    assert "'3年'" in h and "'全部'" in h
+    # 放大容器不带 modal-chart 类(个股模态 openChart 会对全部 .modal-chart purge/隐藏)
+    m = re.search(r'<div id="comm-modal-chart"[^>]*>', h)
+    assert m and 'class=' not in m.group(0)
+    # 数据只传一份:COMM 数组 1 个,放大不复制(无 COMM2/大图数组)
+    assert h.count("var COMM=") == 1 and "COMM2" not in h
+    # 关闭后 purge 释放 + Esc/遮罩关闭绑定
+    assert "Plotly.purge(document.getElementById('comm-modal-chart'))" in h
+    assert "e.target===ov" in h
+    # 放大视图下行=偏离度子图:前端从价格/MA60 两条 trace 派生(y2 轴),排名数字服务端随 COMM_DEV 下发
+    assert "COMM_DEV=" in h and "yaxis2" in h and "偏离度" in h
+    assert "第' + D.rank_high + '高 / 第' + D.rank_low + '低" in h
+    # 历史极值 Top-K 在发生位置打排名标注(第几高/第几低;极值日==当前日跳过,现在点已含排名语义)
+    assert '"highs"' in h and '"lows"' in h
+    assert "'第' + e.r + (hi ? '高 +' : '低 ')" in h
+    assert "triangle-up" in h and "triangle-down" in h
+    assert "lastDate.indexOf(e.d) === 0" in h
+    # 双行共享横轴结构守卫:底行 x2 是主控(挂滑块+快捷窗),顶行 x matches 跟随。
+    # 两个已知坑:①单 x 轴锚顶行 y 底会把下行带让给轴标签+滑块,偏离度被盖住;
+    # ②matches 放在挂 rangeselector 的轴上时快捷窗按钮不渲染(plotly 行为)
+    assert "xaxis: 'x2'" in h and "xa.matches = 'x2'" in h and "anchor: 'y2'" in h
+    assert "rangeselector: {x: 0" in h and "'3年'" in h and "'全部'" in h
+    # COMM 数值必须是普通 JSON 数组(to_json 的 {dtype,bdata} base64 块 Plotly 能画但 JS 读不到逐点值,
+    # 偏离度派生会得到全 null → 整行不渲染;回归守卫见 2026-09 修复)
+    i0, i1 = h.index("var COMM=["), h.index("var COMM_NAMES=")
+    assert '"bdata"' not in h[i0:i1]
+    assert '"y": [100.0' in h[i0:i1]   # 首点 100+0*0.5(上升序列 stub,价格 trace 展开为可读数组)
+    # store=None:整面板(含放大模态)静默省略(向后兼容无图表产物路径)
+    h2 = srep.render({"600519": _diag()}, [], as_of="2026-07-22", names={"600519": "茅台"})
+    assert "var COMM=" not in h2 and "id=\"comm-modal\"" not in h2
+
+
+def test_commodity_dev_stats_rank():
+    """偏离度统计:排名=全历史序数(1=最极端);MA 口径与 commodity_price_figure 的 MA60 同源;
+    highs/lows=历史 Top-K 极值点(放大视图打「第几高/第几低」标注),并列值按时间先后稳定排序。"""
+    from stockagent.tracker import stock_figures as sfig
+
+    idx = pd.date_range("2024-01-01", periods=101, freq="B").strftime("%Y-%m-%d")
+    # 末端尖峰:当前偏离=历史最偏高 → 第1高/最后1低(尖峰日自身进 MA60 分母:MA=(59×100+140)/60)
+    up = pd.Series([100.0] * 100 + [140.0], index=idx)
+    st = sfig.commodity_dev_stats(up)
+    assert st["rank_high"] == 1 and st["rank_low"] == st["n"]
+    expect = 140 / ((59 * 100 + 140) / 60) - 1
+    assert abs(st["cur"] - expect) < 1e-9
+    assert st["max"] == st["highs"][0]["v"] and abs(st["highs"][0]["v"] - expect) < 1e-9
+    assert st["min"] == 0.0 and st["lows"][0]["v"] == 0.0
+    # 分位(与 deviation_extremes 同口径):101 根里有效偏离 42 个,尖峰前全 0 → pct=41/42
+    assert abs(st["pct"] - 41 / 42) < 1e-9
+    # Top-10:第1高=尖峰日;并列 0 值按时间先后稳定排序(idx[59] 是首个有效偏离日)
+    assert st["highs"][0]["d"] == idx[-1] and st["highs"][0]["r"] == 1
+    assert st["highs"][1] == {"r": 2, "v": 0.0, "d": idx[59]}
+    assert [e["d"] for e in st["highs"][1:]] == [idx[59 + k] for k in range(9)]
+    assert [e["d"] for e in st["lows"]] == [idx[59 + k] for k in range(10)]
+    assert [e["r"] for e in st["highs"]] == list(range(1, 11))
+    assert [e["r"] for e in st["lows"]] == list(range(1, 11))
+    # 快腿(2026-09 提速改版):20日动量 + 60日新高/新低(价格口径)
+    assert abs(st["momentum20"] - 0.4) < 1e-9 and st["new_high60"] is True and st["new_low60"] is False
+    # 末端跳水:第1低/最后1高
+    dn = pd.Series([100.0] * 100 + [60.0], index=idx)
+    st2 = sfig.commodity_dev_stats(dn)
+    assert st2["rank_low"] == 1 and st2["rank_high"] == st2["n"]
+    assert st2["lows"][0]["d"] == idx[-1] and st2["highs"][0]["d"] == idx[59]
+    assert st2["pct"] == 0.0                                   # 跳水日=历史最偏低(分位 0)
+    assert abs(st2["momentum20"] + 0.4) < 1e-9 and st2["new_low60"] is True and st2["new_high60"] is False
+    # 数据不足(偏离值 <20 期)→ {}(诚实缺省,前端不加偏离度行)
+    assert sfig.commodity_dev_stats(pd.Series([100.0] * 50)) == {}
+    assert sfig.commodity_dev_stats(None) == {}
+
+
+def test_commodity_extreme_banner():
+    """🚦 商品异动雷达(周期 tab 顶部,双段语义):⚠异动提醒=快腿(动量/突破,研究排队·非买入信号)、
+    ⛔极端警戒=慢腿(分位≥95% 超买/≤5% 超卖);同品种可双段出现;空数据走常态占位;store=None 省略。"""
+    from stockagent.data import fetcher
+
+    idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    # 末端尖峰:当前偏离≈历史最偏高(分位≈99.6%≥95%)→ 全部品种判超买(红)
+    series = pd.Series([100.0] * 299 + [140.0], index=idx, dtype=float)
+
+    class _ComStore(_StubStore):
+        def get_commodity_series(self, variety):
+            return series
+
+    h = srep.render({"002466": _diag()}, [], as_of="2026-07-22", names={"002466": "天齐"}, store=_ComStore())
+    assert "商品异动雷达" in h
+    # 双通道:尖峰序列 → 分位≈99.6% 超买 + 20日动量+40% ≥10% 动量 + 60日新高突破,全部 17 品种触发
+    assert "动量17 · 突破17 | 超买17 · 超卖0" in h
+    # 双段语义分离:同品种两段都出现(既在动又在伸展)
+    assert "异动提醒" in h and "极端警戒" in h
+    assert "dev-chip mv" in h and "dev-chip ob" in h
+    assert "20日+40% · 动量" in h and "60日新高" in h
+    assert "排进研究队列" in h and "追高风险" in h
+    assert "观察非信号" in h                      # 温度计非开关口径注记
+    # 空序列:横幅常驻占位(常态区间)
+    h2 = srep.render({"002466": _diag()}, [], as_of="2026-07-22", names={"002466": "天齐"}, store=_StubStore())
+    assert "商品异动雷达" in h2 and "常态区间" in h2
+    # store=None:横幅省略(向后兼容无图表路径)
+    h3 = srep.render({"002466": _diag()}, [], as_of="2026-07-22", names={"002466": "天齐"})
+    assert "商品异动雷达" not in h3
+
+
 def test_commodity_panel_covers_all_varieties():
-    """面板品种清单与 fetcher.COMMODITY_CODES 同源(单一数据源);新增 8 种齐备,全 13 种渲染入面板。"""
+    """面板品种清单与 fetcher.COMMODITY_CODES 同源(单一数据源);2026-09 扩至 17 种(化肥/农业/气),全 17 种渲染入面板。"""
     from stockagent.data import fetcher
     from stockagent.data.manager import DataManager
 
     # 单一数据源:manager 列表派生自 fetcher(等长同序)
     assert DataManager.COMMODITY_VARIETIES == list(fetcher.COMMODITY_CODES.keys())
-    # 新增 8 种齐备(回归守卫:防止品种被误删)
-    assert set(["铝", "锌", "铁矿石", "焦煤", "白银", "玻璃", "纯碱", "生猪"]) <= set(fetcher.COMMODITY_CODES)
-    assert len(fetcher.COMMODITY_CODES) == 13
+    # 品种齐备(回归守卫:防止品种被误删;含 2026-09 新增 LPG/尿素/豆粕/玉米)
+    assert set(["铝", "锌", "铁矿石", "焦煤", "白银", "玻璃", "纯碱", "生猪",
+                "LPG", "尿素", "豆粕", "玉米"]) <= set(fetcher.COMMODITY_CODES)
+    assert len(fetcher.COMMODITY_CODES) == 17
 
     # store 给每个品种返回真实序列(300 点上升 → 判定"向上")→ 面板应渲染全部品种名
     idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
@@ -229,5 +349,7 @@ def test_commodity_panel_covers_all_varieties():
 
     h = srep.render({"002466": _diag()}, [], as_of="2026-07-22",
                     names={"002466": "天齐"}, store=_ComStore())
-    for v in fetcher.COMMODITY_CODES:                # 全 13 个品种名都出现在面板
+    for v in fetcher.COMMODITY_CODES:                # 全 17 个品种名都出现在面板
         assert v in h, f"面板缺品种 {v}"
+    # 偏离分位列:表头 + 极端着色(线性上升序列末端偏离=历史最低 → 绿≤5%)
+    assert "偏离分位" in h and "color:#15803d" in h

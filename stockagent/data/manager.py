@@ -605,6 +605,22 @@ class DataManager:
             self.store.set_meta("last_commodity_update", fetcher.today_str())
         return results
 
+    def update_commodity_spot(self, varieties: Optional[list[str]] = None) -> dict:
+        """Fetch + store 商品实时快照(盘前可调:price=昨夜夜盘收盘价)。看板隔夜变动列数据腿。
+        与最近日收盘相除=隔夜变动%(在 stock_report 渲染层算,这里只存快照)。"""
+        varieties = varieties or self.COMMODITY_VARIETIES
+        try:
+            df = fetcher.fetch_commodity_spot(varieties)
+        except Exception as e:  # noqa: BLE001
+            log.warning("commodity_spot failed: %s", str(e)[:120])
+            return {v: 0 for v in varieties}
+        today = fetcher.today_str()
+        rows = [(r["variety"], today, r["price"], r["quote_time"]) for _, r in df.iterrows()]
+        n = self.store.upsert_commodity_spot(rows, source="akshare_futures_spot")
+        self.store.set_meta("last_commodity_spot_update", today)
+        log.info("commodity_spot: %d varieties snapshotted", n)
+        return {r["variety"]: 1 for _, r in df.iterrows()}
+
     def update_market_pb(self) -> int:
         """Fetch + store whole-A-market PB history + percentiles (legulegu). Single series."""
         try:

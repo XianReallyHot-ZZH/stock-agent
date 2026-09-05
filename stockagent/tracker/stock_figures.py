@@ -305,6 +305,45 @@ def commodity_price_figure(variety: str, series: pd.Series) -> go.Figure:
     return fig
 
 
+def commodity_dev_stats(series: pd.Series, period: int = 60, top_k: int = 10) -> dict:
+    """商品偏离度统计(放大视图下行标注用,纯):当前偏离 + 历史极值 Top-K + 当前第几高/第几低。
+
+    MA 口径与 commodity_price_figure 的 MA60 同源(ti.ma_series)——图与标注必为同一条线。
+    highs/lows = 历史 Top-K 偏离点 [{r:排名(1=最极端), v:偏离值, d:发生日}](放大视图在
+    发生位置打点标「第几高/第几低」);并列值按时间先后稳定排序。偏离度序列本身由前端
+    从已下发的价格/MA60 两条 trace 逐点相除派生(零重复传参),本函数只下发小标量数组。
+    偏离值 <20 期(与 deviation_extremes 同门槛)或非有限值 → {}。"""
+    if series is None or len(series) <= period:
+        return {}
+    dev = ti.deviation_series(series.astype(float), period).dropna()
+    if len(dev) < 20:
+        return {}
+    cur = float(dev.iloc[-1])
+    mx, mn = float(dev.max()), float(dev.min())
+    if not all(pd.notna(v) and abs(v) != float("inf") for v in (cur, mx, mn)):
+        return {}
+    desc = dev.sort_values(ascending=False, kind="stable")
+    asc = dev.sort_values(ascending=True, kind="stable")
+    highs = [{"r": i + 1, "v": float(v), "d": str(d)} for i, (d, v) in enumerate(desc.iloc[:top_k].items())]
+    lows = [{"r": i + 1, "v": float(v), "d": str(d)} for i, (d, v) in enumerate(asc.iloc[:top_k].items())]
+    # 快腿(2026-09 提速改版):20日动量 + 60日新高/新低(价格口径,非偏离度)
+    m20_n = min(20, len(series) - 1)
+    momentum20 = float(series.iloc[-1]) / float(series.iloc[-1 - m20_n]) - 1.0
+    m20 = momentum20 if pd.notna(momentum20) and abs(momentum20) != float("inf") else None
+    win60 = series.iloc[-min(60, len(series)):]
+    new_high60 = bool(float(win60.iloc[-1]) >= float(win60.max()))
+    new_low60 = bool(float(win60.iloc[-1]) <= float(win60.min()))
+    return {"cur": cur, "max": mx, "min": mn,
+            "highs": highs, "lows": lows,
+            "pct": float((dev < cur).sum()) / len(dev),  # 当前偏离的历史分位(0=最偏低,1=最偏高;与 deviation_extremes 同口径)
+            "momentum20": m20,                     # 近20日价格动量(快腿横幅用;异常值→None)
+            "new_high60": new_high60,              # 现价创 60 日新高(突破腿)
+            "new_low60": new_low60,                # 现价创 60 日新低(突破腿)
+            "rank_high": int((dev > cur).sum()) + 1,   # 第几高(1=历史最偏高)
+            "rank_low": int((dev < cur).sum()) + 1,    # 第几低(1=历史最偏低)
+            "n": int(len(dev))}
+
+
 def _add_quarter_lines(fig: go.Figure, lo: pd.Timestamp, hi: pd.Timestamp) -> None:
     """季度分界竖线(每年 1/4/7/10 月首日,置于曲线下层):按季度读曲线段;
     1 月线=年份线、色略加重,形成 年|季|季|季 层级。淡灰点线不随主题重涂

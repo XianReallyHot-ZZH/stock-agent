@@ -76,11 +76,18 @@ CREATE TABLE IF NOT EXISTS industry_pe (
     PRIMARY KEY (industry, date)
 );
 CREATE TABLE IF NOT EXISTS commodity_price (
-    variety  TEXT NOT NULL,   -- 碳酸锂/铜/铝/锌/螺纹钢/铁矿石/焦煤/黄金/白银/原油/玻璃/纯碱/生猪(周期上游领先,见 fetcher.COMMODITY_CODES)
+    variety  TEXT NOT NULL,   -- 品种见 fetcher.COMMODITY_CODES(周期上游领先;2026-09 扩至17种,+LPG/尿素/豆粕/玉米)
     date     TEXT NOT NULL,
     close    REAL,
     source   TEXT,
     PRIMARY KEY (variety, date)
+);
+CREATE TABLE IF NOT EXISTS commodity_spot (
+    variety    TEXT NOT NULL PRIMARY KEY,   -- 实时快照(盘前拉=夜盘收盘价,与最近日收盘比=隔夜变动);每品种留最新一条
+    date       TEXT NOT NULL,               -- 快照拉取日
+    price      REAL,
+    quote_time TEXT,                         -- 行情时间(夜盘品种如 '230000')
+    source     TEXT
 );
 CREATE TABLE IF NOT EXISTS etf_earnings (
     symbol        TEXT NOT NULL,
@@ -747,6 +754,29 @@ class Store:
         if len(df) == 0:
             return pd.Series(dtype=float)
         return df.set_index("date")["close"].astype(float)
+
+    def upsert_commodity_spot(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (variety, date, price, quote_time)。每品种留最新快照(UPSERT by variety)。
+        盘前拉取时 price=昨夜夜盘收盘价(无夜盘品种≈昨日日盘收盘)。"""
+        if not rows:
+            return 0
+        payload = [(v, d, float(p) if p is not None and not pd.isna(p) else None, qt, source)
+                   for (v, d, p, qt) in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO commodity_spot(variety,date,price,quote_time,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(variety) DO UPDATE SET date=excluded.date,price=excluded.price,"
+                "quote_time=excluded.quote_time,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_commodity_spot(self) -> pd.DataFrame:
+        """全部品种最新快照 [variety,date,price,quote_time]。空表 → 空 DataFrame。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT variety,date,price,quote_time FROM commodity_spot", c)
+        return df
 
     def get_industry_pe_series(self, industry: str, start: Optional[str] = None,
                                end: Optional[str] = None) -> pd.DataFrame:

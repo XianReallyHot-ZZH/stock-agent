@@ -961,7 +961,9 @@ COMMODITY_CODES = {
     "碳酸锂": "LC", "铜": "CU", "铝": "AL", "锌": "ZN",
     "螺纹钢": "RB", "铁矿石": "I", "焦煤": "JM",
     "黄金": "AU", "白银": "AG", "原油": "SC",
-    "玻璃": "FG", "纯碱": "SA", "生猪": "LH",
+    "LPG": "PG",
+    "玻璃": "FG", "纯碱": "SA", "尿素": "UR",
+    "豆粕": "M", "玉米": "C", "生猪": "LH",
 }
 
 
@@ -1002,6 +1004,45 @@ def fetch_commodity_price(varieties: list[str], start: str = "2020-01-01",
     if not frames:
         raise FetchError(f"commodity_price {varieties} failed ({last_err})")
     return pd.concat(frames, ignore_index=True).sort_values(["variety", "date"])
+
+
+def fetch_commodity_spot(varieties: Optional[list[str]] = None, timeout: float = 12.0,
+                         retries: int = 1) -> pd.DataFrame:
+    """商品实时快照(盘前/盘中可调,A 类信号提速:夜盘隔夜变动在开盘前可见)。
+
+    用 futures_zh_spot(symbol=code+'0', market='CF', sina 实时)——含夜盘时段的最新价:
+    早 8:30 拉到的是昨夜夜盘收盘价,与最近日收盘相除 = 隔夜变动%(无夜盘品种隔夜≈0)。
+    逐品种循环,失败品种跳过;全失败才 raise。返回长表 [variety, price, quote_time]。"""
+    varieties = varieties if varieties is not None else list(COMMODITY_CODES.keys())
+    frames = []
+    last_err = None
+    for v in varieties:
+        code = COMMODITY_CODES.get(v)
+        if not code:
+            continue
+        for attempt in range(retries + 1):
+            if attempt > 0:
+                time.sleep(0.8)
+            try:
+                df = _run_with_timeout(ak.futures_zh_spot, timeout, symbol=code + "0",
+                                       market="CF", adjust="0")
+                if df is None or len(df) == 0:
+                    raise FetchError("empty")
+                row = df.iloc[0]
+                px = pd.to_numeric(pd.Series([row.get("current_price")]), errors="coerce").iloc[0]
+                if pd.isna(px) or float(px) <= 0:
+                    raise FetchError("no price")
+                frames.append(pd.DataFrame([{"variety": v, "price": float(px),
+                                             "quote_time": str(row.get("time", ""))}]))
+                last_err = None
+                break
+            except FetchError as e:
+                last_err = e
+            except Exception as e:  # noqa: BLE001
+                last_err = FetchError(str(e)[:200])
+    if not frames:
+        raise FetchError(f"commodity_spot {varieties} failed ({last_err})")
+    return pd.concat(frames, ignore_index=True)
 
 
 def fetch_market_pb(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:

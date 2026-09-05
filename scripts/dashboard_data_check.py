@@ -180,6 +180,15 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
     print(f"  政府债明细 地方债 {lgb_n} 券 · 国债 {tsy_n} 券 | 通胀/实体 cpi .."
           f"{str(cpi_last)[:7] if cpi_last else '（无）'} pmi ..{str(pmi_last)[:7] if pmi_last else '（无）'}(第七看板)")
 
+    # ---- commodity (个股层 · A 类领先信号 · 17种 + 夜盘快照) ----
+    try:
+        comm_last = _fetch(conn, "SELECT MAX(date) FROM commodity_price")[0]
+        comm_n = _fetch(conn, "SELECT COUNT(DISTINCT variety) FROM commodity_price")[0]
+        spot_last = _fetch(conn, "SELECT MAX(date) FROM commodity_spot")[0]
+        print(f"  商品价(领先信号) {comm_n} 品种 至 {str(comm_last):12} 快照 {str(spot_last) if spot_last else '无'}")
+    except Exception:  # noqa: BLE001 — 表不存在(极老库)不阻塞报告
+        pass
+
     # ---- candidate pool (V7 第六看板 · 候选个股池) ----
     pool_info: dict = {"universe": [], "universe_n": 0}
     if store is not None:
@@ -324,6 +333,17 @@ def main():
     if real_stale:
         print(f"  通胀/实体月度刷新·CPI/PPI/PMI/社零/工业(当前 {real_last or '无'})...")
         dm.update_china_real()
+
+    # 6.11) commodity daily + spot (个股层 · 17种 · A 类领先信号提速,2026-09):
+    #       日线落后基准交易日才拉;快照每日一次(盘前首跑=昨夜夜盘收盘价 → 看板隔夜变动列)
+    comm_last = store.get_meta("last_commodity_update")
+    if comm_last is None or comm_last < target:
+        print(f"  商品价日线刷新·17种(当前 {comm_last or '无'} → {target})...")
+        dm.update_commodity_price()
+    spot_last = store.get_meta("last_commodity_spot_update")
+    if spot_last != datetime.now().strftime("%Y-%m-%d"):
+        print(f"  商品实时快照·夜盘隔夜(当前 {spot_last or '无'})...")
+        dm.update_commodity_spot()
 
     # 7-9) candidate-pool legs (V7 第六看板): spot/行业/分红/日线 —— 默认暂停
     #      (2026-08-29 用户指令: 看板现阶段价值有限待迭代, 数据冻结在 2026-08-27;

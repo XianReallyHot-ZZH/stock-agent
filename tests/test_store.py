@@ -68,3 +68,18 @@ def test_scale_roundtrip():
     s2 = st.get_scale_series("510300")
     assert len(s2) == 2  # no dup
     assert float(s2["shares"].iloc[-1]) == 1.80e10  # updated
+
+
+def test_commodity_spot_roundtrip():
+    """夜盘快照表(2026-09 提速改版):每品种留最新一条(UPSERT by variety),读回 DataFrame。"""
+    st = _store()
+    n = st.upsert_commodity_spot([("焦煤", "2026-09-05", 1680.5, "230000")], source="spot")
+    assert n == 1
+    # 同品种再拉 → 覆盖不重复
+    st.upsert_commodity_spot([("焦煤", "2026-09-08", 1702.0, "230000"),
+                              ("生猪", "2026-09-08", 11700.0, "")], source="spot")
+    got = st.get_commodity_spot()
+    jm = got[got["variety"] == "焦煤"]
+    assert len(jm) == 1 and float(jm["price"].iloc[0]) == 1702.0
+    assert jm["date"].iloc[0] == "2026-09-08" and jm["quote_time"].iloc[0] == "230000"
+    assert set(got["variety"]) == {"焦煤", "生猪"}

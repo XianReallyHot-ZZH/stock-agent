@@ -215,7 +215,9 @@ def test_new_commodity_stocks_wired():
 
 
 def test_each_commodity_has_multiple_watchlist_stocks():
-    """每个被观察池覆盖的商品至少 2 只 + 全 13 种都被覆盖(单只=个股信号单一不稳)。"""
+    """被观察池覆盖的商品至少 2 只映射股(单只=个股信号单一不稳);2026-09 扩容品种
+    (LPG/尿素/豆粕/玉米)为**纯观测行**——不进 commodity_map(豆粕/玉米对养殖是反向暴露,
+    grilling Q3 决策),映射覆盖要求只约束原 13 种。"""
     from collections import Counter
     from stockagent.config import get_config
     from stockagent.data import fetcher
@@ -223,7 +225,8 @@ def test_each_commodity_has_multiple_watchlist_stocks():
     cm = (get_config().params.get("stock", {}) or {}).get("commodity_map", {}) or {}
     watch = set(DataManager.STOCK_WATCHLIST)
     counts = Counter(v for s, v in cm.items() if s in watch)
-    assert set(counts) == set(fetcher.COMMODITY_CODES), \
-        f"未覆盖商品: {set(fetcher.COMMODITY_CODES) - set(counts)}"
+    mapped_required = set(fetcher.COMMODITY_CODES) - {"LPG", "尿素", "豆粕", "玉米"}
+    assert set(counts) == mapped_required, \
+        f"未覆盖商品: {mapped_required - set(counts)} | 意外映射: {set(counts) - mapped_required}"
     single = [v for v, n in counts.items() if n < 2]
     assert not single, f"商品仅 1 只观察池股票: {single}"

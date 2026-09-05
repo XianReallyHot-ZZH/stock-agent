@@ -30,6 +30,23 @@ def _pct1(v) -> str:
     return "—" if _nan(v) else f"{v*100:.1f}%"
 
 
+def pct_color(pct) -> str:
+    """偏离分位着色(阈值与 🚦 横幅一致:超买≥95% 红 / 超卖≤5% 绿,常态灰)。"""
+    if _nan(pct):
+        return "var(--muted)"
+    p = float(pct)
+    if p >= 0.95:
+        return "#b91c1c"
+    if p <= 0.05:
+        return "#15803d"
+    return "var(--muted)"
+
+
+def _pct_exact(pct) -> str:
+    """偏离分位真实值直显(0.9496 → '94.96%',不四舍五入成 95%——显示与着色/横幅阈值不打架)。"""
+    return f"{int(pct * 10000) / 100:g}%"
+
+
 def _num(v, nd: int = 2) -> str:
     return "—" if _nan(v) else f"{v:.{nd}f}"
 
@@ -101,14 +118,29 @@ def _alerts_region(alerts_list: list, title: str = "📡 信号提醒", empty_ms
 
 
 def _commodity_region(store) -> str:
-    """🧲 商品 A 类面板:全品种(13) 现价/同比/近60日/判定(向上·背离·向下)+ 板块指引。
+    """🧲 商品 A 类面板:全品种(17) 现价/同比/近20日/近60日/隔夜/判定 + 板块指引。
 
     商品价领先周期股财报 1-4 月;判定看同比(趋势)+ 近60日(边际):向上=埋伏方向,背离/向下=避。
+    近20日=快腿动量(2026-09 提速改版);隔夜=夜盘快照 vs 最近日收盘(盘前可见,无快照显示 —)。
     品种清单源自 fetcher.COMMODITY_CODES(单一数据源),无数据的品种自动跳过。"""
     if store is None or not hasattr(store, "get_commodity_series"):
         return ""
+    import datetime as _dt
     from ..data import fetcher
+    from . import stock_figures as sf
     varieties = list(fetcher.COMMODITY_CODES.keys())
+    # 夜盘快照(可选腿):{variety: price};快照超过 2 天视为失效显示 —
+    spot_map: dict = {}
+    spot_date = ""
+    if hasattr(store, "get_commodity_spot"):
+        try:
+            sdf = store.get_commodity_spot()
+            if len(sdf):
+                spot_date = str(sdf["date"].max())
+                if (_dt.date.today() - _dt.date.fromisoformat(spot_date)).days <= 2:
+                    spot_map = dict(zip(sdf["variety"], sdf["price"].astype(float)))
+        except Exception:  # noqa: BLE001 — 快照表缺失/空,静默降级
+            pass
     td = "padding:6px;border-bottom:1px solid var(--border)"
     th = "padding:8px;border-bottom:2px solid var(--border)"
     rows, summary = [], {"向上": [], "背离": [], "向下": [], "震荡": []}
@@ -119,8 +151,16 @@ def _commodity_region(store) -> str:
         s = s.astype(float)
         n252 = min(252, len(s) - 1)
         n60 = min(60, len(s) - 1)
+        n20 = min(20, len(s) - 1)
         yoy = float(s.iloc[-1]) / float(s.iloc[-1 - n252]) - 1.0
         rec = float(s.iloc[-1]) / float(s.iloc[-1 - n60]) - 1.0
+        m20 = float(s.iloc[-1]) / float(s.iloc[-1 - n20]) - 1.0
+        win60 = s.iloc[-n60:]
+        mark = "🔺" if float(win60.iloc[-1]) >= float(win60.max()) \
+            else ("🔻" if float(win60.iloc[-1]) <= float(win60.min()) else "")
+        # 偏离度历史分位(与 🚦 横幅/放大视图同源 commodity_dev_stats;缺数据显示 —)
+        dst = sf.commodity_dev_stats(s)
+        pct = dst.get("pct") if dst else None
         if yoy > 0.10 and rec > -0.05:
             judge, color = "向上", "#16a34a"
         elif yoy > 0.10:
@@ -130,51 +170,328 @@ def _commodity_region(store) -> str:
         else:
             judge, color = "向下", "#dc2626"
         summary[judge].append(v)
-        rows.append((v, float(s.iloc[-1]), yoy, rec, judge, color))
+        overnight = "—"
+        if v in spot_map and float(s.iloc[-1]) > 0:
+            overnight = f"{float(spot_map[v]) / float(s.iloc[-1]) - 1.0:+.1%}"
+        rows.append((v, float(s.iloc[-1]), yoy, m20, rec, pct, overnight, judge, color, mark))
     if not rows:
         return ""
     body = "".join(
         f"<tr><td style='{td}'>{v}</td><td style='{td};text-align:center'>{val:.0f}</td>"
         f"<td style='{td};text-align:center'>{_pct(yoy, True)}</td>"
+        f"<td style='{td};text-align:center'>{_pct(m20, True)}</td>"
         f"<td style='{td};text-align:center'>{_pct(rec, True)}</td>"
-        f"<td style='{td};text-align:center;color:{color};font-weight:600'>{judge}</td></tr>"
-        for (v, val, yoy, rec, judge, color) in rows)
+        f"<td style='{td};text-align:center;color:{pct_color(pct)};font-weight:600'>"
+        f"{('—' if _nan(pct) else _pct_exact(pct))}</td>"   # 真实值直显(94.96% 不四舍五入成 95%),着色按原值判
+        f"<td style='{td};text-align:center'>{on}</td>"
+        f"<td style='{td};text-align:center;color:{color};font-weight:600'>{judge}{mark}</td></tr>"
+        for (v, val, yoy, m20, rec, pct, on, judge, color, mark) in rows)
     head = (f"<tr><th style='{th};text-align:left'>商品(板块)</th><th style='{th}'>现价</th>"
-            f"<th style='{th}'>同比</th><th style='{th}'>近60日</th><th style='{th}'>判定</th></tr>")
+            f"<th style='{th}'>同比</th><th style='{th}'>近20日</th><th style='{th}'>近60日</th>"
+            f"<th style='{th}'>偏离分位</th><th style='{th}'>隔夜</th><th style='{th}'>判定</th></tr>")
     guide = (f"向上(埋伏方向):{','.join(summary['向上']) or '—'} | "
              f"背离(避):{','.join(summary['背离']) or '—'} | "
              f"向下(避):{','.join(summary['向下']) or '—'}")
+    spot_note = f" · 隔夜快照 {spot_date}" if spot_map else ""
     return ('<div class="alerts"><h2>🧲 商品 A 类面板 '
             '<span class="count">上游价 → 周期股业绩领先信号</span></h2>'
-            f'<p class="muted">商品价领先财报 1-4 月;判定看同比(趋势)+近60日(边际)。{guide}</p>'
+            f'<p class="muted">商品价领先财报 1-4 月;判定看同比(趋势)+近60日(边际),近20日=快腿动量,'
+            f'偏离分位=偏离度的历史分位(红≥95%/绿≤5%,与🚦横幅同阈),🔺🔻=现价创60日新高/新低。'
+            f'{guide}{spot_note}</p>'
             f'<table style="width:100%;border-collapse:collapse;font-size:13px">'
             f'<thead>{head}</thead><tbody>{body}</tbody></table></div>')
 
 
+def _commodity_extreme_banner(store, config=None) -> str:
+    """🚦 商品异动雷达(常驻占位,2026-09 提速改版·双段语义,替代混合 chip 的歧义):
+
+    ⚠ 异动提醒段(快腿):20日动量≥±mo_th + 60日新高/新低 → "正在发生,排进研究队列"(非买入
+    信号——event-study 首跑:追动量买股 20日超额 -2.6%,Claim 002)。
+    ⛔ 极端警戒段(慢腿):价格/MA60 偏离分位 超买≥th/超卖≤1-th → "伸展度历史级,追高风险"。
+    同品种可双段同时出现(既在动又在伸展=两句话都成立)。A股配色 红=向上/超买,绿=向下/超卖。"""
+    if store is None or not hasattr(store, "get_commodity_series"):
+        return ""
+    from ..config import get_config
+    from ..data import fetcher
+    from . import stock_figures as sf
+    cfg = config or get_config()
+    lp = (cfg.params.get("stock") or {}).get("leading") or {}
+    th = float(lp.get("commodity_extreme_pct", 0.95))
+    mo_th = float(lp.get("commodity_momentum_pct", 0.10))
+    n_ok = 0
+    stats_rows = []          # (variety, stats dict) 按品种展示序
+    for v in fetcher.COMMODITY_CODES:
+        st = sf.commodity_dev_stats(store.get_commodity_series(v))
+        if not st or _nan(st.get("pct")):
+            continue
+        n_ok += 1
+        stats_rows.append((v, st))
+
+    fast, slow = [], []      # fast=(variety, cur, tags, up) / slow=(variety, cur, tags)
+    for v, st in stats_rows:
+        m20 = st.get("momentum20")
+        stags, ftags = [], []
+        if st["pct"] >= th:
+            stags.append(f"分位 {st['pct']:.0%} · 超买")
+        elif st["pct"] <= 1.0 - th:
+            stags.append(f"分位 {st['pct']:.0%} · 超卖")
+        if not _nan(m20) and abs(float(m20)) >= mo_th:
+            ftags.append(f"20日{float(m20):+.0%} · 动量")
+        if st.get("new_high60"):
+            ftags.append("60日新高")
+        if st.get("new_low60"):
+            ftags.append("60日新低")
+        if ftags:
+            up = bool(st.get("new_high60")) or (_nan(m20) is False and float(m20) >= 0)
+            fast.append((v, st["cur"], ftags, up))
+        if stags:
+            slow.append((v, st["cur"], stags))
+
+    n_ob = sum(1 for _, _, tg in slow if any("超买" in t for t in tg))
+    n_os = sum(1 for _, _, tg in slow if any("超卖" in t for t in tg))
+    n_mo = sum(1 for _, _, tg, _ in fast if any("动量" in t for t in tg))
+    n_brk = sum(1 for _, _, tg, _ in fast if any("新高" in t or "新低" in t for t in tg))
+
+    def _fast_chip(v, cur, tags, up):
+        sym = "<b class='sym-up'>▲</b>" if up else "<b class='sym-dn'>▼</b>"
+        return (f"<span class='dev-chip mv'>{sym} <b>{html.escape(v)}</b> {cur:+.1%}"
+                f"<small>{' · '.join(tags)}</small></span>")
+
+    def _slow_chip(v, cur, tags):
+        cls = "ob" if any("超买" in t for t in tags) else "os"
+        return (f"<span class='dev-chip {cls}'><b>{html.escape(v)}</b> {cur:+.1%}"
+                f"<small>{' · '.join(tags)}</small></span>")
+
+    if fast or slow:
+        count = (f"<span class='count'>动量{n_mo} · 突破{n_brk} | 超买{n_ob} · 超卖{n_os}</span>")
+        parts = []
+        if fast:
+            parts.append("<p class='dev-sec'>⚠ 异动提醒 · 快腿 → 排进研究队列(非买入信号)</p>"
+                         + "".join(_fast_chip(*x) for x in fast))
+        if slow:
+            parts.append("<p class='dev-sec'>⛔ 极端警戒 · 慢腿 → 伸展度历史级,追高风险</p>"
+                         + "".join(_slow_chip(*x) for x in slow))
+        state = "".join(parts)
+    else:
+        count = "<span class='count'>常态</span>"
+        state = f"<p class='muted'>当前 {n_ok} 个品种偏离度与动量均处常态区间</p>"
+    concl = ""
+    if hasattr(store, "get_meta"):
+        try:
+            concl = store.get_meta("commodity_speed_conclusion", "") or ""
+        except Exception:  # noqa: BLE001 — meta 缺失静默
+            concl = ""
+    concl_html = (f"<p class='muted'>🔬 快腿实证(validate_commodity_speed):{concl}</p>" if concl else "")
+    return (f'<div class="alerts"><h2>🚦 商品异动雷达 {count}</h2>'
+            f'<p class="muted">慢腿:价格/MA60 偏离分位 超买≥{th:.0%}/超卖≤{1-th:.0%} · '
+            f'快腿:20日动量≥±{mo_th:.0%} + 60日新高/新低'
+            f'（A股红=向上/绿=向下;观察非信号,不构成买卖建议）</p>{state}{concl_html}</div>')
+
+
+def _fig_json_readable(fig) -> str:
+    """fig → JSON 字符串,数值数组强制展开为普通 JSON 数组。
+
+    plotly 的 to_json() 会把数值列打包成 base64 二进制块({dtype:'f8',bdata:...})——浏览器端
+    Plotly 认得、能直接 newPlot,但 JS 读不到逐点数值,放大视图的偏离度派生(价格/MA60 逐点
+    相除)会拿到全 undefined → 整行不渲染。日期列 to_json() 本就输出 ISO 字符串(正确),
+    故只对 bdata 块解码(NaN→null),其余原样保留。"""
+    import base64
+    import json
+
+    import numpy as np
+
+    d = json.loads(fig.to_json())
+    for tr in d.get("data") or []:
+        for key in ("x", "y"):
+            v = tr.get(key)
+            if not (isinstance(v, dict) and "bdata" in v):
+                continue
+            try:
+                buf = base64.b64decode(v["bdata"])
+                arr = np.frombuffer(buf, dtype=np.dtype("<" + str(v.get("dtype", "f8"))))
+                tr[key] = [None if isinstance(z, float) and math.isnan(z) else z
+                           for z in arr.tolist()]
+            except Exception:
+                pass                                       # 解不开保留原块(Plotly 自己能画)
+    return json.dumps(d, ensure_ascii=False)
+
+
 def _commodity_charts(store) -> str:
     """📈 商品价时序图面板(全品种折线,inline 渲染于周期 tab)。复用 stock_figures.commodity_price_figure;
-    DOMContentLoaded 时 newPlot(Plotly 已由个股图表模态加载)。品种清单源自 fetcher.COMMODITY_CODES(单一数据源)。"""
+    DOMContentLoaded 时 newPlot(Plotly 已由个股图表模态加载)。品种清单源自 fetcher.COMMODITY_CODES(单一数据源)。
+    点击任一小图 → comm-modal 放大视图(客户端复用同一份 COMM JSON 改样式,不重复传图):
+    高度拉满 + 底部 rangeslider 拖拽 + 1月/6月/1年/3年/全部 快捷窗(与 _RANGE_BUTTONS 同五档)。"""
     if store is None or not hasattr(store, "get_commodity_series"):
         return ""
     from . import stock_figures as sf
     from ..data import fetcher
+    import json
     import re
     varieties = list(fetcher.COMMODITY_CODES.keys())
-    figs = [(v, sf.commodity_price_figure(v, store.get_commodity_series(v))) for v in varieties]
+    sers = [(v, store.get_commodity_series(v)) for v in varieties]
+    figs = [(v, sf.commodity_price_figure(v, s)) for v, s in sers]
+    dev_stats = [sf.commodity_dev_stats(s) for _, s in sers]
     if not figs:
         return ""
-    divs = "".join(f'<div id="comm-chart-{i}" class="comm-chart"></div>' for i in range(len(figs)))
-    arr = ",".join(re.sub(r"</script", r"<\\/script", f.to_json(), flags=re.I) for _, f in figs)
+    divs = "".join(
+        f'<div id="comm-chart-{i}" class="comm-chart" title="点击放大查看" onclick="openCommChart({i})"></div>'
+        for i in range(len(figs)))
+    # 可读序列化:to_json() 的 bdata 二进制块让前端派生偏离度时读不到逐点数值(见 _fig_json_readable)
+    arr = ",".join(re.sub(r"</script", r"<\\/script", _fig_json_readable(f), flags=re.I) for _, f in figs)
+    names = ",".join(json.dumps(v, ensure_ascii=False) for v, _ in figs)
+    devs = ",".join(json.dumps(d, ensure_ascii=False) for d in dev_stats)
     js = ("var COMM=[" + arr + "];\n"
+          "var COMM_NAMES=[" + names + "];\n"
+          "var COMM_DEV=[" + devs + "];\n"
           "document.addEventListener('DOMContentLoaded',function(){\n"
           "  if(!window.Plotly)return;\n"
           "  COMM.forEach(function(fig,i){var gd=document.getElementById('comm-chart-'+i);"
           "    if(gd)Plotly.newPlot(gd,fig,{responsive:true,displaylogo:false});});\n"
           "  setTimeout(function(){if(window._applyPlotly)_applyPlotly(_isDark());},60);\n"
-          "});")
+          "});\n" + _COMM_MODAL_JS)
     return ('<div class="alerts"><h2>📈 商品价时序(A 类领先信号)</h2>'
-            '<p class="muted">商品价领先周期股财报 1-4 月;折线=价,虚线=1 年前水平(同比可视化)。结合下方个股 📊 判断。</p>'
-            f'<div class="comm-grid">{divs}</div></div>\n<script>{js}</script>')
+            '<p class="muted">商品价领先周期股财报 1-4 月;折线=价,虚线=1 年前水平(同比可视化)。'
+            '点击任意图放大:放大视图下行为价格/MA60 偏离度(标注历史极值线与当前第几高/第几低),'
+            '底部滑块 + 1月/6月/1年/3年/全部 快捷窗伸缩横轴。结合下方个股 📊 判断。</p>'
+            f'<div class="comm-grid">{divs}</div></div>' + _COMM_MODAL_HTML
+            + '\n<script>' + js + '</script>')
+
+
+_COMM_MODAL_HTML = """
+<div id="comm-modal" class="modal-overlay" hidden>
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="comm-modal-title">—</span>
+      <button type="button" class="modal-close" onclick="closeCommChart()" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="comm-modal-chart"></div>
+    </div>
+  </div>
+</div>"""
+
+
+# 商品放大模态交互(依赖运行时的 Plotly / COMM / COMM_NAMES / COMM_DEV / _applyPlotly / _isDark)。
+# 放大视图=双行子图:上行 价格+MA60,下行 偏离度(前端从已下发的价格/MA60 两条 trace 逐点相除派生,
+# 零重复传参;排名/极值数字由服务端 ti 同口径算好放 COMM_DEV)。双行共享横轴=每行一个 x 轴
+# (x/x2 matches 联动,rangeslider 挂底行 x2)——与 price_deviation_figure 的 make_subplots 同构。
+# 注意 comm-modal-chart 刻意不带 class="modal-chart":openChart 会对全部 .modal-chart
+# purge/隐藏,挂同类名会被个股模态误伤(display:none 后 newPlot 得零尺寸图)。
+_COMM_MODAL_JS = """
+function openCommChart(i){
+  var src = COMM[i];
+  if(!src || !window.Plotly) return;
+  var f = JSON.parse(JSON.stringify(src));      // 深拷贝同份数据,只改展示样式
+  var L = f.layout || (f.layout = {});
+  L.height = Math.max(560, Math.round(window.innerHeight * 0.80));
+  L.title = L.title || {}; L.title.font = {size: 16};
+  L.margin = L.margin || {}; L.margin.t = 70; L.margin.b = 60;
+  var hasRows = f.data && f.data.length >= 2;   // [价格, MA60] 两条 trace 才能派生偏离度
+  if(hasRows){
+    var D = COMM_DEV[i] || {};
+    if(D.new_high60) L.title.text = (L.title.text || '') + ' · 🔺60日新高';    // 突破腿徽章
+    else if(D.new_low60) L.title.text = (L.title.text || '') + ' · 🔻60日新低';
+    var p = f.data[0], m = f.data[1];
+    var dx = [], dy = [];
+    for(var k = 0; k < p.x.length; k++){
+      var pv = p.y[k], mv = m.y[k];
+      dx.push(p.x[k]);
+      dy.push((pv == null || mv == null || mv === 0) ? null : pv / mv - 1);
+    }
+    f.data.push({x: dx, y: dy, xaxis: 'x2', yaxis: 'y2', name: '偏离度(价格/MA60−1)',
+                 line: {color: '#52514e', width: 1.4},
+                 hovertemplate: '%{x|%Y-%m-%d}<br>偏离 %{y:.1%}<extra></extra>'});
+    // 双行共享横轴:每行一个 x 轴,底行 x2 与顶行 x 用 matches 联动,rangeslider 挂 x2(底行)。
+    // 与 price_deviation_figure 的 make_subplots(shared_xaxes)+row2 滑块同构——单 x 轴锚在顶行
+    // y 底部会把下行带让给轴标签+滑块,偏离度会被盖住(首版踩过的坑)。
+    L.yaxis.domain = [0.44, 1];
+    L.yaxis.title = {text: '价格'};
+    L.yaxis2 = {domain: [0, 0.30], title: {text: '偏离度'}, tickformat: '.0%',
+                gridcolor: L.yaxis.gridcolor, zerolinecolor: L.yaxis.zerolinecolor};
+    var xa = L.xaxis || (L.xaxis = {});
+    xa.type = 'date';
+    xa.showticklabels = false;                  // 刻度标签只在底行,避免重复
+    xa.matches = 'x2';                          // 顶行跟随底行:主控轴是挂滑块+快捷窗的 x2(make_subplots 同构)。
+                                                // matches 若放在挂 rangeselector 的轴上,按钮不渲染(plotly 行为)
+    L.xaxis2 = {type: 'date', anchor: 'y2',
+                gridcolor: L.yaxis.gridcolor, zerolinecolor: L.yaxis.zerolinecolor,
+                rangeslider: {visible: true},
+                rangeselector: {x: 0, xanchor: 'left', y: 1.02, yanchor: 'bottom',
+                                bgcolor: '#ffffff', activecolor: '#e2e8f0',
+                                buttons: [
+                  {count:1, label:'1月', step:'month', stepmode:'backward'},
+                  {count:6, label:'6月', step:'month', stepmode:'backward'},
+                  {count:1, label:'1年', step:'year', stepmode:'backward'},
+                  {count:3, label:'3年', step:'year', stepmode:'backward'},
+                  {label:'全部', step:'all'}]}};
+    if(D.max != null && D.min != null){        // 偏离度历史极值线(红=正/蓝=负,同个股偏离图)
+      L.shapes = (L.shapes || []).concat([
+        {type:'line', xref:'x2', yref:'y2', x0:dx[0], x1:dx[dx.length-1], y0:D.max, y1:D.max,
+         line:{color:'#d03b3b', width:1.2, dash:'dot'}},
+        {type:'line', xref:'x2', yref:'y2', x0:dx[0], x1:dx[dx.length-1], y0:D.min, y1:D.min,
+         line:{color:'#1c5cab', width:1.2, dash:'dot'}}]);
+    }
+    var lk = -1;                               // 最后一个有效偏离点=当前
+    for(k = dy.length - 1; k >= 0; k--){ if(dy[k] != null){ lk = k; break; } }
+    var lastDate = (lk >= 0) ? dx[lk] : null;
+    // 历史 Top-K 高/低极值点打排名标注(第几高/第几低,▲/▼ 同 ETF 看板极值标记),极值日
+    // ==当前日时跳过(现在点标注已含「第1高/低」语义,避免两段文字叠在同一点)。
+    // lastDate 是带时刻的 ISO 串(如 2026-09-04T00:00:00),与 e.d 前缀比对。
+    var pushExt = function(e, hi){
+      if(!e || !e.d || lastDate === null) return;
+      if(lastDate.indexOf(e.d) === 0) return;
+      // Top-K=10 时极值日常互相挤在同一小段(如碳酸锂前十高集中在三周内):
+      // 标签 10px + 按排名轮换 中/左/右 方位扇形错开,减轻文字重叠;悬停始终有精确日期+值
+      var fan = (e.r - 1) % 3;
+      var pos = hi ? ['bottom center','bottom left','bottom right'][fan]
+                   : ['top center','top left','top right'][fan];
+      f.data.push({x: [e.d], y: [e.v], xaxis: 'x2', yaxis: 'y2', mode: 'markers+text',
+                   text: ['第' + e.r + (hi ? '高 +' : '低 ') + (e.v*100).toFixed(0) + '%'],
+                   textposition: pos, textfont: {size: 10},
+                   marker: {size: 8, color: hi ? '#d03b3b' : '#1c5cab',
+                            symbol: hi ? 'triangle-up' : 'triangle-down'},
+                   showlegend: false,
+                   hovertemplate: '第' + e.r + (hi ? '高' : '低') + ' %{x|%Y-%m-%d}<br>偏离 %{y:.1%}<extra></extra>'});
+    };
+    (D.highs || []).forEach(function(e){ pushExt(e, true); });
+    (D.lows || []).forEach(function(e){ pushExt(e, false); });
+    if(lk >= 0){
+      var tag = '现在 ' + (dy[lk]*100).toFixed(1) + '%';
+      if(D.rank_high != null) tag += ' · 第' + D.rank_high + '高 / 第' + D.rank_low + '低';
+      f.data.push({x: [dx[lk]], y: [dy[lk]], xaxis: 'x2', yaxis: 'y2', mode: 'markers+text', text: [tag],
+                   textposition: 'top center', marker: {size: 9, color: '#0f172a'},
+                   showlegend: false, hoverinfo: 'skip'});
+    }
+  } else {                                     // 占位图(无数据):单行,仅滑块
+    var xa0 = L.xaxis || (L.xaxis = {});
+    xa0.type = 'date';
+    xa0.rangeslider = {visible: true};
+  }
+  var ov = document.getElementById('comm-modal');
+  ov.hidden = false;                            // 先显示(容器拿到真实宽度)再 newPlot,图才能横向占满
+  document.body.style.overflow = 'hidden';
+  document.getElementById('comm-modal-title').textContent = (COMM_NAMES[i] || '') + ' 商品价时序 · 放大';
+  var gd = document.getElementById('comm-modal-chart');
+  try{ Plotly.purge(gd); }catch(e){}
+  Plotly.newPlot(gd, f, {responsive:true, displaylogo:false})
+    .then(function(){ _applyPlotly(_isDark()); });
+}
+function closeCommChart(){
+  var ov = document.getElementById('comm-modal');
+  if(!ov) return;
+  ov.hidden = true;
+  document.body.style.overflow = '';
+  try{ Plotly.purge(document.getElementById('comm-modal-chart')); }catch(e){}
+}
+document.addEventListener('keydown', function(e){
+  var ov = document.getElementById('comm-modal');
+  if(ov && !ov.hidden && (e.key==='Escape' || e.keyCode===27)) closeCommChart();
+});
+document.addEventListener('DOMContentLoaded', function(){
+  var ov = document.getElementById('comm-modal');
+  if(ov) ov.addEventListener('click', function(e){ if(e.target===ov) closeCommChart(); });
+});
+"""
 
 
 def _ambush_region(diagnoses: dict, names: dict, as_of: str,
@@ -408,7 +725,22 @@ h2 { font-size:16px; margin:0 0 10px; }
 .subtab-panel { display:none; padding-top:8px; }
 .subtab-panel.active { display:block; }
 .comm-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(440px,1fr)); gap:10px; margin-top:8px; }
-.comm-chart { min-height:300px; }
+.comm-chart { min-height:300px; position:relative; cursor:pointer; border-radius:6px; }
+.comm-chart:hover { box-shadow:0 0 0 2px var(--border); }
+.comm-chart::after { content:'⛶ 放大'; position:absolute; top:4px; right:8px; z-index:3;
+  font-size:11px; color:var(--muted); background:var(--card); border:1px solid var(--border);
+  border-radius:4px; padding:1px 6px; opacity:0; transition:opacity .12s; pointer-events:none; }
+.comm-chart:hover::after { opacity:1; }
+/* dev-chip:超买/超卖标签(A股配色 红=超买 绿=超卖) */
+.dev-chip { display:inline-block; padding:4px 10px; margin:3px 8px 3px 0; border-radius:6px;
+  font-size:13px; font-weight:600; }
+.dev-chip.ob { background:#fee2e2; color:#b91c1c; }
+.dev-chip.os { background:#dcfce7; color:#15803d; }
+.dev-chip.mv { background:#dbeafe; color:#1e3a8a; }
+.dev-chip .sym-up { color:#b91c1c; }
+.dev-chip .sym-dn { color:#15803d; }
+.dev-chip small { font-weight:400; font-size:11px; margin-left:6px; opacity:.85; }
+.dev-sec { font-size:11.5px; font-weight:700; color:var(--muted); margin:8px 0 2px; }
 """
 
 
@@ -651,6 +983,7 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
     ambush_section = _ambush_region(cyclic_commodity, names, as_of)   # 仅商品周期股(有 commodity_map)
     commodity_section = _commodity_region(store) if store else ""
     commodity_charts = _commodity_charts(store)
+    commodity_banner = _commodity_extreme_banner(store)               # 🚦 偏离度极端区(商品周期股顶部,参照 ETF 看板)
     # 信号提醒按 tab 拆:个股级(scope=个股名)→ 各 tab 顶部;市场级(大盘/指数)→ tab 栏上方全局条
     name2tab = {}
     for _t, _group in tabs.items():
@@ -686,7 +1019,7 @@ def render(stock_diagnoses: dict, alerts_list: list, as_of: str,
                        f'<button class="subtab" data-subtab="other" onclick="switchSubTab(\'other\')">🔄 其他周期股({len(cyclic_other)})</button>'
                        '</div>')
             sec_comm = (f'<div id="subtab-comm" class="subtab-panel active">\n'
-                        f'{comm_al}\n{commodity_section}\n{commodity_charts}\n{ambush_section}\n'
+                        f'{commodity_banner}\n{comm_al}\n{commodity_section}\n{commodity_charts}\n{ambush_section}\n'
                         f'<div class="cards-head"><h2>商品周期股({len(cyclic_commodity)})</h2></div>\n'
                         f'<div class="grid">\n{cards_commodity}\n</div>\n</div>')
             sec_other = (f'<div id="subtab-other" class="subtab-panel">\n'
