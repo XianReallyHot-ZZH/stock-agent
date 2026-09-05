@@ -517,9 +517,12 @@ def _ambush_region(diagnoses: dict, names: dict, as_of: str,
                         for f in (p.get("flags") or []))
         hot = "background:#dcfce7" if sc >= 60 else ("background:#fef9c3" if sc >= 40 else "")
         td = "padding:6px;border-bottom:1px solid var(--border)"
+        # 股票名可点 → openChart(sym) 与卡片 📊 同款模态(时序图 4-6 张 + 周期股追加上游商品叠加图)
+        name_html = (f"<a href='javascript:void(0)' class='amb-link' title='查看时序图'"
+                     f" onclick=\"openChart('{sym}')\"><b>{html.escape(nm)}</b></a>"
+                     f"<br><span class='muted'>{sym}</span>")
         row = (sc,
-               f"<tr><td style='{td}'><b>{html.escape(nm)}</b>"
-               f"<br><span class='muted'>{sym}</span></td>"
+               f"<tr><td style='{td}'>{name_html}</td>"
                f"<td style='{td};text-align:center'>{dd_s}</td>"
                f"<td style='{td};text-align:center'>{et_s}{flags}</td>"
                f"<td style='{td};text-align:center'>{rr_s}</td>"
@@ -741,6 +744,9 @@ h2 { font-size:16px; margin:0 0 10px; }
 .dev-chip .sym-dn { color:#15803d; }
 .dev-chip small { font-weight:400; font-size:11px; margin-left:6px; opacity:.85; }
 .dev-sec { font-size:11.5px; font-weight:700; color:var(--muted); margin:8px 0 2px; }
+/* 🎯 埋伏表股票名点击 → 个股时序图模态(与卡片 📊 同款) */
+.amb-link { color:var(--text); text-decoration:none; border-bottom:1px dashed var(--border); cursor:pointer; }
+.amb-link:hover { color:#2563eb; border-bottom-color:#2563eb; }
 """
 
 

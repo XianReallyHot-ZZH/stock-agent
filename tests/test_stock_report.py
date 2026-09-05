@@ -353,3 +353,13 @@ def test_commodity_panel_covers_all_varieties():
         assert v in h, f"面板缺品种 {v}"
     # 偏离分位列:表头 + 极端着色(线性上升序列末端偏离=历史最低 → 绿≤5%)
     assert "偏离分位" in h and "color:#15803d" in h
+
+
+def test_ambush_names_open_stock_modal():
+    """🎯 埋伏表股票名可点 → openChart(sym) 打开个股时序图模态(与卡片 📊 同款交互)。"""
+    h = srep.render({"002466": _diag()}, [], as_of="2026-07-22", names={"002466": "天齐"}, store=_StubStore())
+    # 埋伏表名字锚点接线到个股模态
+    m = re.search(r"<a href='javascript:void\(0\)' class='amb-link'[^>]*onclick=\"openChart\('002466'\)\"", h)
+    assert m, "埋伏表股票名未接线 openChart"
+    # 悬停提示 + 主题变量配色(深浅两态可用)
+    assert "查看时序图" in h and ".amb-link:hover" in h
