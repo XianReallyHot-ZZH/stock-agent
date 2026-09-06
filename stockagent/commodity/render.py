@@ -61,7 +61,7 @@ def _fmt_px(v: float) -> str:
 # ---------------------------------------------------------------- 🚦 雷达
 def _radar_section(store, config=None) -> str:
     """🚦 商品异动雷达(整体迁自个股看板,国内序列口径不变——与 validate_commodity_speed
-    实证/夜盘快照同源)。双段语义:⚠快腿=正在发生(研究排队) / ⛔慢腿=伸展度历史级(追高风险)。"""
+    实证/夜盘快照同源)。双段语义:⚠快腿=正在发生(研究排队) / ⛔慢腿=60日偏离度历史极值(追高风险)。"""
     if store is None or not hasattr(store, "get_commodity_series"):
         return ""
     cfg = config or get_config()
@@ -97,7 +97,7 @@ def _radar_section(store, config=None) -> str:
             parts.append("<p class='dev-sec'>⚠ 异动提醒 · 快腿 → 排进研究队列(非买入信号)</p>"
                          + "".join(_fast_chip(*x) for x in fast))
         if slow:
-            parts.append("<p class='dev-sec'>⛔ 极端警戒 · 慢腿 → 伸展度历史级,追高风险</p>"
+            parts.append("<p class='dev-sec'>⛔ 极端警戒 · 慢腿 → 60日偏离度历史极值,追高风险</p>"
                          + "".join(_slow_chip(*x) for x in slow))
         state = "".join(parts)
     else:
@@ -583,7 +583,7 @@ _LEGEND_HTML = """
 判定可能偶发分歧(主语 vs 国内口径),这是两个用途不是 bug。</div>
 <div><b>黄金只做分母</b> · 金银比/油金比的主语是白银/原油;黄金自身叙事(定位器/微观紧缺)归宏观框架看板,此处零复制。</div>
 <div><b>🚦 雷达口径</b> · 国内序列(与 validate_commodity_speed 实证、夜盘快照同源)。⚠快腿=20日动量/新高新低
-(研究排队,实证:追买跑输);⛔慢腿=偏离分位≥95%/≤5%(伸展度警戒)。<b>温度计非开关,不构成买卖建议</b>。</div>
+(研究排队,实证:追买跑输);⛔慢腿=偏离分位≥95%/≤5%(60日偏离度历史极值)。<b>温度计非开关,不构成买卖建议</b>。</div>
 <div><b>📊 总览</b> · 官方腿=中证商品指数(ccidx.com;南华 akshare 端点已死);自算合成/广度=17 品种等权,
 无权重无展期调整,<b>非官方指数</b>,只作温度对照。指数点位无绝对意义(只看变化率);全看板「同比」
 均=近 252 交易日(约一年)口径。</div>

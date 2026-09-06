@@ -2,7 +2,7 @@
 
 品种时序图复用 tracker.stock_figures.commodity_price_figure(主语序列口径见 panel.primary_series);
 本模块只造比价/总览两类新图。比价图刻意保持 [比价线, MA60] 两 trace 顺序——与品种图同构,
-放大模态的前端偏离度派生(逐点相除)对比价同样可用(比价 vs 其均线的伸展度)。
+放大模态的前端偏离度派生(逐点相除)对比价同样可用(比价 vs 其均线的偏离度)。
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def _style_axes(fig: go.Figure) -> None:
 
 
 def ratio_figure(name: str, s: pd.Series, pct: float | None = None) -> go.Figure:
-    """比价时序(金银比/螺矿比…):单线 + MA60(伸展度参照)。无四态判定(比价无该语义)。
+    """比价时序(金银比/螺矿比…):单线 + MA60(偏离度参照)。无四态判定(比价无该语义)。
     traces 顺序 [比价, MA60] 与品种图同构 → 放大模态可直接复用。"""
     if s is None or len(s) < 2:
         fig = go.Figure()
