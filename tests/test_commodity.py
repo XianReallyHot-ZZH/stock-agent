@@ -251,6 +251,8 @@ def test_render_full_page_sections():
     assert '"3年"' in ovw and '"全部"' in ovw        # JSON payload 里按钮 label 是双引号
     # 默认观察窗=近3年:xaxis.range 起点晚于 stub 序列首日(2024-01-01)+3年回看在末端前
     assert ovw.count('"range": ["') >= 2
+    # 广度图右轴双线区分度(2026-09 用户反馈):20日=洋红 / 60日=琥珀,双色双线型
+    assert '"#c026d3"' in ovw and '"#f59e0b"' in ovw
     # 阈值/温度计口径注记
     assert "温度计非开关" in h
 

@@ -16,7 +16,9 @@ _PAL = {
     "surface": "#ffffff", "ink": "#0f172a", "muted": "#898781",
     "grid": "#e2e8f0", "baseline": "#cbd5e1",
     "line": "#2a78d6", "ma": "#898781", "idx1": "#2a78d6", "idx2": "#ea580c",
-    "synth": "#7c3aed", "breadth": "#16a34a", "eqret": "#c026d3",
+    "synth": "#7c3aed", "breadth": "#16a34a",
+    "eqret20": "#c026d3",    # 20日等权涨幅:洋红·虚线(短窗=重线)
+    "eqret60": "#f59e0b",    # 60日等权涨幅:琥珀·点线(与洋红拉大色距,2026-09 区分度反馈)
 }
 
 _RANGE_BUTTONS = dict(
@@ -132,13 +134,17 @@ def breadth_figure(b20: pd.DataFrame, b60: pd.DataFrame) -> go.Figure:
         if b is None or not len(b):
             continue
         idx = pd.to_datetime(b.index)
+        is20 = lbl == "20日"
         fig.add_trace(go.Scatter(x=idx, y=b["up_frac"] * 100.0, name=f"{lbl}上涨占比%",
-                                 line=dict(color=_PAL["breadth"], width=1.8 if lbl == "20日" else 1.2,
-                                           dash=None if lbl == "20日" else "dot"),
+                                 line=dict(color=_PAL["breadth"], width=1.8 if is20 else 1.2,
+                                           dash=None if is20 else "dot"),
                                  hovertemplate=f"%{{x|%Y-%m-%d}}<br>{lbl}上涨 %{{y:.0f}}%<extra></extra>"),
                       secondary_y=False)
+        # 右轴等权幅度:20日=洋红·虚线(重) / 60日=琥珀·点线(轻)——双维区分(色+线型),不再同色孪生
         fig.add_trace(go.Scatter(x=idx, y=b["eq_ret"] * 100.0, name=f"{lbl}等权涨幅%",
-                                 line=dict(color=_PAL["eqret"], width=1.0, dash="dash"),
+                                 line=dict(color=_PAL["eqret20"] if is20 else _PAL["eqret60"],
+                                           width=1.6 if is20 else 1.3,
+                                           dash="dash" if is20 else "dot"),
                                  hovertemplate=f"%{{x|%Y-%m-%d}}<br>{lbl}等权 %{{y:+.1f}}%<extra></extra>"),
                       secondary_y=True)
         plotted = True
