@@ -132,7 +132,7 @@ def _overview_section(store, config=None) -> str:
         sp = ovw.index_snapshot(s)
         if sp:
             snaps.append(f"<span class='ov-chip'><b>{html.escape(nm)}</b> {sp['last']:.0f}"
-                         f"<small> 同比{_pct(sp['yoy'], True)} · 近60日{_pct(sp['m60'], True)} · {sp['date']}</small></span>")
+                         f"<small> 年度同比{_pct(sp['yoy'], True)} · 近60日{_pct(sp['m60'], True)} · {sp['date']}</small></span>")
     breadth_frames = {w: ovw.breadth_series(inputs, int(w)) for w in windows}
     for w, b in breadth_frames.items():
         if b is not None and len(b):
@@ -218,7 +218,7 @@ def _panel_section(store, config=None) -> str:
     return ('<div class="alerts"><h2>🧲 品种面板 '
             f'<span class="count">国际主语 {n_intl}/{len(rows)} · 国内价=A股投资指导</span></h2>'
             f'<p class="muted">有国际通用基准的品种以国际价为主语(国际价格波动一般传导至国内),'
-            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径。隔夜=国内夜盘快照 vs 国内日收盘'
+            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日)。隔夜=国内夜盘快照 vs 国内日收盘'
             f'(A股开盘前最新脉搏)。{guide}{spot_note}</p>'
             f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
             f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div></div>')
@@ -585,7 +585,8 @@ _LEGEND_HTML = """
 <div><b>🚦 雷达口径</b> · 国内序列(与 validate_commodity_speed 实证、夜盘快照同源)。⚠快腿=20日动量/新高新低
 (研究排队,实证:追买跑输);⛔慢腿=偏离分位≥95%/≤5%(伸展度警戒)。<b>温度计非开关,不构成买卖建议</b>。</div>
 <div><b>📊 总览</b> · 官方腿=中证商品指数(ccidx.com;南华 akshare 端点已死);自算合成/广度=17 品种等权,
-无权重无展期调整,<b>非官方指数</b>,只作温度对照。</div>
+无权重无展期调整,<b>非官方指数</b>,只作温度对照。指数点位无绝对意义(只看变化率);全看板「同比」
+均=近 252 交易日(约一年)口径。</div>
 <div><b>⚖ 比价</b> · 螺矿比≈钢厂利润代理(近似);分位=全史位置。观察非信号。</div>
 <div><b>🎫 投资标的</b> · 错配=ETF(NAV)涨幅−品种涨幅:正=ETF领先(情绪/展期溢价)、负=ETF落后
 (商品涨了ETF没涨=错杀观察,或股票端独立逻辑)。期货ETF NAV 含展期、QDII 含汇率、股票ETF 含个股
