@@ -101,9 +101,11 @@ def overview_figure(idx_map: dict, synth: pd.Series, official_ok: bool) -> go.Fi
                            font=dict(color=_PAL["muted"], size=13))
         return fig
     title = "商品总览 · 中证商品指数(官方)" + ("" if official_ok else " — 官方缺,自算顶上")
-    fig.update_layout(**_layout(title, height=340))
+    fig.update_layout(**_layout(title, height=380))
     _style_axes(fig)
-    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d")
+    # 横轴窗口:滑块拖拽 + 1月/6月/1年/3年/全部 快捷窗(与其他图同款;官方指数~4年史,"3年"以上档位看自算线)
+    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d",
+                     rangeselector=_RANGE_BUTTONS, rangeslider=dict(visible=True))
     return fig
 
 
@@ -130,9 +132,11 @@ def breadth_figure(b20: pd.DataFrame, b60: pd.DataFrame) -> go.Figure:
         fig.add_annotation(text="品种数据不足", xref="paper", yref="paper", x=0.5, y=0.5,
                            showarrow=False, font=dict(color=_PAL["muted"], size=13))
         return fig
-    fig.update_layout(**_layout("品种广度 · 上涨占比%(左,0-100) + 等权涨幅%(右,自算非官方)", height=300))
+    fig.update_layout(**_layout("品种广度 · 上涨占比%(左,0-100) + 等权涨幅%(右,自算非官方)", height=340))
     _style_axes(fig)
     fig.update_yaxes(title_text="上涨占比%", range=[0, 100], secondary_y=False)
     fig.update_yaxes(title_text="等权涨幅%", zeroline=True, secondary_y=True, gridcolor=None)
-    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d")
+    # 横轴窗口:滑块拖拽 + 快捷窗(与总览指数图同款;双轴子图单 x 轴,rangeselector 挂 x 无 plotly 坑)
+    fig.update_xaxes(type="date", hoverformat="%Y-%m-%d",
+                     rangeselector=_RANGE_BUTTONS, rangeslider=dict(visible=True))
     return fig

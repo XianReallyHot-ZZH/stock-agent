@@ -244,6 +244,11 @@ def test_render_full_page_sections():
     assert '"bdata"' not in h[i0:i1]
     # 总览图 inline 渲染
     assert "var OVW=[" in h and 'id="ovw-fig-idx"' in h
+    # 总览两图带横轴窗口控件:滑块拖拽 + 五档快捷窗(2026-09 用户反馈补齐,回归守卫)
+    i0, i1 = h.index("var OVW=["), h.index("document.addEventListener", h.index("var OVW=["))
+    ovw = h[i0:i1]
+    assert ovw.count('"rangeselector"') >= 2 and ovw.count('"rangeslider"') >= 2
+    assert '"3年"' in ovw and '"全部"' in ovw        # JSON payload 里按钮 label 是双引号
     # 阈值/温度计口径注记
     assert "温度计非开关" in h
 
