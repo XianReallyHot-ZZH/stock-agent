@@ -249,6 +249,8 @@ def test_render_full_page_sections():
     ovw = h[i0:i1]
     assert ovw.count('"rangeselector"') >= 2 and ovw.count('"rangeslider"') >= 2
     assert '"3年"' in ovw and '"全部"' in ovw        # JSON payload 里按钮 label 是双引号
+    # 默认观察窗=近3年:xaxis.range 起点晚于 stub 序列首日(2024-01-01)+3年回看在末端前
+    assert ovw.count('"range": ["') >= 2
     # 阈值/温度计口径注记
     assert "温度计非开关" in h
 

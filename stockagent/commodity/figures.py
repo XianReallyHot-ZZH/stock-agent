@@ -78,6 +78,7 @@ def overview_figure(idx_map: dict, synth: pd.Series, official_ok: bool) -> go.Fi
     """总览图:官方中证商品指数(两线)+ 自算等权合成(虚线,对照);官方缺失时合成顶上(标注)。"""
     fig = go.Figure()
     plotted = False
+    ends: list[pd.Timestamp] = []
     for nm, s in idx_map.items():
         if s is None or len(s) < 2:
             continue
@@ -87,6 +88,7 @@ def overview_figure(idx_map: dict, synth: pd.Series, official_ok: bool) -> go.Fi
                                  line=dict(color=color, width=1.8),
                                  hovertemplate="%{x|%Y-%m-%d}<br>" + nm + " %{y:.0f}<extra></extra>"))
         plotted = True
+        ends.append(pd.Timestamp(s.index[-1]))
     if synth is not None and len(synth) >= 2:
         sy = synth.astype(float)
         fig.add_trace(go.Scatter(
@@ -94,6 +96,7 @@ def overview_figure(idx_map: dict, synth: pd.Series, official_ok: bool) -> go.Fi
             line=dict(color=_PAL["synth"], width=1.4, dash="dot"),
             hovertemplate="%{x|%Y-%m-%d}<br>自算 %{y:.0f}<extra></extra>"))
         plotted = True
+        ends.append(pd.Timestamp(sy.index[-1]))
     if not plotted:
         fig.update_layout(**_layout("商品总览(无数据)", height=220, showlegend=False))
         fig.add_annotation(text="官方指数与自算合成都无数据", xref="paper", yref="paper",
@@ -106,13 +109,25 @@ def overview_figure(idx_map: dict, synth: pd.Series, official_ok: bool) -> go.Fi
     # 横轴窗口:滑块拖拽 + 1月/6月/1年/3年/全部 快捷窗(与其他图同款;官方指数~4年史,"3年"以上档位看自算线)
     fig.update_xaxes(type="date", hoverformat="%Y-%m-%d",
                      rangeselector=_RANGE_BUTTONS, rangeslider=dict(visible=True))
+    _default_3y(fig, ends)                     # 初始观察窗=近3年(点快捷窗/拖滑块可改)
     return fig
+
+
+def _default_3y(fig: go.Figure, ends: list) -> None:
+    """初始 x 轴范围=最新数据点往前 3 年(用户 2026-09 指定默认窗;「全部」按钮回全史)。"""
+    ends = [e for e in ends if e is not None]
+    if not ends:
+        return
+    end = max(ends)
+    fig.update_xaxes(range=[(end - pd.DateOffset(years=3)).strftime("%Y-%m-%d"),
+                            end.strftime("%Y-%m-%d")])
 
 
 def breadth_figure(b20: pd.DataFrame, b60: pd.DataFrame) -> go.Figure:
     """广度图:上涨品种占比%(20日/60日,右轴语义统一 0-100)+ 等权涨幅%(左轴,细看幅度)。"""
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     plotted = False
+    ends: list = []
     for b, lbl in ((b20, "20日"), (b60, "60日")):
         if b is None or not len(b):
             continue
@@ -127,6 +142,7 @@ def breadth_figure(b20: pd.DataFrame, b60: pd.DataFrame) -> go.Figure:
                                  hovertemplate=f"%{{x|%Y-%m-%d}}<br>{lbl}等权 %{{y:+.1f}}%<extra></extra>"),
                       secondary_y=True)
         plotted = True
+        ends.append(idx[-1])
     if not plotted:
         fig.update_layout(**_layout("品种广度(无数据)", height=220, showlegend=False))
         fig.add_annotation(text="品种数据不足", xref="paper", yref="paper", x=0.5, y=0.5,
@@ -139,4 +155,5 @@ def breadth_figure(b20: pd.DataFrame, b60: pd.DataFrame) -> go.Figure:
     # 横轴窗口:滑块拖拽 + 快捷窗(与总览指数图同款;双轴子图单 x 轴,rangeselector 挂 x 无 plotly 坑)
     fig.update_xaxes(type="date", hoverformat="%Y-%m-%d",
                      rangeselector=_RANGE_BUTTONS, rangeslider=dict(visible=True))
+    _default_3y(fig, ends)                     # 初始观察窗=近3年,与总览指数图一致
     return fig
