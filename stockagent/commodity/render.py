@@ -203,19 +203,19 @@ def _panel_section(store, config=None) -> str:
         else:
             dom_cell = '<span class="muted">（主语）</span>'
         overnight = "—" if _nan(r["overnight"]) else f"{r['overnight']:+.1%}"
-        # 60日偏离度(价格/MA60−1)+历史极值排名(第几高/第几低;≤10 名红/绿高亮,与放大视图标注同语义)
+        # 60日偏离度(价格/MA60−1)+历史极值排名:偏离>0 取「第几高」、<0 取「第几低」(方向对应侧,
+        # 2026-09 用户口径);≤10 名红/绿高亮,与放大视图标注同源
         dev = p.get("dev")
         rk_h, rk_l = p.get("rank_high"), p.get("rank_low")
         dev_cell = "—" if _nan(dev) else f"{dev:+.1%}"
-        if _nan(rk_h) or _nan(rk_l):
+        if _nan(dev) or dev == 0 or _nan(rk_h) or _nan(rk_l):
             rank_cell = "<span class='muted'>—</span>"
+        elif dev > 0:
+            rank_cell = (f"<span style='color:#b91c1c;font-weight:600'>第{rk_h}高</span>" if rk_h <= 10
+                         else f"<span class='muted'>第{rk_h}高</span>")
         else:
-            h_hot, l_hot = rk_h <= 10, rk_l <= 10
-            rank_cell = ((f"<span style='color:#b91c1c;font-weight:600'>第{rk_h}高</span>"
-                          f"/<span class='muted'>第{rk_l}低</span>") if h_hot else
-                         ((f"<span class='muted'>第{rk_h}高</span>"
-                           f"/<span style='color:#15803d;font-weight:600'>第{rk_l}低</span>") if l_hot else
-                          f"<span class='muted'>第{rk_h}高/第{rk_l}低</span>"))
+            rank_cell = (f"<span style='color:#15803d;font-weight:600'>第{rk_l}低</span>" if rk_l <= 10
+                         else f"<span class='muted'>第{rk_l}低</span>")
         body.append(
             f"<tr><td style='{td}'><b>{html.escape(r['variety'])}</b>{p['mark']}</td>"
             f"<td style='{td};text-align:center'>{subject}</td>"
@@ -242,7 +242,7 @@ def _panel_section(store, config=None) -> str:
     return ('<div class="alerts"><h2>🧲 品种面板 '
             f'<span class="count">国际主语 {n_intl}/{len(rows)} · 国内价=A股投资指导</span></h2>'
             f'<p class="muted">有国际通用基准的品种以国际价为主语(国际价格波动一般传导至国内),'
-            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日;60日偏离度=价格/MA60−1,其分位红≥95%/绿≤5%与🚦雷达慢腿同源同阈;极值排名=该偏离度在自身历史第几高/第几低,≤10名红/绿高亮)。隔夜=国内夜盘快照 vs 国内日收盘'
+            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日;60日偏离度=价格/MA60−1,其分位红≥95%/绿≤5%与🚦雷达慢腿同源同阈;极值排名:偏离>0取自身历史第几高、<0取第几低,≤10名红/绿高亮)。隔夜=国内夜盘快照 vs 国内日收盘'
             f'(A股开盘前最新脉搏)。{guide}{spot_note}</p>'
             f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
             f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div></div>')
