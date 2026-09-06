@@ -244,6 +244,12 @@ def test_render_full_page_sections():
     assert _re.search(r"第\d+高", h)
     seg = h[h.index("品种面板"):h.index("品种时序")]
     assert "高/" not in seg                       # 不再双值并列(第N高/第N低)
+    # 近10日列 + 四列可排序(近10/20/60日·偏离度):表头 onclick + data-v 数值通道 + 排序 JS
+    assert "近10日" in seg and "近20日" in seg
+    for col in (4, 5, 6, 7):
+        assert f'onclick="sortPanel({col})"' in seg
+    assert seg.count("data-v=") >= 17 * 4         # 每行四个可排序列都带数值
+    assert "function sortPanel" in h and 'id="panel-body"' in h
     # 放大模态 + 可读 JSON(无 bdata 二进制块)
     assert 'id="comm-modal"' in h and "openCommChart" in h
     i0, i1 = h.index("var COMM=["), h.index("var COMM_NAMES=")

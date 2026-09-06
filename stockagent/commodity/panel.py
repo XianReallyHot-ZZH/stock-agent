@@ -28,13 +28,13 @@ def series_stats(s: pd.Series) -> dict:
         n = min(k, len(s) - 1)
         return float(s.iloc[-1]) / float(s.iloc[-1 - n]) - 1.0
 
-    yoy, m60, m20 = _chg(252), _chg(60), _chg(20)
+    yoy, m60, m20, m10 = _chg(252), _chg(60), _chg(20), _chg(10)
     dst = sf.commodity_dev_stats(s) or {}
     win60 = s.iloc[-min(60, len(s)):]
     mark = "🔺" if float(win60.iloc[-1]) >= float(win60.max()) \
         else ("🔻" if float(win60.iloc[-1]) <= float(win60.min()) else "")
     return {"cur": float(s.iloc[-1]), "date": str(s.index[-1]),
-            "yoy": yoy, "m20": m20, "m60": m60,
+            "yoy": yoy, "m10": m10, "m20": m20, "m60": m60,
             "pct": dst.get("pct"), "mark": mark,
             # 60日偏离度本体 + 历史极值排名(第几高/第几低,与🚦慢腿/放大视图标注同源;
             # dst={} 时三者为 None → 面板该两列诚实显示 —)

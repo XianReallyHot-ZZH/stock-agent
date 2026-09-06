@@ -216,14 +216,18 @@ def _panel_section(store, config=None) -> str:
         else:
             rank_cell = (f"<span style='color:#15803d;font-weight:600'>第{rk_l}低</span>" if rk_l <= 10
                          else f"<span class='muted'>第{rk_l}低</span>")
+        def _dv(v):        # 排序用 data-v(缺失→空串,JS 端沉底)
+            return "" if _nan(v) else f"{v:.6g}"
+
         body.append(
             f"<tr><td style='{td}'><b>{html.escape(r['variety'])}</b>{p['mark']}</td>"
             f"<td style='{td};text-align:center'>{subject}</td>"
             f"<td style='{td};text-align:center'>{px}</td>"
             f"<td style='{td};text-align:center'>{_pct(p['yoy'], True)}</td>"
-            f"<td style='{td};text-align:center'>{_pct(p['m20'], True)}</td>"
-            f"<td style='{td};text-align:center'>{_pct(p['m60'], True)}</td>"
-            f"<td style='{td};text-align:center'>{dev_cell}</td>"
+            f"<td style='{td};text-align:center' data-v='{_dv(p['m10'])}'>{_pct(p['m10'], True)}</td>"
+            f"<td style='{td};text-align:center' data-v='{_dv(p['m20'])}'>{_pct(p['m20'], True)}</td>"
+            f"<td style='{td};text-align:center' data-v='{_dv(p['m60'])}'>{_pct(p['m60'], True)}</td>"
+            f"<td style='{td};text-align:center' data-v='{_dv(dev)}'>{dev_cell}</td>"
             f"<td style='{td};text-align:center;color:{pct_color(p['pct'])};font-weight:600'>"
             f"{('—' if _nan(p['pct']) else _pct_exact(p['pct']))}</td>"
             f"<td style='{td};text-align:center'>{rank_cell}</td>"
@@ -231,8 +235,11 @@ def _panel_section(store, config=None) -> str:
             f"<td style='{td};text-align:center;color:{_J_COLOR[r['judge']]};font-weight:600'>{r['judge']}</td>"
             f"<td style='{td};text-align:center'>{dom_cell}</td></tr>")
     head = (f"<tr><th style='{th};text-align:left'>品种</th><th style='{th}'>主语</th>"
-            f"<th style='{th}'>现价</th><th style='{th}'>同比</th><th style='{th}'>近20日</th>"
-            f"<th style='{th}'>近60日</th><th style='{th}'>60日偏离度</th>"
+            f"<th style='{th}'>现价</th><th style='{th}'>同比</th>"
+            f"<th style='{th}' id='pth-4' class='sortable' title='点击排序(降序→升序→还原)' onclick=\"sortPanel(4)\">近10日</th>"
+            f"<th style='{th}' id='pth-5' class='sortable' title='点击排序(降序→升序→还原)' onclick=\"sortPanel(5)\">近20日</th>"
+            f"<th style='{th}' id='pth-6' class='sortable' title='点击排序(降序→升序→还原)' onclick=\"sortPanel(6)\">近60日</th>"
+            f"<th style='{th}' id='pth-7' class='sortable' title='点击排序(降序→升序→还原)' onclick=\"sortPanel(7)\">60日偏离度</th>"
             f"<th style='{th}'>60日偏离分位</th><th style='{th}'>极值排名</th><th style='{th}'>隔夜</th>"
             f"<th style='{th}'>判定</th><th style='{th}'>国内对照</th></tr>")
     n_intl = sum(1 for r in rows if r["has_bench"])
@@ -243,9 +250,47 @@ def _panel_section(store, config=None) -> str:
             f'<span class="count">国际主语 {n_intl}/{len(rows)} · 国内价=A股投资指导</span></h2>'
             f'<p class="muted">有国际通用基准的品种以国际价为主语(国际价格波动一般传导至国内),'
             f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日;60日偏离度=价格/MA60−1,其分位红≥95%/绿≤5%与🚦雷达慢腿同源同阈;极值排名:偏离>0取自身历史第几高、<0取第几低,≤10名红/绿高亮)。判定四态=同比×近60日:向上=同比>+10%且近60日>−5%(年度上行且未回落,埋伏方向);背离=同比>+10%但近60日≤−5%(高位回落·前瞻恶化,即M1口径,避);震荡=同比±10%内(中性);向下=同比≤−10%(周期确认向下,即M2口径,避)。隔夜=国内夜盘快照 vs 国内日收盘'
-            f'(A股开盘前最新脉搏)。{guide}{spot_note}</p>'
-            f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
-            f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div></div>')
+            f'(A股开盘前最新脉搏)。近10/20/60日·偏离度表头可点击排序(降序→升序→还原)。{guide}{spot_note}</p>'
+            f'<div style="overflow-x:auto"><table id="panel-table" style="width:100%;border-collapse:collapse;font-size:13px">'
+            f'<thead>{head}</thead><tbody id="panel-body">{"".join(body)}</tbody></table></div></div>'
+            + "\n<script>" + _PANEL_SORT_JS + "</script>")
+
+
+# 面板排序:近10/20/60日·60日偏离度 四列三态(降序→升序→还原板块原序);
+# 数值藏在 td 的 data-v(缺失=空串 → 排序沉底)。纯客户端重排,不重算。
+_PANEL_SORT_JS = """
+var panelSortCol = null, panelSortDir = 0;        // dir: 0=原序 1=降序 2=升序
+var panelOrigRows = null;
+function sortPanel(col){
+  var tb = document.getElementById('panel-body');
+  if(!tb) return;
+  if(panelSortCol !== col){ panelSortCol = col; panelSortDir = 1; }
+  else { panelSortDir = (panelSortDir + 1) % 3; if(panelSortDir === 0) panelSortCol = null; }
+  if(!panelOrigRows) panelOrigRows = Array.prototype.slice.call(tb.rows);
+  var rows;
+  if(panelSortCol === null){
+    rows = panelOrigRows.slice();
+  } else {
+    rows = Array.prototype.slice.call(tb.rows);
+    var c = panelSortCol;
+    rows.sort(function(a, b){
+      var va = parseFloat(a.cells[c].getAttribute('data-v'));
+      var vb = parseFloat(b.cells[c].getAttribute('data-v'));
+      if(isNaN(va)) va = -Infinity;
+      if(isNaN(vb)) vb = -Infinity;
+      return (va - vb) * (panelSortDir === 2 ? 1 : -1);
+    });
+  }
+  rows.forEach(function(r){ tb.appendChild(r); });
+  document.querySelectorAll('#panel-table th.sortable').forEach(function(th){
+    th.textContent = th.textContent.replace(/\\s*[▲▼]$/, '');
+  });
+  if(panelSortCol !== null){
+    var th = document.getElementById('pth-' + panelSortCol);
+    if(th) th.textContent = th.textContent + (panelSortDir === 2 ? ' ▲' : ' ▼');
+  }
+}
+"""
 
 
 # ---------------------------------------------------------------- 📈 时序图 + ⚖ 比价
@@ -669,6 +714,9 @@ h2 { font-size:16px; margin:0 0 10px; }
 .subj.intl { background:#2563eb; }
 .subj.dom { background:#94a3b8; }
 .unit { color:var(--muted); font-size:10px; margin-left:3px; }
+/* 面板可排序表头(近10/20/60日·偏离度;三态:降序→升序→还原) */
+.sortable { cursor:pointer; user-select:none; }
+.sortable:hover { color:#2563eb; }
 /* 放大模态(迁自个股看板) */
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:flex-start; justify-content:center; padding:28px 14px; z-index:1000; overflow:auto; }
 .modal-overlay[hidden] { display:none; }
