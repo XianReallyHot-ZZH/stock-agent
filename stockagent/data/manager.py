@@ -621,6 +621,42 @@ class DataManager:
         log.info("commodity_spot: %d varieties snapshotted", n)
         return {r["variety"]: 1 for _, r in df.iterrows()}
 
+    COMMODITY_BENCHMARK_SYMBOLS = sorted({s for s, _, _ in fetcher.COMMODITY_BENCHMARKS.values()})
+
+    def update_commodity_benchmarks(self, symbols: Optional[list[str]] = None) -> dict:
+        """Fetch + store 国际基准日线(第八看板面板主语)。写 western_macro_series source='fut'——
+        与 western 腿同表幂等(GC/SI/CL 双腿都会刷,谁后跑谁新,无冲突);本腿独立 meta 保证
+        大宗商品看板的新鲜度不依赖宏观看板的刷新节奏。返回 {symbol: 最新日期}。"""
+        symbols = symbols or self.COMMODITY_BENCHMARK_SYMBOLS
+        try:
+            df = fetcher.fetch_commodity_benchmarks(symbols)
+        except Exception as e:  # noqa: BLE001
+            log.warning("commodity_benchmarks failed: %s", str(e)[:120])
+            return {}
+        n = self.store.upsert_western_macro(df, source_tag="commodity_bench")
+        self.store.set_meta("last_commodity_benchmark_update", fetcher.today_str())
+        per = {str(k): str(v) for k, v in df.groupby("symbol")["date"].max().items()}
+        log.info("commodity_benchmarks: +%d rows (to %s)", n, per)
+        return per
+
+    def update_commodity_index(self, names: Optional[list[str]] = None) -> dict:
+        """Fetch + store 中证商品指数(第八看板官方总览;南华 akshare 端点已死,ccidx 官方源替代)。"""
+        names = names or list(fetcher.CCIDX_INDEXES.keys())
+        results: dict[str, int] = {}
+        for nm in names:
+            try:
+                df = fetcher.fetch_commodity_index(nm)
+            except Exception as e:  # noqa: BLE001
+                log.warning("commodity_index %s failed: %s", nm, str(e)[:120])
+                continue
+            rows = [(nm, r["date"], r["close"], r.get("pct")) for _, r in df.iterrows()]
+            results[nm] = self.store.upsert_commodity_index(rows, source="ccidx")
+            log.info("commodity_index %s: +%d rows (to %s)", nm, results[nm],
+                     df["date"].iloc[-1] if len(df) else "?")
+        if results:
+            self.store.set_meta("last_commodity_index_update", fetcher.today_str())
+        return results
+
     def update_market_pb(self) -> int:
         """Fetch + store whole-A-market PB history + percentiles (legulegu). Single series."""
         try:

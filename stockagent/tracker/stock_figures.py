@@ -258,23 +258,93 @@ def attribution_figure(sym: str, name: str, rows: list[dict]) -> go.Figure:
     return fig
 
 
+def judge_commodity(yoy, recent) -> str:
+    """商品四态判定(统一口径;2026-09 拆大宗商品看板时把三处历史实现收口于此:
+    stock_report 面板 / 本模块商品图 / leading.commodity_alignment 健康度)。
+    口径:同比>+10% 且 近60日>-5% → 向上;同比>+10% 但近期回落 → 背离;
+    同比±10% 内 → 震荡;同比<-10% → 向下。NaN 同比 → 向下(与面板/图历史行为一致;
+    leading 侧在入口已拦 NaN)。阈值改动只改这里,parity 测试锁行为。"""
+    if yoy is None or pd.isna(yoy):
+        return "向下"
+    ok_recent = recent is not None and not pd.isna(recent)
+    if yoy > 0.10 and ok_recent and recent > -0.05:
+        return "向上"
+    if yoy > 0.10:
+        return "背离"
+    if yoy > -0.10:
+        return "震荡"
+    return "向下"
+
+
+_JUDGE_EMOJI = {"向上": "向上🟢", "背离": "背离🟡", "震荡": "震荡⚪", "向下": "向下🔴"}
+
+
 def _commodity_judge(s: pd.Series) -> tuple[str, float, float]:
-    """商品判定(向上🟢/背离🟡/震荡⚪/向下🔴) + 同比 + 近60日。
-    口径:同比(趋势)>+10% 且 近60日(边际)>-5% → 向上;同比>+10% 但近期回落 → 背离;
-    同比±10% 内 → 震荡;同比<-10% → 向下。商品单图与股价叠加图共用,口径一致。"""
+    """商品判定(向上🟢/背离🟡/震荡⚪/向下🔴) + 同比 + 近60日(judge_commodity 的序列包装)。"""
     n252 = min(252, len(s) - 1)
     n60 = min(60, len(s) - 1)
     yoy = float(s.iloc[-1]) / float(s.iloc[-1 - n252]) - 1.0 if n252 >= 1 else float("nan")
     rec = float(s.iloc[-1]) / float(s.iloc[-1 - n60]) - 1.0 if n60 >= 1 else float("nan")
-    if not pd.isna(yoy) and yoy > 0.10 and not pd.isna(rec) and rec > -0.05:
-        judge = "向上🟢"
-    elif not pd.isna(yoy) and yoy > 0.10:
-        judge = "背离🟡"
-    elif not pd.isna(yoy) and yoy > -0.10:
-        judge = "震荡⚪"
-    else:
-        judge = "向下🔴"
-    return judge, yoy, rec
+    return _JUDGE_EMOJI[judge_commodity(yoy, rec)], yoy, rec
+
+
+def commodity_radar(stats_rows: list, th: float = 0.95, mo_th: float = 0.10):
+    """🚦 双段异动雷达纯分类器(2026-09 从 stock_report._commodity_extreme_banner 收口,两看板共用):
+    in  = [(variety, commodity_dev_stats dict)];
+    out = (fast, slow, n_ok),fast=(variety, cur偏离, tags, up) / slow=(variety, cur偏离, tags)。
+    快腿(⚠异动提醒)=20日动量≥±mo_th 或 60日新高/新低;慢腿(⛔极端警戒)=偏离分位 ≥th 超买 / ≤1-th 超卖。
+    同品种可双段同时出现(既在动又在伸展=两句话都成立);只分类不渲染,chips 归各看板。"""
+    fast, slow, n_ok = [], [], 0
+    for v, st in stats_rows:
+        if not st or pd.isna(st.get("pct")):
+            continue
+        n_ok += 1
+        m20 = st.get("momentum20")
+        stags, ftags = [], []
+        if st["pct"] >= th:
+            stags.append(f"分位 {st['pct']:.0%} · 超买")
+        elif st["pct"] <= 1.0 - th:
+            stags.append(f"分位 {st['pct']:.0%} · 超卖")
+        if not pd.isna(m20) and abs(float(m20)) >= mo_th:
+            ftags.append(f"20日{float(m20):+.0%} · 动量")
+        if st.get("new_high60"):
+            ftags.append("60日新高")
+        if st.get("new_low60"):
+            ftags.append("60日新低")
+        if ftags:
+            up = bool(st.get("new_high60")) or (not pd.isna(m20) and float(m20) >= 0)
+            fast.append((v, st["cur"], ftags, up))
+        if stags:
+            slow.append((v, st["cur"], stags))
+    return fast, slow, n_ok
+
+
+def fig_json_readable(fig) -> str:
+    """fig → JSON 字符串,数值数组强制展开为普通 JSON 数组(2026-09 从 stock_report 收口,两看板共用)。
+
+    plotly 的 to_json() 会把数值列打包成 base64 二进制块({dtype:'f8',bdata:...})——浏览器端
+    Plotly 认得、能直接 newPlot,但 JS 读不到逐点数值,放大视图的偏离度派生(价格/MA60 逐点
+    相除)会拿到全 undefined → 整行不渲染。日期列 to_json() 本就输出 ISO 字符串(正确),
+    故只对 bdata 块解码(NaN→null),其余原样保留。"""
+    import base64
+    import json
+
+    import numpy as np
+
+    d = json.loads(fig.to_json())
+    for tr in d.get("data") or []:
+        for key in ("x", "y"):
+            v = tr.get(key)
+            if not (isinstance(v, dict) and "bdata" in v):
+                continue
+            try:
+                buf = base64.b64decode(v["bdata"])
+                arr = np.frombuffer(buf, dtype=np.dtype("<" + str(v.get("dtype", "f8"))))
+                tr[key] = [None if isinstance(z, float) and np.isnan(z) else z
+                           for z in arr.tolist()]
+            except Exception:  # noqa: BLE001
+                pass                                       # 解不开保留原块(Plotly 自己能画)
+    return json.dumps(d, ensure_ascii=False)
 
 
 # ---- ⑦ 商品价(A 类领先信号;周期股上游,领先财报 1-4 月)----

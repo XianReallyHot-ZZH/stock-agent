@@ -89,6 +89,14 @@ CREATE TABLE IF NOT EXISTS commodity_spot (
     quote_time TEXT,                         -- 行情时间(夜盘品种如 '230000')
     source     TEXT
 );
+CREATE TABLE IF NOT EXISTS commodity_index (   -- 商品总览官方指数(第八看板·2026-09;南华 akshare 端点已死,ccidx 替代)
+    index_name TEXT NOT NULL,                   -- 中证商品期货指数 / 中证商品期货价格指数
+    date       TEXT NOT NULL,
+    close      REAL,                            -- 收盘点位
+    pct        REAL,                            -- 日涨跌幅(%)
+    source     TEXT,
+    PRIMARY KEY (index_name, date)
+);
 CREATE TABLE IF NOT EXISTS etf_earnings (
     symbol        TEXT NOT NULL,
     report_period TEXT NOT NULL,
@@ -777,6 +785,32 @@ class Store:
             df = pd.read_sql_query(
                 "SELECT variety,date,price,quote_time FROM commodity_spot", c)
         return df
+
+    def upsert_commodity_index(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (index_name, date, close, pct)。幂等 upsert 主键 (index_name, date)。"""
+        if not rows:
+            return 0
+        payload = [(nm, d, float(c) if c is not None and not pd.isna(c) else None,
+                    float(p) if p is not None and not pd.isna(p) else None, source)
+                   for (nm, d, c, p) in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO commodity_index(index_name,date,close,pct,source) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(index_name,date) DO UPDATE SET "
+                "close=excluded.close,pct=excluded.pct,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_commodity_index_series(self, index_name: str) -> pd.Series:
+        """官方商品指数 close 序列(date 升序,index=date)。第八看板 📊 总览用。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT date,close FROM commodity_index WHERE index_name=? ORDER BY date ASC",
+                c, params=[index_name])
+        if len(df) == 0:
+            return pd.Series(dtype=float)
+        return df.set_index("date")["close"].astype(float)
 
     def get_industry_pe_series(self, industry: str, start: Optional[str] = None,
                                end: Optional[str] = None) -> pd.DataFrame:

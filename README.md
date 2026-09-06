@@ -223,6 +223,15 @@ python scripts/backfill_china_macro.py          # Shibor/FDR/LPR/中债 + 央行
 python scripts/china_macro_report.py            # 生成 data/china_macro.html（七 section，深浅色可切）
 ```
 
+### 9. 大宗商品看板（第八看板 · 只读观测 · 2026-09 从个股诊断拆出）
+
+商品周期观测温度计 + 周期股择时深化底座：🚦异动雷达（双段：⚠快腿动量/新高新低→研究排队、⛔慢腿偏离分位极端→追高风险；国内口径）📊环境总览（官方中证商品指数 + 自算等权广度）🧲品种面板（**有国际基准的品种国际价为主语**、国内价=大A投资指导对照；LME铜/铝/锌·COMEX金银·WTI·CBOT豆粕/玉米）📈品种时序（点击放大偏离度视图）⚖比价矩阵（金银比/油金比/铜铝比/螺矿比…，黄金只做分母）。永不喂引擎；个股看板只留 🧭 商品环境速览行。
+
+```bash
+python scripts/backfill_commodity.py            # 国际基准 + 中证商品指数（幂等；南华 akshare 端点已死，ccidx 替代）
+python scripts/commodity_report.py              # 生成 data/commodity.html（五 section，深浅色可切）
+```
+
 ---
 
 ## 🗓️ 日常使用
@@ -232,7 +241,7 @@ python scripts/china_macro_report.py            # 生成 data/china_macro.html�
 | 每日 15:30 | `python scripts/run_eod.py` | 收盘数据更新（幂等自愈） |
 | 每日 08:30 | `python scripts/run_morning_report.py` | 生成 + 推送晨报（基于前日收盘） |
 | 每周 | `python scripts/record_actual.py --executed` | 对账自律度 |
-| 按需 | `python scripts/research_report.py` 等 | 刷新七套诊断看板（`/dashboards` 全刷 或 `/macro-dashboard` 只刷宏观） |
+| 按需 | `python scripts/research_report.py` 等 | 刷新八套诊断看板（`/dashboards` 全刷 或 `/macro-dashboard` 只刷宏观 或 `/commodity-dashboard` 只刷商品） |
 
 > A 股交易日 9:30–11:30 / 13:00–15:00；报告 8:30 前基于前日收盘。Windows 可用「任务计划程序」设这两个定时任务。
 

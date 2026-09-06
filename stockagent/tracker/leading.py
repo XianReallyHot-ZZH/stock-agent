@@ -16,6 +16,7 @@ import math
 import pandas as pd
 
 from ..config import get_config
+from .stock_figures import judge_commodity
 
 
 def _nan(v) -> bool:
@@ -101,15 +102,8 @@ def commodity_alignment(com: dict, stock_recent_return, lag_scale: float = 0.20)
     yoy, recent = com.get("yoy"), com.get("recent")
     if _nan(yoy):
         return {"valid": False, "score": 0.0}
-    # 商品健康度
-    if yoy > 0.10 and not _nan(recent) and recent > -0.05:
-        health = 1.0           # 向上(铜)
-    elif yoy > 0.10:
-        health = 0.3           # 背离(锂矿)
-    elif yoy > -0.10:
-        health = 0.1           # 震荡
-    else:
-        health = 0.0           # 向下(钢)
+    # 商品健康度(四态判定收口 stock_figures.judge_commodity,与面板/图同口径防漂移)
+    health = {"向上": 1.0, "背离": 0.3, "震荡": 0.1, "向下": 0.0}[judge_commodity(yoy, recent)]
     # 股价落后度: 商品近期涨 − 股价近期涨 >0 = 股价落后商品 = 错杀
     comm_r = float(recent) if not _nan(recent) else 0.0
     stock_r = float(stock_recent_return) if not _nan(stock_recent_return) else 0.0

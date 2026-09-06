@@ -1045,6 +1045,74 @@ def fetch_commodity_spot(varieties: Optional[list[str]] = None, timeout: float =
     return pd.concat(frames, ignore_index=True)
 
 
+# 大宗商品国际基准(第八看板 · 2026-09):品种 → (sina 外盘符号, 名称, 单位)。
+# 有基准的品种看板以国际价为主语、国内价对照(国际价=研究传导方向,国内价=A股投资指导——
+# 国际价格波动一般传导至国内)。无基准品种(黑色/建材/化肥/新能源金属/生猪)面板标「国内定价」。
+# 端点真相(2026-09-06 实测):LME铜=CAD(沪铜对口)、LME铝=AHD、LME锌=ZSD、CBOT豆粕=SM、CBOT玉米=C,
+# 均 futures_foreign_hist(sina)~10年全历史且当日新鲜;HG(COMEX铜)/LHC 数据失真不用(见上方注)。
+# 豆粕对口 SM(CBOT豆粕)而非 S(美豆)——与国内豆粕口径一致。
+COMMODITY_BENCHMARKS = {
+    "铜": ("CAD", "LME铜", "美元/吨"),
+    "铝": ("AHD", "LME铝", "美元/吨"),
+    "锌": ("ZSD", "LME锌", "美元/吨"),
+    "黄金": ("GC", "COMEX黄金", "美元/盎司"),
+    "白银": ("SI", "COMEX白银", "美元/盎司"),
+    "原油": ("CL", "WTI原油", "美元/桶"),
+    "豆粕": ("SM", "CBOT豆粕", "美元/短吨"),
+    "玉米": ("C", "CBOT玉米", "美分/蒲式耳"),
+}
+
+# 商品总览官方指数(第八看板 📊):中证商品指数(ccidx.com 官方源,futures_index_ccidx 日频,~4年)。
+# 注:南华指数 akshare 端点(qhkch.com 源)已死(KeyError,源站停更)——官方总览用中证商品指数替代。
+CCIDX_INDEXES = {"中证商品期货指数": "100001.CCI", "中证商品期货价格指数": "000001.CCI"}
+
+
+def fetch_commodity_benchmarks(symbols: Optional[list[str]] = None,
+                               retries: int = 2) -> pd.DataFrame:
+    """国际基准日线批量(futures_foreign_hist,逐符号容错——同 fetch_commodity_price 式,失败符号跳过)。
+    symbols 缺省 = COMMODITY_BENCHMARKS 全部符号(含 GC/SI/CL,与 western 腿同表幂等,保证看板主语新鲜度)。
+    返回长表 [source='fut', symbol, date, open,high,low,close,volume](与 fetch_foreign_future 同构,
+    可直接 upsert_western_macro)。全失败才 raise。"""
+    symbols = symbols if symbols is not None else sorted({s for s, _, _ in COMMODITY_BENCHMARKS.values()})
+    frames, last_err = [], None
+    for sym in symbols:
+        try:
+            frames.append(fetch_foreign_future(sym, retries=retries))
+            last_err = None
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    if not frames:
+        raise FetchError(f"commodity_benchmarks {symbols} failed ({last_err})")
+    return pd.concat(frames, ignore_index=True).sort_values(["symbol", "date"])
+
+
+def fetch_commodity_index(name: str = "中证商品期货指数",
+                          timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
+    """中证商品指数日线(官方 ccidx.com,日频,~4 年;商品总览官方腿)。
+    name 见 CCIDX_INDEXES。返回长表 [date, close, pct](close=收盘点位,pct=日涨跌幅%)。"""
+    last_err = None
+    for attempt in range(retries):
+        if attempt > 0:
+            time.sleep(1.5 * attempt)
+        try:
+            df = _run_with_timeout(ak.futures_index_ccidx, timeout, symbol=name)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            out = pd.DataFrame({
+                "date": pd.to_datetime(df["日期"], errors="coerce").dt.strftime("%Y-%m-%d"),
+                "close": pd.to_numeric(df["收盘点位"], errors="coerce"),
+                "pct": pd.to_numeric(df["涨跌幅"], errors="coerce"),
+            }).dropna(subset=["date", "close"]).drop_duplicates("date")
+            return out.sort_values("date")
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"commodity_index {name} failed ({last_err})")
+
+
 def fetch_market_pb(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
     """Whole-A-market PB history + percentiles (legulegu stock_a_all_pb). Single market-wide
     series, back to 2005. Returns DataFrame indexed by date(str): pb, pb_median, pct_all

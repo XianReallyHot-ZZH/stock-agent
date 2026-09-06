@@ -344,6 +344,17 @@ def main():
     if spot_last != datetime.now().strftime("%Y-%m-%d"):
         print(f"  商品实时快照·夜盘隔夜(当前 {spot_last or '无'})...")
         dm.update_commodity_spot()
+    # 6.12) commodity intl benchmarks + ccidx index (第八看板 大宗商品 · 2026-09):
+    #       国际基准(LME/COMEX/CBOT,写 western_macro_series fut)+ 中证商品指数(官方总览);
+    #       落后基准交易日才拉(外盘日历≠A股日历,多拉幂等无害)
+    bench_last = store.get_meta("last_commodity_benchmark_update")
+    if bench_last is None or bench_last < target:
+        print(f"  商品国际基准刷新·LME/COMEX/CBOT(当前 {bench_last or '无'} → {target})...")
+        dm.update_commodity_benchmarks()
+    cidx_last = store.get_meta("last_commodity_index_update")
+    if cidx_last is None or cidx_last < target:
+        print(f"  中证商品指数刷新·官方总览(当前 {cidx_last or '无'} → {target})...")
+        dm.update_commodity_index()
 
     # 7-9) candidate-pool legs (V7 第六看板): spot/行业/分红/日线 —— 默认暂停
     #      (2026-08-29 用户指令: 看板现阶段价值有限待迭代, 数据冻结在 2026-08-27;
