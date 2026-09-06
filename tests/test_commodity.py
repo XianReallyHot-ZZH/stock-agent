@@ -244,6 +244,8 @@ def test_render_full_page_sections():
     assert '"bdata"' not in h[i0:i1]
     # 总览图 inline 渲染
     assert "var OVW=[" in h and 'id="ovw-fig-idx"' in h
+    # 雷达三腿常驻:stub 是完美线性序列(偏离度恒定→分位0)→ 超买腿空,显「无」占位而非静默省略
+    assert "无(当前无品种偏离分位≥95%)" in h
     # 总览两图带横轴窗口控件:滑块拖拽 + 五档快捷窗(2026-09 用户反馈补齐,回归守卫)
     i0, i1 = h.index("var OVW=["), h.index("document.addEventListener", h.index("var OVW=["))
     ovw = h[i0:i1]
@@ -283,6 +285,8 @@ def test_radar_oversold_section():
     # 超卖节不挂超买话术:该标题行不含「追高风险」
     seg = h[h.index("深跌警戒"):h.index("dev-chip os")]
     assert "追高风险" not in seg
+    # 三条腿常驻:空腿显「无」占位(2026-09 反馈——静默省略让人以为检测不存在)
+    assert "无(当前无品种偏离分位≥95%)" in h              # 超买侧空 → 占位
 
 
 # ---------------------------------------------------------------- 🔬 基差/期限/库存(二期剩余)

@@ -90,24 +90,26 @@ def _radar_section(store, config=None) -> str:
         return (f"<span class='dev-chip {cls}'><b>{html.escape(v)}</b> {cur:+.1%}"
                 f"<small>{' · '.join(tags)}</small></span>")
 
-    if fast or slow:
-        count = (f"<span class='count'>动量{n_mo} · 突破{n_brk} | 超买{n_ob} · 超卖{n_os}</span>")
-        parts = []
-        if fast:
-            parts.append("<p class='dev-sec'>⚠ 异动提醒 · 快腿 → 排进研究队列(非买入信号)</p>"
-                         + "".join(_fast_chip(*x) for x in fast))
-        slow_ob = [x for x in slow if any("超买" in t for t in x[2])]
-        slow_os = [x for x in slow if any("超卖" in t for t in x[2])]
-        if slow_ob:
-            parts.append("<p class='dev-sec'>⛔ 极端警戒 · 慢腿超买 → 60日偏离度历史极值,追高风险</p>"
-                         + "".join(_slow_chip(*x) for x in slow_ob))
-        if slow_os:
-            parts.append("<p class='dev-sec'>🟢 深跌警戒 · 慢腿超卖 → 跌幅历史级,接飞刀风险/错杀观察窗(非买入信号)</p>"
-                         + "".join(_slow_chip(*x) for x in slow_os))
-        state = "".join(parts)
-    else:
-        count = "<span class='count'>常态</span>"
-        state = f"<p class='muted'>当前 {n_ok} 个品种偏离度与动量均处常态区间</p>"
+    count = (f"<span class='count'>动量{n_mo} · 突破{n_brk} | 超买{n_ob} · 超卖{n_os}</span>")
+    slow_ob = [x for x in slow if any("超买" in t for t in x[2])]
+    slow_os = [x for x in slow if any("超卖" in t for t in x[2])]
+
+    def _leg(title: str, chips_html: str, empty_note: str) -> str:
+        """三条腿常驻分节:空腿显「无」占位(2026-09 用户反馈——静默省略会让人以为检测不存在)。"""
+        return (f"<p class='dev-sec'>{title}</p>"
+                + (chips_html or f"<p class='muted' style='margin:2px 0 8px'>{empty_note}</p>"))
+
+    state = "".join([
+        _leg("⚠ 异动提醒 · 快腿 → 排进研究队列(非买入信号)",
+             "".join(_fast_chip(*x) for x in fast),
+             f"无(20日动量≥±{mo_th:.0%} 与 60日新高/新低 均未触发 · {n_ok} 品种常态)"),
+        _leg("⛔ 极端警戒 · 慢腿超买 → 60日偏离度历史极值,追高风险",
+             "".join(_slow_chip(*x) for x in slow_ob),
+             f"无(当前无品种偏离分位≥{th:.0%})"),
+        _leg("🟢 深跌警戒 · 慢腿超卖 → 跌幅历史级,接飞刀风险/错杀观察窗(非买入信号)",
+             "".join(_slow_chip(*x) for x in slow_os),
+             f"无(当前无品种偏离分位≤{1-th:.0%})"),
+    ])
     concl = ""
     if hasattr(store, "get_meta"):
         try:
