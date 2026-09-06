@@ -226,7 +226,7 @@ def _panel_section(store, config=None) -> str:
     return ('<div class="alerts"><h2>🧲 品种面板 '
             f'<span class="count">国际主语 {n_intl}/{len(rows)} · 国内价=A股投资指导</span></h2>'
             f'<p class="muted">有国际通用基准的品种以国际价为主语(国际价格波动一般传导至国内),'
-            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日)。隔夜=国内夜盘快照 vs 国内日收盘'
+            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日;偏离分位红≥95%/绿≤5%,与🚦雷达同阈)。隔夜=国内夜盘快照 vs 国内日收盘'
             f'(A股开盘前最新脉搏)。{guide}{spot_note}</p>'
             f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
             f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div></div>')
@@ -578,7 +578,7 @@ def _fundamentals_section(store, config=None) -> str:
             f'<span class="count">基差 {n_basis} 品种 · 库存 {n_inv} 品种(CZCE)</span></h2>'
             f'<p class="muted">基差率=(主力期货−现货)/现货,正=升水;期限斜率=主力/近月−1 年化,'
             f'正=contango/负=现货紧(backwardation);库存=郑商所交割仓单周采样(≠社会总库存)。'
-            f'分位=expanding 历史位(红≥90%/绿≤10%)。温度计非开关,不构成买卖建议。</p>'
+            f'分位=expanding 历史位(红≥95%/绿≤5%,与面板/雷达同阈)。温度计非开关,不构成买卖建议。</p>'
             f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
             f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div>{concl_html}</div>')
 
