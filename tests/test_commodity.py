@@ -258,7 +258,89 @@ def test_render_meta_conclusion_and_quiet(tmp_path):
     assert "快腿追买跑输基线" in h
 
 
-# ---------------------------------------------------------------- 投资标的映射(二期)
+# ---------------------------------------------------------------- 🔬 基差/期限/库存(二期剩余)
+def test_month_gap():
+    from stockagent.commodity.fundamentals import month_gap
+    assert month_gap(2609, 2701) == 4.0            # 跨年
+    assert month_gap(2609, 2611) == 2.0
+    assert pd.isna(month_gap(2611, 2609))          # 非递增
+    assert pd.isna(month_gap(None, 2701)) and pd.isna(month_gap("x", 2701))
+
+
+def test_term_slope_and_expanding_pct():
+    from stockagent.commodity.fundamentals import expanding_pct, term_slope_annualized
+    bdf = pd.DataFrame({"near_price": [100.0, 100.0], "dom_price": [103.0, 97.0],
+                        "near_month": [2609, 2609], "dom_month": [2701, 2701]})
+    ts = term_slope_annualized(bdf)
+    assert ts.iloc[0] == pytest.approx(0.03 * 3.0)     # 4 月差 → ×12/4=×3
+    assert ts.iloc[1] == pytest.approx(-0.03 * 3.0)
+    assert term_slope_annualized(None).empty
+    # expanding 分位:无前视 + 早期 NaN 门槛
+    idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    s = pd.Series([1.0] * 299 + [2.0], index=idx)
+    p = expanding_pct(s, min_history=250)
+    assert p.iloc[:249].isna().all()                  # 首个有效点=i249(第250个观测)
+    assert p.iloc[249] == pytest.approx(0.0)          # 常数段 → 无小于它 → 分位 0
+    assert p.iloc[-1] == pytest.approx(299 / 300)     # 全史最大 → 严格小于它的占比 299/300(≈超买端)
+
+
+def test_forward_return_and_cooldown():
+    from stockagent.commodity.fundamentals import cooldown_mask, forward_return
+    idx = pd.date_range("2024-01-01", periods=10, freq="B").strftime("%Y-%m-%d")
+    s = pd.Series([100.0, 110.0, 120.0, 130.0, 140.0, 150.0, 160.0, 170.0, 180.0, 190.0], index=idx)
+    fr = forward_return(s, 2)
+    assert fr.iloc[0] == pytest.approx(0.2) and pd.isna(fr.iloc[-1]) and pd.isna(fr.iloc[-2])
+    flags = pd.Series([True, True, False, True, False, False, True, False, False, False])
+    cm = cooldown_mask(flags, cooldown=3)
+    assert list(cm) == [True, False, False, True, False, False, True, False, False, False]
+
+
+def test_basis_inventory_store_roundtrip(tmp_path):
+    st = Store(tmp_path / "t.sqlite")
+    rows = [("CU", "2026-09-04", 78900.0, 79120.0, 79500.0, 2609, 2701, 600.0, 0.0076, 0.0052)]
+    assert st.upsert_commodity_basis(rows, source="100ppi") == 1
+    assert st.upsert_commodity_basis(rows, source="100ppi") == 1        # 幂等
+    df = st.get_commodity_basis("CU")
+    assert df.loc["2026-09-04", "dom_basis_rate"] == pytest.approx(0.0076)
+    assert st.last_commodity_basis_date("CU") == "2026-09-04"
+    assert st.get_commodity_basis("XX").empty
+    assert st.upsert_commodity_inventory([("FG", "2026-09-02", 12345.0)]) == 1
+    inv = st.get_commodity_inventory("FG")
+    assert inv.iloc[-1] == pytest.approx(12345.0) and inv.index[-1] == "2026-09-02"
+    assert st.get_commodity_inventory("SA").empty
+
+
+def test_render_fundamentals_section():
+    """🔬 section:基差史≥250 的品种出行(基差率+分位+期限斜率),CZCE 库存列,结论 meta 活注入。"""
+    idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    bdf = pd.DataFrame({
+        "dom_basis_rate": [0.01] * 299 + [-0.02], "spot_price": [100.0] * 300,
+        "near_price": [100.0] * 300, "dom_price": [101.0] * 300,
+        "near_month": [2609] * 300, "dom_month": [2701] * 300,
+        "dom_basis": [1.0] * 300, "near_basis_rate": [0.0] * 300,
+    }, index=idx)
+    inv = pd.Series([100.0] * 150 + [200.0], index=pd.date_range("2024-01-01", periods=151, freq="W").strftime("%Y-%m-%d"))
+
+    class _FundStore(_StubStore):
+        def get_commodity_basis(self, symbol, start=None, end=None):
+            return bdf if symbol == "CU" else pd.DataFrame()
+
+        def get_commodity_inventory(self, variety):
+            return inv if variety == "FG" else pd.Series(dtype=float)
+
+        def get_meta(self, key, default=None):
+            return {"commodity_basis_conclusion": "基差实证结论XXX",
+                    "commodity_inventory_conclusion": "库存实证结论YYY"}.get(key, default)
+
+    h = crep.render(_FundStore(), as_of="2026-09-06")
+    assert "基差·期限结构·库存" in h and "期限斜率(年化)" in h
+    assert "基差实证结论XXX" in h and "库存实证结论YYY" in h
+    # 只有铜(CU)有基差史;基差率末端 -2% 是全史最小 → 分位 0%(库存/期限同构造亦极值)
+    assert "主力基差率" in h and "分位0%" in h
+    assert "4周" in h                                                # 玻璃库存 4 周变化在列
+
+
+
 def test_targets_config_sanity():
     """targets 配置守卫:品种都在 COMMODITY_CODES、ref=intl 只给有国际基准的品种、symbol 唯一。"""
     from stockagent.config import get_config

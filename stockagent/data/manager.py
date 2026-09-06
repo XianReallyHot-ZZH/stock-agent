@@ -657,6 +657,66 @@ class DataManager:
             self.store.set_meta("last_commodity_index_update", fetcher.today_str())
         return results
 
+    def update_commodity_basis(self, start: str = "2019-01-01",
+                               end: Optional[str] = None) -> int:
+        """Fetch + store 基差+期限结构(100ppi,二期剩余)。按半年窗分段(端点逐日请求,≈1.4min/年),
+        从库内最新日期增量(全史幂等重拉代价 ~11min,避免)。返回新增行数。"""
+        end = end or fetcher.today_str()
+        last = self.store.last_commodity_basis_date()
+        cur = max(start, (last or start))
+        total = 0
+        while cur < end:
+            w_end = min(pd.Timestamp(cur) + pd.DateOffset(months=6) - pd.Timedelta(days=1),
+                        pd.Timestamp(end)).strftime("%Y-%m-%d")
+            try:
+                df = fetcher.fetch_commodity_basis(cur, w_end)
+            except Exception as e:  # noqa: BLE001 — 单窗失败记日志继续(重跑自愈)
+                log.warning("commodity_basis %s~%s failed: %s", cur, w_end, str(e)[:120])
+                cur = (pd.Timestamp(w_end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                continue
+            if len(df):
+                rows = [(r["symbol"], r["date"], r["spot_price"], r["near_price"], r["dom_price"],
+                         r["near_month"], r["dom_month"], r["dom_basis"], r["dom_basis_rate"],
+                         r["near_basis_rate"]) for _, r in df.iterrows()]
+                total += self.store.upsert_commodity_basis(rows, source="100ppi")
+            log.info("commodity_basis %s~%s: +%d rows", cur, w_end, len(df))
+            cur = (pd.Timestamp(w_end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+        if total:
+            self.store.set_meta("last_commodity_basis_update", fetcher.today_str())
+        return total
+
+    def update_commodity_inventory(self, start: str = "2021-01-01",
+                                   end: Optional[str] = None) -> int:
+        """Fetch + store 郑商所仓单(周采样:每周三;CZCE 四品种 FG/SA/UR/PG——多史免费源仅此一家,
+        见 fetcher 端点真相注)。从库内最新周增量;单日失败静默跳过(重跑自愈)。返回新增行数。"""
+        end = end or fetcher.today_str()
+        last = None
+        for v in fetcher.CZCE_INVENTORY_SYMBOLS:
+            s = self.store.get_commodity_inventory(v)
+            if len(s):
+                d = str(s.index[-1])
+                last = d if last is None else max(last, d)
+        cur = pd.Timestamp(max(start, (last or start))) + pd.offsets.Week(weekday=2)   # 次一个周三
+        total = 0
+        n_fail = 0
+        while cur <= pd.Timestamp(end):
+            iso = cur.strftime("%Y-%m-%d")
+            try:
+                df = fetcher.fetch_czce_receipts(iso.replace("-", ""))
+            except Exception as e:  # noqa: BLE001
+                log.warning("czce_receipts %s failed: %s", iso, str(e)[:120])
+                df = pd.DataFrame()
+            if len(df):
+                rows = [(r["variety"], r["date"], r["volume"]) for _, r in df.iterrows()]
+                total += self.store.upsert_commodity_inventory(rows, source="czce")
+            else:
+                n_fail += 1
+            cur = cur + pd.offsets.Week(weekday=2)
+        if total:
+            self.store.set_meta("last_commodity_inventory_update", fetcher.today_str())
+        log.info("commodity_inventory(czce weekly): +%d rows (%d empty weeks)", total, n_fail)
+        return total
+
     def update_market_pb(self) -> int:
         """Fetch + store whole-A-market PB history + percentiles (legulegu). Single series."""
         try:

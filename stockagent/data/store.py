@@ -97,6 +97,27 @@ CREATE TABLE IF NOT EXISTS commodity_index (   -- 商品总览官方指数(第�
     source     TEXT,
     PRIMARY KEY (index_name, date)
 );
+CREATE TABLE IF NOT EXISTS commodity_basis (    -- 基差+期限结构(第八看板·二期剩余·100ppi 生意社,2018起)
+    symbol        TEXT NOT NULL,                -- 品种代码(CU/RB/FG/LC…=COMMODITY_CODES 值)
+    date          TEXT NOT NULL,
+    spot_price    REAL,                         -- 现货价
+    near_price    REAL,                         -- 临近交割合约结算价
+    dom_price     REAL,                         -- 主力合约结算价
+    near_month    INTEGER,                      -- 近月(YYMM)
+    dom_month     INTEGER,                      -- 主力月(YYMM)
+    dom_basis     REAL,                         -- 主力基差 = 期货−现货
+    dom_basis_rate REAL,                        -- 主力基差率 = (期货−现货)/现货
+    near_basis_rate REAL,                       -- 近月基差率
+    source        TEXT,
+    PRIMARY KEY (symbol, date)
+);
+CREATE TABLE IF NOT EXISTS commodity_inventory ( -- 交割仓库仓单/库存(二期剩余·CZCE 日报聚合;SHFE/DCE 端点死·GFEX 解析坏·99qh 死·em 仅72天,见 fetcher 注)
+    variety    TEXT NOT NULL,                    -- 品种代码(CZCE:FG/SA/UR/PG)
+    date       TEXT NOT NULL,
+    volume     REAL,                             -- 当日仓单数量合计(交割仓库口径)
+    source     TEXT,
+    PRIMARY KEY (variety, date)
+);
 CREATE TABLE IF NOT EXISTS etf_earnings (
     symbol        TEXT NOT NULL,
     report_period TEXT NOT NULL,
@@ -811,6 +832,80 @@ class Store:
         if len(df) == 0:
             return pd.Series(dtype=float)
         return df.set_index("date")["close"].astype(float)
+
+    def upsert_commodity_basis(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (symbol, date, spot, near_p, dom_p, near_m, dom_m,
+        dom_basis, dom_basis_rate, near_basis_rate)。幂等 upsert 主键 (symbol, date)。"""
+        if not rows:
+            return 0
+
+        def _f(x):
+            return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
+
+        payload = [(s, d, _f(a), _f(b), _f(c2), _f(e), _f(g), _f(h), _f(i2), _f(j), source)
+                   for (s, d, a, b, c2, e, g, h, i2, j) in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO commodity_basis(symbol,date,spot_price,near_price,dom_price,near_month,"
+                "dom_month,dom_basis,dom_basis_rate,near_basis_rate,source) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(symbol,date) DO UPDATE SET "
+                "spot_price=excluded.spot_price,near_price=excluded.near_price,dom_price=excluded.dom_price,"
+                "near_month=excluded.near_month,dom_month=excluded.dom_month,dom_basis=excluded.dom_basis,"
+                "dom_basis_rate=excluded.dom_basis_rate,near_basis_rate=excluded.near_basis_rate,"
+                "source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_commodity_basis(self, symbol: str, start: Optional[str] = None,
+                            end: Optional[str] = None) -> pd.DataFrame:
+        """某品种基差/期限结构面板(date 升序 index;spot/near/dom 价+基差率)。"""
+        q = ("SELECT date,spot_price,near_price,dom_price,near_month,dom_month,"
+             "dom_basis,dom_basis_rate,near_basis_rate FROM commodity_basis WHERE symbol=?")
+        params: list = [symbol]
+        if start:
+            q += " AND date>=?"; params.append(start)
+        if end:
+            q += " AND date<=?"; params.append(end)
+        q += " ORDER BY date ASC"
+        with self._conn() as c:
+            df = pd.read_sql_query(q, c, params=params)
+        if len(df) == 0:
+            return df
+        return df.set_index("date")
+
+    def last_commodity_basis_date(self, symbol: Optional[str] = None) -> Optional[str]:
+        with self._conn() as c:
+            if symbol:
+                row = c.execute("SELECT MAX(date) FROM commodity_basis WHERE symbol=?",
+                                (symbol,)).fetchone()
+            else:
+                row = c.execute("SELECT MAX(date) FROM commodity_basis").fetchone()
+        return row[0] if row and row[0] else None
+
+    def upsert_commodity_inventory(self, rows: list[tuple], source: str = "") -> int:
+        """rows: iterable of (variety, date, volume)。幂等 upsert 主键 (variety, date)。"""
+        if not rows:
+            return 0
+        payload = [(v, d, float(x) if x is not None and not pd.isna(x) else None, source)
+                   for (v, d, x) in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO commodity_inventory(variety,date,volume,source) VALUES(?,?,?,?) "
+                "ON CONFLICT(variety,date) DO UPDATE SET volume=excluded.volume,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_commodity_inventory(self, variety: str) -> pd.Series:
+        """某品种仓单/库存 volume 序列(date 升序,index=date)。周采样进来的也当序列读。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT date,volume FROM commodity_inventory WHERE variety=? ORDER BY date ASC",
+                c, params=[variety])
+        if len(df) == 0:
+            return pd.Series(dtype=float)
+        return df.set_index("date")["volume"].astype(float)
 
     def get_industry_pe_series(self, industry: str, start: Optional[str] = None,
                                end: Optional[str] = None) -> pd.DataFrame:

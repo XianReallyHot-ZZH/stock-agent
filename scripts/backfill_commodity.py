@@ -6,10 +6,12 @@
 仍在 `backfill_stock_data.py --comm`(幂等,冷启动便利可一并跑)。
 
 Usage:
-  python scripts/backfill_commodity.py              # 全部(基准 + 指数 + 标的NAV,~1-2min)
+  python scripts/backfill_commodity.py              # 全部(基准+指数+标的NAV+基差+仓单)
   python scripts/backfill_commodity.py --bench      # 只国际基准
   python scripts/backfill_commodity.py --index      # 只中证商品指数
   python scripts/backfill_commodity.py --targets    # 只投资标的 NAV(非池内:有色期货/能化/豆粕/白银LOF/南方原油)
+  python scripts/backfill_commodity.py --basis      # 只基差+期限结构(首次全史 ~11min,之后增量)
+  python scripts/backfill_commodity.py --inv        # 只郑商所仓单·周采样(首次 ~5min)
 """
 from __future__ import annotations
 
@@ -25,18 +27,22 @@ from stockagent.utils.logging_setup import setup_logging
 
 
 def main():
-    ap = argparse.ArgumentParser(description="大宗商品看板数据回填(国际基准+官方指数+标的NAV,幂等)")
+    ap = argparse.ArgumentParser(description="大宗商品看板数据回填(国际基准+官方指数+标的NAV+基差/库存,幂等)")
     ap.add_argument("--bench", action="store_true", help="只国际基准(LME/COMEX/CBOT → western_macro_series fut)")
     ap.add_argument("--index", action="store_true", help="只中证商品指数(→ commodity_index)")
     ap.add_argument("--targets", action="store_true", help="只投资标的 NAV(非池内标的 → etf_nav)")
+    ap.add_argument("--basis", action="store_true",
+                    help="只基差+期限结构(100ppi→commodity_basis;首次全史 2019起 ~11min,之后增量秒级)")
+    ap.add_argument("--inv", action="store_true",
+                    help="只郑商所仓单(CZCE 四品种 FG/SA/UR/PG 周采样→commodity_inventory;首次 2021起 ~5min)")
     args = ap.parse_args()
     setup_logging()
 
     cfg = get_config()
     dm = DataManager(config=cfg)
-    all_three = not (args.bench or args.index or args.targets)
+    all_legs = not (args.bench or args.index or args.targets or args.basis or args.inv)
 
-    if args.bench or all_three:
+    if args.bench or all_legs:
         per = dm.update_commodity_benchmarks()
         if per:
             print("  国际基准:")
@@ -44,13 +50,13 @@ def main():
                 print(f"    {sym:4} → {last}")
         else:
             print("  ⚠ 国际基准拉取失败(重跑即可)")
-    if args.index or all_three:
+    if args.index or all_legs:
         res = dm.update_commodity_index()
         for nm, n in res.items():
             print(f"  {nm}: +{n} 行")
         if not res:
             print("  ⚠ 指数拉取失败(重跑即可)")
-    if args.targets or all_three:
+    if args.targets or all_legs:
         specs = (cfg.params.get("commodity") or {}).get("targets") or []
         pool = set(cfg.tracked_symbols())
         syms = [str(s["symbol"]) for s in specs
@@ -62,6 +68,12 @@ def main():
             ok = {k: v for k, v in res.items() if v}
             print(f"  投资标的 NAV: {len(ok)}/{len(syms)} 只有增量"
                   + (f" {ok}" if ok else " ⚠ 全部失败(重跑即可)"))
+    if args.basis or all_legs:
+        n = dm.update_commodity_basis()
+        print(f"  基差+期限结构(100ppi): +{n} 行(首次全史 2019起 ~11min,此处增量)")
+    if args.inv or all_legs:
+        n = dm.update_commodity_inventory()
+        print(f"  郑商所仓单·周采样(CZCE 四品种): +{n} 行(首次 2021起 ~5min)")
 
 
 if __name__ == "__main__":

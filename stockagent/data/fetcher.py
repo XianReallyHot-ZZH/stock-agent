@@ -1113,6 +1113,80 @@ def fetch_commodity_index(name: str = "中证商品期货指数",
     raise FetchError(f"commodity_index {name} failed ({last_err})")
 
 
+def fetch_commodity_basis(start: str, end: str,
+                          symbols: Optional[list[str]] = None,
+                          retries: int = 1) -> pd.DataFrame:
+    """基差+期限结构日表(100ppi 生意社,futures_spot_price_daily,2018 起;二期剩余·event-study 礼遇)。
+    一次调用内部逐日请求,窗长=耗时(≈1.4min/年)——调用方按半年窗分段。
+    返回长表 [symbol, date, spot/near_price/dom_price, near_month/dom_month(YYMM),
+    dom_basis_rate, near_basis_rate](basis=期货−现货,rate=(期货−现货)/现货;正=升水)。
+    非交易日该源会打 UserWarning,此处静默。"""
+    import warnings
+
+    symbols = symbols if symbols is not None else list(COMMODITY_CODES.values())
+    last_err = None
+    for attempt in range(retries + 1):
+        if attempt > 0:
+            time.sleep(2.0)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                df = _run_with_timeout(ak.futures_spot_price_daily, 600.0,
+                                       start_day=start, end_day=end, vars_list=symbols)
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            out = pd.DataFrame({
+                "symbol": df["symbol"].astype(str).str.upper(),
+                "date": pd.to_datetime(df["date"], format="%Y%m%d", errors="coerce").dt.strftime("%Y-%m-%d"),
+                "spot_price": pd.to_numeric(df["spot_price"], errors="coerce"),
+                "near_price": pd.to_numeric(df["near_contract_price"], errors="coerce"),
+                "dom_price": pd.to_numeric(df["dominant_contract_price"], errors="coerce"),
+                "near_month": pd.to_numeric(df["near_month"], errors="coerce"),
+                "dom_month": pd.to_numeric(df["dominant_month"], errors="coerce"),
+                "dom_basis": pd.to_numeric(df["dom_basis"], errors="coerce"),
+                "dom_basis_rate": pd.to_numeric(df["dom_basis_rate"], errors="coerce"),
+                "near_basis_rate": pd.to_numeric(df["near_basis_rate"], errors="coerce"),
+            }).dropna(subset=["symbol", "date"]).drop_duplicates(["symbol", "date"])
+            return out.sort_values(["symbol", "date"])
+        except FetchError as e:
+            last_err = e
+        except Exception as e:  # noqa: BLE001
+            last_err = FetchError(str(e)[:200])
+    raise FetchError(f"commodity_basis {start}~{end} failed ({last_err})")
+
+
+# 库存(仓单)端点真相(2026-09-06 实测,二期剩余审计):
+#   futures_inventory_99(99qh)      死(JSONDecodeError,源站改版)
+#   futures_inventory_em(东财)      活但仅 72 天(~3个月)——event-study 不够深,只配日度观察累积
+#   futures_shfe_warehouse_receipt  死(JSONDecodeError)
+#   futures_warehouse_receipt_dce   死(JSONDecodeError)
+#   futures_gfex_warehouse_receipt  解析坏(KeyError 增减,akshare 未跟上 gfex 改版)→ 碳酸锂库存待补
+#   futures_warehouse_receipt_czce  活(0.9s/次,dict{品种代码:逐仓库行})——本模块唯一多史源,
+#                                   覆盖 玻璃FG/纯碱SA/尿素UR/LPG PG(郑商所四品种),周采样进库
+CZCE_INVENTORY_SYMBOLS = ["FG", "SA", "UR"]   # PG(LPG)郑商所仓单接口无该键(2026-09-06 实测)——LPG 库存无源
+
+
+def fetch_czce_receipts(date: str, timeout: float = 20.0) -> pd.DataFrame:
+    """郑商所仓单日报(逐日调用)→ 按品种聚合(仓单数量合计)。返回 [variety, date, volume]。
+    只返回 CZCE_INVENTORY_SYMBOLS 内品种;该日无数据/源失败 → 空表(调用方跳过,幂等重跑)。"""
+    try:
+        d = _run_with_timeout(ak.futures_warehouse_receipt_czce, timeout, date=date)
+    except Exception:  # noqa: BLE001 — 单日失败静默(周采样靠重跑自愈)
+        return pd.DataFrame(columns=["variety", "date", "volume"])
+    rows = []
+    d8 = str(date).replace("-", "")
+    iso = f"{d8[:4]}-{d8[4:6]}-{d8[6:]}"
+    for sym, sub in (d or {}).items():
+        if str(sym).upper() not in CZCE_INVENTORY_SYMBOLS or not isinstance(sub, pd.DataFrame):
+            continue
+        if "仓单数量" not in sub.columns or not len(sub):
+            continue
+        vol = pd.to_numeric(sub["仓单数量"], errors="coerce").sum()
+        if pd.notna(vol) and vol > 0:
+            rows.append({"variety": str(sym).upper(), "date": iso, "volume": float(vol)})
+    return pd.DataFrame(rows, columns=["variety", "date", "volume"])
+
+
 def fetch_market_pb(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
     """Whole-A-market PB history + percentiles (legulegu stock_a_all_pb). Single market-wide
     series, back to 2005. Returns DataFrame indexed by date(str): pb, pb_median, pct_all

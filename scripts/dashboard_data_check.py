@@ -366,6 +366,16 @@ def main():
     if tgt_stale:
         print(f"  商品标的净值刷新·投资映射({len(tgt_stale)}/{len(tgt_syms)} 落后)...")
         dm.update_etf_nav(tgt_stale)
+    # 6.14) commodity basis + inventory (第八看板 🔬 基差/期限/库存 · 二期剩余 2026-09):
+    #       基差=100ppi 日更(增量半年窗,秒级);库存=CZCE 周采样(次一个周三才有新数据,>5天才拉)
+    basis_last = store.get_meta("last_commodity_basis_update")
+    if basis_last is None or basis_last < target:
+        print(f"  基差+期限结构刷新·100ppi(当前 {basis_last or '无'} → {target})...")
+        dm.update_commodity_basis()
+    inv_last = store.get_meta("last_commodity_inventory_update")
+    if inv_last is None or (datetime.now() - datetime.strptime(inv_last, "%Y-%m-%d")).days > 5:
+        print(f"  郑商所仓单刷新·周采样(当前 {inv_last or '无'})...")
+        dm.update_commodity_inventory()
 
     # 7-9) candidate-pool legs (V7 第六看板): spot/行业/分红/日线 —— 默认暂停
     #      (2026-08-29 用户指令: 看板现阶段价值有限待迭代, 数据冻结在 2026-08-27;
