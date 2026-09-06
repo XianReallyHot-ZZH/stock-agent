@@ -217,7 +217,7 @@ def _panel_section(store, config=None) -> str:
             f"<td style='{td};text-align:center'>{dom_cell}</td></tr>")
     head = (f"<tr><th style='{th};text-align:left'>品种</th><th style='{th}'>主语</th>"
             f"<th style='{th}'>现价</th><th style='{th}'>同比</th><th style='{th}'>近20日</th>"
-            f"<th style='{th}'>近60日</th><th style='{th}'>偏离分位</th><th style='{th}'>隔夜</th>"
+            f"<th style='{th}'>近60日</th><th style='{th}'>60日偏离分位</th><th style='{th}'>隔夜</th>"
             f"<th style='{th}'>判定</th><th style='{th}'>国内对照</th></tr>")
     n_intl = sum(1 for r in rows if r["has_bench"])
     guide = (f"向上:{','.join(summary['向上']) or '—'} | 背离:{','.join(summary['背离']) or '—'} | "
@@ -226,7 +226,7 @@ def _panel_section(store, config=None) -> str:
     return ('<div class="alerts"><h2>🧲 品种面板 '
             f'<span class="count">国际主语 {n_intl}/{len(rows)} · 国内价=A股投资指导</span></h2>'
             f'<p class="muted">有国际通用基准的品种以国际价为主语(国际价格波动一般传导至国内),'
-            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日;偏离分位红≥95%/绿≤5%,与🚦雷达同阈)。隔夜=国内夜盘快照 vs 国内日收盘'
+            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日;偏离分位=60日偏离度(价格/MA60−1)的历史分位,红≥95%/绿≤5%,与🚦雷达慢腿同源同阈)。隔夜=国内夜盘快照 vs 国内日收盘'
             f'(A股开盘前最新脉搏)。{guide}{spot_note}</p>'
             f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
             f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div></div>')
