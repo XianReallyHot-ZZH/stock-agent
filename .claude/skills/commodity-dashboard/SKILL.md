@@ -10,7 +10,7 @@ description: Refresh data and generate the 大宗商品看板 (commodity.html, 7
 (离线自包含,深浅色可切默认浅色),七 section:
 
 1. **🚦 异动雷达** — 双段:⚠快腿(20日动量≥±10% + 60日新高/新低=研究排队,实证:追买跑输)/
-   ⛔慢腿(偏离分位≥95%/≤5%=追高风险)。**国内序列口径**(与 validate_commodity_speed 实证、
+   ⛔慢腿超买(偏离分位≥95%=追高风险)/🟢慢腿超卖(≤5%=飞刀与错杀观察,双向分节)。**国内序列口径**(与 validate_commodity_speed 实证、
    夜盘快照同源),meta 键 `commodity_speed_conclusion` 与个股看板时代同键复用
 2. **📊 环境总览** — 官方=中证商品指数(ccidx.com,两线;**南华 akshare 端点已死** qhkch.com 挂了,
    官方总览用中证)+ 自算等权合成/广度(17 品种,非官方指数,图注标明)

@@ -267,6 +267,24 @@ def test_render_meta_conclusion_and_quiet(tmp_path):
     assert "快腿追买跑输基线" in h
 
 
+def test_radar_oversold_section():
+    """🚦 慢腿双向分节(2026-09):超卖 chips 单独成节,标题=深跌警戒/飞刀与错杀观察,不再挂「追高风险」。"""
+    idx = pd.date_range("2024-01-01", periods=300, freq="B").strftime("%Y-%m-%d")
+    dn = pd.Series([100.0] * 299 + [60.0], index=idx, dtype=float)     # 末端跳水 → 分位 0 → 超卖
+
+    class _DnStore(_StubStore):
+        def get_commodity_series(self, variety, start=None, end=None):
+            return dn
+
+    h = crep.render(_DnStore(), as_of="2026-09-06")
+    assert "深跌警戒" in h and "错杀观察窗" in h          # 超卖分节标题
+    assert "dev-chip os" in h                              # 绿色超卖 chips
+    assert "超买17 · 超卖0" not in h and "超卖17" in h     # 计数走超卖侧
+    # 超卖节不挂超买话术:该标题行不含「追高风险」
+    seg = h[h.index("深跌警戒"):h.index("dev-chip os")]
+    assert "追高风险" not in seg
+
+
 # ---------------------------------------------------------------- 🔬 基差/期限/库存(二期剩余)
 def test_month_gap():
     from stockagent.commodity.fundamentals import month_gap

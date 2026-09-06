@@ -158,7 +158,7 @@ def _commodity_summary_row(store, config=None) -> str:
     return (f'<div class="alerts"><h2>🧭 商品环境速览 '
             f'<span class="count">20日上涨 {n_up}/{n_ok} · 异动{len(fast)} · 极端{len(slow)}</span></h2>'
             f'<p class="muted">⚠快腿=排进研究队列(非买入信号,实证:追动量买股跑输)、'
-            f'⛔慢腿=60日偏离度历史极值追高风险——温度计非开关。品种面板/时序图/比价在 🛢 大宗商品看板。</p>'
+            f'⛔慢腿超买=60日偏离度历史极值·追高风险、🟢慢腿超卖=深跌历史级·飞刀与错杀观察——温度计非开关。品种面板/时序图/比价在 🛢 大宗商品看板。</p>'
             f'<div>{state}</div><p style="margin:6px 0 0">{link}</p></div>')
 
 
