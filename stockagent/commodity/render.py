@@ -203,6 +203,19 @@ def _panel_section(store, config=None) -> str:
         else:
             dom_cell = '<span class="muted">（主语）</span>'
         overnight = "—" if _nan(r["overnight"]) else f"{r['overnight']:+.1%}"
+        # 60日偏离度(价格/MA60−1)+历史极值排名(第几高/第几低;≤10 名红/绿高亮,与放大视图标注同语义)
+        dev = p.get("dev")
+        rk_h, rk_l = p.get("rank_high"), p.get("rank_low")
+        dev_cell = "—" if _nan(dev) else f"{dev:+.1%}"
+        if _nan(rk_h) or _nan(rk_l):
+            rank_cell = "<span class='muted'>—</span>"
+        else:
+            h_hot, l_hot = rk_h <= 10, rk_l <= 10
+            rank_cell = ((f"<span style='color:#b91c1c;font-weight:600'>第{rk_h}高</span>"
+                          f"/<span class='muted'>第{rk_l}低</span>") if h_hot else
+                         ((f"<span class='muted'>第{rk_h}高</span>"
+                           f"/<span style='color:#15803d;font-weight:600'>第{rk_l}低</span>") if l_hot else
+                          f"<span class='muted'>第{rk_h}高/第{rk_l}低</span>"))
         body.append(
             f"<tr><td style='{td}'><b>{html.escape(r['variety'])}</b>{p['mark']}</td>"
             f"<td style='{td};text-align:center'>{subject}</td>"
@@ -210,14 +223,17 @@ def _panel_section(store, config=None) -> str:
             f"<td style='{td};text-align:center'>{_pct(p['yoy'], True)}</td>"
             f"<td style='{td};text-align:center'>{_pct(p['m20'], True)}</td>"
             f"<td style='{td};text-align:center'>{_pct(p['m60'], True)}</td>"
+            f"<td style='{td};text-align:center'>{dev_cell}</td>"
             f"<td style='{td};text-align:center;color:{pct_color(p['pct'])};font-weight:600'>"
             f"{('—' if _nan(p['pct']) else _pct_exact(p['pct']))}</td>"
+            f"<td style='{td};text-align:center'>{rank_cell}</td>"
             f"<td style='{td};text-align:center'>{overnight}</td>"
             f"<td style='{td};text-align:center;color:{_J_COLOR[r['judge']]};font-weight:600'>{r['judge']}</td>"
             f"<td style='{td};text-align:center'>{dom_cell}</td></tr>")
     head = (f"<tr><th style='{th};text-align:left'>品种</th><th style='{th}'>主语</th>"
             f"<th style='{th}'>现价</th><th style='{th}'>同比</th><th style='{th}'>近20日</th>"
-            f"<th style='{th}'>近60日</th><th style='{th}'>60日偏离分位</th><th style='{th}'>隔夜</th>"
+            f"<th style='{th}'>近60日</th><th style='{th}'>60日偏离度</th>"
+            f"<th style='{th}'>60日偏离分位</th><th style='{th}'>极值排名</th><th style='{th}'>隔夜</th>"
             f"<th style='{th}'>判定</th><th style='{th}'>国内对照</th></tr>")
     n_intl = sum(1 for r in rows if r["has_bench"])
     guide = (f"向上:{','.join(summary['向上']) or '—'} | 背离:{','.join(summary['背离']) or '—'} | "
@@ -226,7 +242,7 @@ def _panel_section(store, config=None) -> str:
     return ('<div class="alerts"><h2>🧲 品种面板 '
             f'<span class="count">国际主语 {n_intl}/{len(rows)} · 国内价=A股投资指导</span></h2>'
             f'<p class="muted">有国际通用基准的品种以国际价为主语(国际价格波动一般传导至国内),'
-            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日;偏离分位=60日偏离度(价格/MA60−1)的历史分位,红≥95%/绿≤5%,与🚦雷达慢腿同源同阈)。隔夜=国内夜盘快照 vs 国内日收盘'
+            f'国内价作对照;判定/同比/动量/偏离分位均按主语口径(同比=近一年/252交易日;60日偏离度=价格/MA60−1,其分位红≥95%/绿≤5%与🚦雷达慢腿同源同阈;极值排名=该偏离度在自身历史第几高/第几低,≤10名红/绿高亮)。隔夜=国内夜盘快照 vs 国内日收盘'
             f'(A股开盘前最新脉搏)。{guide}{spot_note}</p>'
             f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
             f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div></div>')

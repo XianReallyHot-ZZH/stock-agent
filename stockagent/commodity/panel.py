@@ -35,7 +35,11 @@ def series_stats(s: pd.Series) -> dict:
         else ("🔻" if float(win60.iloc[-1]) <= float(win60.min()) else "")
     return {"cur": float(s.iloc[-1]), "date": str(s.index[-1]),
             "yoy": yoy, "m20": m20, "m60": m60,
-            "pct": dst.get("pct"), "mark": mark}
+            "pct": dst.get("pct"), "mark": mark,
+            # 60日偏离度本体 + 历史极值排名(第几高/第几低,与🚦慢腿/放大视图标注同源;
+            # dst={} 时三者为 None → 面板该两列诚实显示 —)
+            "dev": dst.get("cur"),
+            "rank_high": dst.get("rank_high"), "rank_low": dst.get("rank_low")}
 
 
 def intl_series(store, symbol: str):

@@ -238,6 +238,10 @@ def test_render_full_page_sections():
     assert "永不进宇宙" in h or "T+1 假设不合" in h
     # 主语徽标:铜=国际(LME铜),螺纹钢=国内定价
     assert h.count('class="subj intl"') == 1 and h.count('class="subj dom"') == 16
+    # 60日偏离度 + 极值排名两列(2026-09 新增):表头齐 + 排名格子「第N高/第N低」存在
+    import re as _re
+    assert "60日偏离度" in h and "极值排名" in h
+    assert _re.search(r"第\d+高", h) and _re.search(r"第\d+低", h)
     # 放大模态 + 可读 JSON(无 bdata 二进制块)
     assert 'id="comm-modal"' in h and "openCommChart" in h
     i0, i1 = h.index("var COMM=["), h.index("var COMM_NAMES=")
