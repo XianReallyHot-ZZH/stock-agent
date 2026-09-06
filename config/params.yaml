@@ -229,6 +229,24 @@ commodity:
     - {name: 豆粕玉米比, num: SM,         den: C,          note: 饲料内蛋白/能量比}
     - {name: 螺矿比,     num: 国内:螺纹钢, den: 国内:铁矿石, note: 钢价/原料,钢厂利润近似代理}
     - {name: 玻璃纯碱比, num: 国内:玻璃,   den: 国内:纯碱,   note: 地产链上下游相对强度}
+  targets:                      # 🎫 投资标的映射(二期·品种→大A可投标的+错配度;非池内标的的 NAV 由
+                                #    backfill_commodity --targets 回填 etf_nav;池内标的随研究看板 NAV 腿走)
+    - {symbol: "159980", name: 有色期货ETF,  kind: 期货ETF·T+0, varieties: [铜, 铝, 锌], ref: dom}
+    - {symbol: "512400", name: 有色金属ETF,  kind: 股票ETF,     varieties: [铜, 铝, 锌], ref: dom}
+    - {symbol: "515220", name: 煤炭ETF,      kind: 股票ETF,     varieties: [焦煤],       ref: dom}
+    - {symbol: "515210", name: 钢铁ETF,      kind: 股票ETF,     varieties: [螺纹钢, 铁矿石], ref: dom}
+    - {symbol: "159745", name: 建材ETF,      kind: 股票ETF,     varieties: [玻璃, 纯碱],  ref: dom}
+    - {symbol: "159870", name: 化工ETF,      kind: 股票ETF,     varieties: [尿素, 纯碱, LPG], ref: dom}
+    - {symbol: "159981", name: 能源化工ETF,  kind: 期货ETF·T+0, varieties: [玻璃],       ref: dom,
+       note: 郑商所能化指数(PTA/甲醇/动力煤为主),与玻璃部分相关}
+    - {symbol: "159985", name: 豆粕ETF,      kind: 期货ETF·T+0, varieties: [豆粕],       ref: dom}
+    - {symbol: "159865", name: 养殖ETF,      kind: 股票ETF,     varieties: [生猪, 玉米, 豆粕], ref: dom}
+    - {symbol: "159825", name: 农业ETF,      kind: 股票ETF,     varieties: [玉米, 豆粕], ref: dom}
+    - {symbol: "518880", name: 黄金ETF,      kind: 现货ETF·T+0, varieties: [黄金],       ref: dom,
+       note: research_only 在池;黄金叙事归宏观框架,此处只作标的映射}
+    - {symbol: "161226", name: 白银LOF,      kind: 期货LOF,     varieties: [白银],       ref: dom}
+    - {symbol: "501018", name: 南方原油,     kind: QDII·LOF,    varieties: [原油],       ref: intl,
+       note: 跟踪国际油价(WTI/Brent 篮子)→对照 WTI;含汇率摩擦}
 
 # ---- 仓位管理看板 (V6 position · 只读对照 · 第五看板) ----
 # 预案表:估值档 → 权益仓位%区间(用户自定义;看板只对照「现在在哪格」,不发明建议、不喂引擎)。

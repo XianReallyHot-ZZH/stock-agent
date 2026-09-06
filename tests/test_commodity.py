@@ -13,6 +13,7 @@ from stockagent.commodity import overview as ovw
 from stockagent.commodity import panel as pnl
 from stockagent.commodity import ratios as rt
 from stockagent.commodity import render as crep
+from stockagent.commodity import targets as tgt
 from stockagent.data import Store
 from stockagent.data import fetcher
 from stockagent.tracker import stock_figures as sf
@@ -87,7 +88,7 @@ def test_commodity_radar_classifier():
 
 # ---------------------------------------------------------------- 面板主语逻辑
 class _StubStore:
-    """最小 store:国内序列全品种同一条;国际序列只给 CAD(LME铜)。"""
+    """最小 store:国内序列全品种同一条;国际序列只给 CAD(LME铜);NAV 序列一条(投资标的层)。"""
 
     def __init__(self, intl_symbols=frozenset({"CAD"})):
         self.intl_symbols = set(intl_symbols)
@@ -112,6 +113,11 @@ class _StubStore:
         if "期货指数" in index_name:
             return self.dom
         return pd.Series(dtype=float)
+
+    def get_nav_series(self, symbol, start=None, end=None):
+        # 标的 NAV:斜率与国际序列一致 → ref=intl 的错配=0,ref=dom 的错配=两斜率收益差
+        return pd.DataFrame({"unit_nav": self.intl.values, "acc_nav": self.intl.values},
+                            index=self.intl.index)
 
     def get_meta(self, key, default=None):
         return default
@@ -224,8 +230,12 @@ def test_render_full_page_sections():
     h = crep.render(_StubStore(), as_of="2026-09-06")
     assert h.startswith("<!DOCTYPE html>")
     for kw in ["商品异动雷达", "商品环境总览", "品种面板", "品种时序", "比价与内外盘对照",
-               "读图说明", "中证商品期货指数", "LME铜", "国内定价", "commodity-dark"]:
+               "投资标的映射", "读图说明", "中证商品期货指数", "LME铜", "国内定价", "commodity-dark"]:
         assert kw in h, f"缺 {kw}"
+    # 投资标的映射:错配 pp 格式 + 池内标的带研究看板跳转(512400 在池) + T+0 纪律注记
+    assert "错配60日" in h and "pp" in h
+    assert 'href="research_report.html"' in h
+    assert "永不进宇宙" in h or "T+1 假设不合" in h
     # 主语徽标:铜=国际(LME铜),螺纹钢=国内定价
     assert h.count('class="subj intl"') == 1 and h.count('class="subj dom"') == 16
     # 放大模态 + 可读 JSON(无 bdata 二进制块)
@@ -248,7 +258,68 @@ def test_render_meta_conclusion_and_quiet(tmp_path):
     assert "快腿追买跑输基线" in h
 
 
-# ---------------------------------------------------------------- 个股看板速览行(拆大留小)
+# ---------------------------------------------------------------- 投资标的映射(二期)
+def test_targets_config_sanity():
+    """targets 配置守卫:品种都在 COMMODITY_CODES、ref=intl 只给有国际基准的品种、symbol 唯一。"""
+    from stockagent.config import get_config
+    specs = (get_config().params.get("commodity") or {}).get("targets") or []
+    assert len(specs) >= 10, "投资标的映射应有 10+ 标的"
+    syms = [str(s["symbol"]) for s in specs]
+    assert len(syms) == len(set(syms)), "标的 symbol 必须唯一"
+    for s in specs:
+        assert s.get("name") and s.get("kind")
+        for v in s.get("varieties") or []:
+            assert v in fetcher.COMMODITY_CODES, f"{s['symbol']} 映射了未知品种 {v}"
+            if str(s.get("ref")) == "intl":
+                assert v in fetcher.COMMODITY_BENCHMARKS, f"{v} 无国际基准却标 ref=intl"
+
+
+def test_target_rows_gap_math():
+    """错配度=ETF(NAV)涨幅−品种涨幅:ref=dom 走国内序列、ref=intl 走国际基准;NAV 缺 → missing。"""
+    from stockagent.config import get_config
+    cfg = get_config()
+    st = _StubStore(intl_symbols={"CAD", "CL"})          # CL 给原油的国际对照腿
+    rows_all, missing_all = tgt.target_rows(st, config=cfg)
+    rows = [r for r in rows_all if r["symbol"] in {"512400", "159985", "501018"}]
+    assert not missing_all                               # Stub 给了 NAV → 无缺
+    etf_m60 = (200.0 + 299 * 0.8) / (200.0 + 239 * 0.8) - 1.0
+    dom_m60 = (100.0 + 299 * 0.5) / (100.0 + 239 * 0.5) - 1.0
+    for r in rows:
+        if r["symbol"] == "501018":                      # ref=intl:ETF 与品种同一条 stub 序列 → 错配 0
+            assert r["ref_kind"] == "intl"
+            assert r["gap60"] == pytest.approx(0.0, abs=1e-12)
+        else:                                            # ref=dom:错配 = etf(intl 斜率) − 国内
+            assert r["gap60"] == pytest.approx(etf_m60 - dom_m60)
+        assert r["gap_yoy"] == pytest.approx(r["etf"]["yoy"] - r["comm"]["yoy"])
+    by_sym = {r["symbol"]: r for r in rows}
+    assert by_sym["512400"]["in_pool"] is True           # 池内标的(研究看板可跳)
+    assert by_sym["159985"]["in_pool"] is False
+    assert {r["variety"] for r in rows} >= {"铜", "豆粕", "原油"}
+
+
+def test_target_rows_missing_nav():
+    """NAV 未回填的标的 → missing 列表(提示 --targets),不出假数字行。"""
+
+    class _NoNavStore(_StubStore):
+        def get_nav_series(self, symbol, start=None, end=None):
+            return pd.DataFrame()
+
+    rows, missing = tgt.target_rows(_NoNavStore())
+    assert rows == [] and missing                        # 全部标的进 missing
+    assert {"159980", "159985", "501018"} <= {m["symbol"] for m in missing}
+
+
+def test_render_targets_missing_hint():
+    h = crep.render(_NoNavStoreForRender(), as_of="2026-09-06")
+    assert "NAV 未回填" in h and "--targets" in h
+
+
+class _NoNavStoreForRender(_StubStore):
+    def get_nav_series(self, symbol, start=None, end=None):
+        return pd.DataFrame()
+
+
+
 def test_stock_report_summary_row():
     """个股看板周期 tab:商品内容全迁后只留 🧭速览行(异常 chips+广度+跳转),无面板/时序/模态。"""
     from stockagent.tracker import stock_report as srep

@@ -225,11 +225,11 @@ python scripts/china_macro_report.py            # 生成 data/china_macro.html�
 
 ### 9. 大宗商品看板（第八看板 · 只读观测 · 2026-09 从个股诊断拆出）
 
-商品周期观测温度计 + 周期股择时深化底座：🚦异动雷达（双段：⚠快腿动量/新高新低→研究排队、⛔慢腿偏离分位极端→追高风险；国内口径）📊环境总览（官方中证商品指数 + 自算等权广度）🧲品种面板（**有国际基准的品种国际价为主语**、国内价=大A投资指导对照；LME铜/铝/锌·COMEX金银·WTI·CBOT豆粕/玉米）📈品种时序（点击放大偏离度视图）⚖比价矩阵（金银比/油金比/铜铝比/螺矿比…，黄金只做分母）。永不喂引擎；个股看板只留 🧭 商品环境速览行。
+商品周期观测温度计 + 周期股择时深化底座：🚦异动雷达（双段：⚠快腿动量/新高新低→研究排队、⛔慢腿偏离分位极端→追高风险；国内口径）📊环境总览（官方中证商品指数 + 自算等权广度）🧲品种面板（**有国际基准的品种国际价为主语**、国内价=大A投资指导对照；LME铜/铝/锌·COMEX金银·WTI·CBOT豆粕/玉米）📈品种时序（点击放大偏离度视图）⚖比价矩阵（金银比/油金比/铜铝比/螺矿比…，黄金只做分母）🎫投资标的映射（品种→大A可投标的 13 只+错配度=ETF涨幅−品种涨幅，错杀观察视角）。永不喂引擎；个股看板只留 🧭 商品环境速览行。
 
 ```bash
-python scripts/backfill_commodity.py            # 国际基准 + 中证商品指数（幂等；南华 akshare 端点已死，ccidx 替代）
-python scripts/commodity_report.py              # 生成 data/commodity.html（五 section，深浅色可切）
+python scripts/backfill_commodity.py            # 国际基准 + 中证商品指数 + 投资标的NAV（幂等；南华 akshare 端点已死，ccidx 替代）
+python scripts/commodity_report.py              # 生成 data/commodity.html（六 section，深浅色可切）
 ```
 
 ---

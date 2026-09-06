@@ -355,6 +355,17 @@ def main():
     if cidx_last is None or cidx_last < target:
         print(f"  中证商品指数刷新·官方总览(当前 {cidx_last or '无'} → {target})...")
         dm.update_commodity_index()
+    # 6.13) commodity investable targets NAV (第八看板 🎫 投资标的映射 · 二期 2026-09):
+    #       非池内标的的净值腿(池内标的随研究看板 NAV 腿走不重复拉);QDII NAV 滞后 1-2 天,
+    #       天天判 stale 也无害(几只标的、增量拉,幂等)
+    tgt_specs = (get_config().params.get("commodity") or {}).get("targets") or []
+    tgt_pool = set(get_config().tracked_symbols())
+    tgt_syms = [str(s["symbol"]) for s in tgt_specs
+                if str(s.get("symbol", "")) and str(s["symbol"]) not in tgt_pool]
+    tgt_stale = [s for s in tgt_syms if (store.last_nav_date(s) or "") < (target or "9999-12-31")]
+    if tgt_stale:
+        print(f"  商品标的净值刷新·投资映射({len(tgt_stale)}/{len(tgt_syms)} 落后)...")
+        dm.update_etf_nav(tgt_stale)
 
     # 7-9) candidate-pool legs (V7 第六看板): spot/行业/分红/日线 —— 默认暂停
     #      (2026-08-29 用户指令: 看板现阶段价值有限待迭代, 数据冻结在 2026-08-27;

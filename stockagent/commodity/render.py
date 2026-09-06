@@ -1,8 +1,9 @@
 """大宗商品看板 HTML 渲染 — 第八看板交付通道(2026-09 从个股诊断看板拆出)。
 
-五 section:🚦异动雷达(国内口径,与实证同源) → 📊环境总览(官方中证商品指数+自算广度) →
-🧲品种面板(国际基准为主语/国内价对照) → 📈品种+比价时序图(点击放大) → ⚖比价矩阵。
-纯 f-string HTML,照 tracker.stock_report 风格;深浅色可切默认浅色。只读观测,无推送。
+六 section:🚦异动雷达(国内口径,与实证同源) → 📊环境总览(官方中证商品指数+自算广度) →
+🧲品种面板(国际基准为主语/国内价对照) → 📈品种+比价时序图(点击放大) → ⚖比价矩阵 →
+🎫投资标的映射(二期·错配度)。纯 f-string HTML,照 tracker.stock_report 风格;
+深浅色可切默认浅色。只读观测,无推送。
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from . import figures as cfg_fig
 from . import overview as ovw
 from . import panel as pnl
 from . import ratios as rt
+from . import targets as tgt
 
 
 def _nan(v) -> bool:
@@ -420,6 +422,70 @@ document.addEventListener('DOMContentLoaded', function(){
 """
 
 
+# ---------------------------------------------------------------- 🎫 投资标的映射(二期)
+def _gap_color(g) -> str:
+    """错配度着色:≥+10pp=ETF领先(蓝) / ≤−10pp=ETF落后·错杀观察(橙) / 常态灰。"""
+    if _nan(g):
+        return "var(--muted)"
+    if float(g) >= 0.10:
+        return "#1e3a8a"
+    if float(g) <= -0.10:
+        return "#b45309"
+    return "var(--text)"
+
+
+def _targets_section(store, config=None) -> str:
+    """🎫 投资标的映射(二期):品种→大A可投标的 + 错配度(ETF NAV 涨幅−品种涨幅,同窗口)。
+    正=ETF领先(情绪/展期溢价)、负=ETF落后(错杀观察);期货ETF NAV 含展期、QDII 含汇率。
+    偏离度/筹码全家桶在行业研究看板不复刻;T+0 品种永不进引擎宇宙。"""
+    rows, missing = tgt.target_rows(store, config)
+    if not rows and not missing:
+        return ""
+    td = "padding:6px;border-bottom:1px solid var(--border)"
+    th = "padding:8px;border-bottom:2px solid var(--border)"
+    body = []
+    for r in rows:
+        pool_link = (' <a class="comm-link" href="research_report.html" '
+                     'title="偏离度/筹码/资金流在行业研究看板">📈</a>' if r["in_pool"] else "")
+        note = (f'<br><span class="muted" style="font-size:10px">{html.escape(r["note"])}</span>'
+                if r.get("note") else "")
+        name_cell = (f'<b>{html.escape(r["name"])}</b><span class="muted"> {r["symbol"]}</span>'
+                     f'<br><span class="muted" style="font-size:10px">{html.escape(r["kind"])}'
+                     f'{" · 对照国际" if r["ref_kind"] == "intl" else ""}</span>{pool_link}{note}')
+        g60, gy = r["gap60"], r["gap_yoy"]
+
+        def _pp(v):
+            return "—" if _nan(v) else f"{v*100:+.1f}pp"
+
+        body.append(
+            f"<tr><td style='{td}'>{name_cell}</td>"
+            f"<td style='{td};text-align:center'><b>{html.escape(r['variety'])}</b></td>"
+            f"<td style='{td};text-align:center'>{_pct(r['etf']['m60'], True)}</td>"
+            f"<td style='{td};text-align:center'>{_pct(r['comm']['m60'], True)}</td>"
+            f"<td style='{td};text-align:center;color:{_gap_color(g60)};font-weight:600'>{_pp(g60)}</td>"
+            f"<td style='{td};text-align:center'>{_pct(r['etf']['yoy'], True)}</td>"
+            f"<td style='{td};text-align:center'>{_pct(r['comm']['yoy'], True)}</td>"
+            f"<td style='{td};text-align:center;color:{_gap_color(gy)};font-weight:600'>{_pp(gy)}</td></tr>")
+    head = (f"<tr><th style='{th};text-align:left'>标的</th><th style='{th}'>映射品种</th>"
+            f"<th style='{th}'>ETF近60日</th><th style='{th}'>品种近60日</th>"
+            f"<th style='{th}'>错配60日</th><th style='{th}'>ETF同比</th>"
+            f"<th style='{th}'>品种同比</th><th style='{th}'>错配同比</th></tr>")
+    n_syms = len({r["symbol"] for r in rows})
+    miss_html = ""
+    if missing:
+        miss_html = ('<p class="muted">⚠ NAV 未回填:' +
+                     "、".join(f"{m['name']}({m['symbol']})" for m in missing) +
+                     " — python scripts/backfill_commodity.py --targets</p>")
+    return (f'<div class="alerts"><h2>🎫 投资标的映射(大A) '
+            f'<span class="count">{n_syms} 标的 · {len(rows)} 映射 · 错配度=ETF−品种</span></h2>'
+            f'<p class="muted">错配=ETF(NAV)涨幅−标的商品涨幅(同窗口;蓝≥+10pp=ETF领先/溢价、'
+            f'橙≤−10pp=ETF落后·错杀观察)。期货ETF 的 NAV 含展期结构、QDII 含汇率=「含摩擦的跟踪差」;'
+            f'股票ETF 是股票组合代理(含个股 alpha)。观察非信号,不构成买卖建议;'
+            f'T+0 品种与引擎 T+1 假设不合永不进宇宙。</p>'
+            f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+            f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div>{miss_html}</div>')
+
+
 _LEGEND_HTML = """
 <details class="legend"><summary>📖 读图说明(口径与边界)</summary>
 <div class="legend-body">
@@ -432,6 +498,9 @@ _LEGEND_HTML = """
 <div><b>📊 总览</b> · 官方腿=中证商品指数(ccidx.com;南华 akshare 端点已死);自算合成/广度=17 品种等权,
 无权重无展期调整,<b>非官方指数</b>,只作温度对照。</div>
 <div><b>⚖ 比价</b> · 螺矿比≈钢厂利润代理(近似);分位=全史位置。观察非信号。</div>
+<div><b>🎫 投资标的</b> · 错配=ETF(NAV)涨幅−品种涨幅:正=ETF领先(情绪/展期溢价)、负=ETF落后
+(商品涨了ETF没涨=错杀观察,或股票端独立逻辑)。期货ETF NAV 含展期、QDII 含汇率、股票ETF 含个股
+alpha——都是「含摩擦的跟踪差」。T+0 品种永不进引擎宇宙;偏离度/筹码在行业研究看板不复刻。</div>
 <div><b>数据腿</b> · 国内 17 品种=sina 连续合约(backfill_stock_data --comm);国际基准=sina 外盘
 (backfill_commodity.py);指数=ccidx。隔夜=夜盘快照 vs 国内日收盘(超 2 天显示 —)。</div>
 </div></details>"""
@@ -531,6 +600,7 @@ def render(store, as_of: str, config=None, title: str = "大宗商品看板") ->
     overview = _overview_section(store, cfg)
     panel_html = _panel_section(store, cfg)
     charts_html, ratios_html = _charts_and_ratios(store, cfg)
+    targets_html = _targets_section(store, cfg)
 
     from plotly.offline import get_plotlyjs
     plotly_js = re.sub(r"</script", r"<\\/script", get_plotlyjs(), flags=re.I)
@@ -551,6 +621,7 @@ def render(store, as_of: str, config=None, title: str = "大宗商品看板") ->
 {panel_html}
 {charts_html}
 {ratios_html}
+{targets_html}
 <script>{plotly_js}</script>
 <script>{_THEME_JS}</script>
 </body></html>"""

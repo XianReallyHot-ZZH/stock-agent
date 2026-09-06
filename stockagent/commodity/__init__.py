@@ -5,7 +5,8 @@
   overview  📊 总览(官方中证商品指数 + 自算等权广度;南华 akshare 端点已死,ccidx 替代)
   ratios    ⚖ 比价矩阵(金银比/油金比/螺矿比…;黄金只做分母不做主语)
   figures   比价/总览 figure builders(品种时序图复用 tracker.stock_figures)
-  render    渲染 data/commodity.html:🚦雷达 → 📊总览 → 🧲面板 → 📈时序图 → ⚖比价
+  targets   🎫 投资标的映射(二期:品种→大A可投标的+错配度=ETF NAV 涨幅−品种涨幅)
+  render    渲染 data/commodity.html:🚦雷达 → 📊总览 → 🧲面板 → 📈时序图 → ⚖比价 → 🎫标的
 
 隔离纪律:commodity→tracker 单向 import 原语(judge_commodity/commodity_dev_stats 等),
 与 pool/china_macro 同向;不改 tracker 内部、不 re-export。

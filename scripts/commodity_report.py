@@ -61,6 +61,14 @@ def main():
     rrows = rt.ratio_rows(store, config=cfg)
     for r in rrows:
         print(f"   {r['name']:8} {r['cur']:8.2f}  分位{_fmt(r['pct'])}  同比{_fmt(r['yoy'], True)}")
+    from stockagent.commodity import targets as tgt
+    trows, tmiss = tgt.target_rows(store, config=cfg)
+    if tmiss:
+        print(f"   ⚠ 标的 NAV 未回填: {','.join(m['symbol'] for m in tmiss)}"
+              " (python scripts/backfill_commodity.py --targets)")
+    for r in sorted(trows, key=lambda x: -abs(x["gap60"] or 0))[:5]:
+        print(f"   错配60日 {r['name']}({r['variety']}): {r['gap60']*100:+.1f}pp"
+              f"  [ETF{_fmt(r['etf']['m60'], True)} vs 品种{_fmt(r['comm']['m60'], True)}]")
     print(f"\n   open: file:///{out.resolve()}")
 
     if not args.no_open:
