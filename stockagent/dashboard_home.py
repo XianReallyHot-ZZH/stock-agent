@@ -2,6 +2,7 @@
 
 data/index.html: 左侧导航 + 右侧 iframe 装载八个现有看板 HTML, 切换不重载(保留滚动/状态)。
 各看板生成器零改动——壳只负责导航/记忆上次选择/as_of(mtime) 标注; 缺哪个看板就提示生成命令。
+左侧导航可收缩成 52px 图标轨(«/» 或 Ctrl/⌘+B;状态记忆 sa_home_collapsed), 方便全宽看板。
 """
 from __future__ import annotations
 
@@ -63,11 +64,20 @@ html,body { height:100% }
 body { display:flex; font:14px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
        background:var(--bg); color:var(--text) }
 aside { width:236px; flex:none; background:var(--side); border-right:1px solid var(--line);
-        display:flex; flex-direction:column; height:100vh }
-.brand { padding:16px 16px 10px; font-weight:700; font-size:16px }
-.brand .sub { display:block; font-size:12px; font-weight:400; color:var(--muted); margin-top:2px }
+        display:flex; flex-direction:column; height:100vh; transition:width .18s ease }
+aside.mini { width:52px }
+.brand { display:flex; align-items:center; gap:8px; padding:16px 14px 10px; font-weight:700; font-size:16px }
+.brand .sub { display:block; font-size:12px; font-weight:400; color:var(--muted); margin-top:2px;
+              white-space:normal; line-height:1.35 }  /* 时间戳完整换行,不被 .btitle 的 nowrap 截断 */
+.btitle { overflow:hidden; white-space:nowrap }
+.cb { flex:none; width:22px; height:22px; border:1px solid var(--line); border-radius:6px;
+      background:transparent; color:var(--muted); cursor:pointer; font-size:13px; line-height:1;
+      display:flex; align-items:center; justify-content:center; padding:0 }
+.cb:hover { background:rgba(127,127,127,.12); color:var(--text) }
+aside.mini .brand { justify-content:center; padding-left:8px; padding-right:8px }
+aside.mini .btitle { display:none }
 nav { flex:1; overflow-y:auto; padding:4px 8px }
-.nav-item { display:flex; width:100%; align-items:center; gap:10px; padding:10px; margin:2px 0;
+.nav-item { position:relative; display:flex; width:100%; align-items:center; gap:10px; padding:10px; margin:2px 0;
             border:none; border-radius:8px; background:transparent; cursor:pointer; text-align:left;
             color:var(--text); font:inherit }
 .nav-item:hover { background:rgba(127,127,127,.12) }
@@ -78,9 +88,18 @@ nav { flex:1; overflow-y:auto; padding:4px 8px }
 .txt .nm { display:block; font-weight:600 }
 .txt .ds { display:block; font-size:11px; color:var(--muted); white-space:nowrap;
            overflow:hidden; text-overflow:ellipsis }
+.side { display:flex; flex-direction:column; align-items:flex-end; gap:3px; flex:none }
 .asof { font-size:10px; color:var(--muted); text-align:right; line-height:1.3 }
 .dot { display:inline-block; width:7px; height:7px; border-radius:50% }
 .dot.fresh { background:var(--ok) } .dot.stale { background:var(--warn) } .dot.none { background:var(--muted) }
+/* 收缩态: 图标轨——文字全隐, 新鲜度点转图标右上角标; 悬停 title 携带名称+时间 */
+aside.mini .txt, aside.mini .asof { display:none }
+aside.mini .side { position:absolute; top:5px; right:7px }
+aside.mini .nav-item { justify-content:center; gap:0; padding:10px 0 }
+aside.mini nav { padding:4px 6px }
+aside.mini .foot .hint { display:none }
+aside.mini .foot .tb { width:100% }
+aside.mini .foot .tb .tbw { display:none }
 .foot { padding:10px 16px 14px; border-top:1px solid var(--line); font-size:11px; color:var(--muted) }
 .foot .tb { margin-bottom:8px; padding:4px 10px; border:1px solid var(--line); border-radius:6px;
             background:transparent; color:var(--text); cursor:pointer; font:inherit; font-size:12px }
@@ -94,11 +113,14 @@ iframe { width:100%; height:100%; border:none; display:none; background:#fff }
 </head>
 <body>
 <aside>
-  <div class="brand">📈 stock-agent<span class="sub">八看板总入口 · __GEN_AT__</span></div>
+  <div class="brand">
+    <button id="collapse" class="cb" title="收起/展开导航 (Ctrl/⌘+B)">«</button>
+    <span class="btitle">📈 stock-agent<span class="sub">八看板总入口 · __GEN_AT__</span></span>
+  </div>
   <nav id="nav"></nav>
   <div class="foot">
-    <button id="theme" class="tb">🌙 深色</button>
-    <div>绿点=今日已生成 · 黄点=过期<br>刷新: /dashboards 或逐个 report 脚本</div>
+    <button id="theme" class="tb">🌙 <span class="tbw">深色</span></button>
+    <div class="hint">绿点=今日已生成 · 黄点=过期<br>刷新: /dashboards 或逐个 report 脚本</div>
   </div>
 </aside>
 <main>
@@ -136,8 +158,9 @@ ITEMS.forEach(it => {
   b.innerHTML = '<span class="ico">' + it.icon + "</span>" +
     '<span class="txt"><span class="nm">' + it.name + "</span>" +
     '<span class="ds">' + it.desc + "</span></span>" +
-    '<span class="asof"><span class="dot ' +
-    (it.exists ? (it.fresh ? "fresh" : "stale") : "none") + '"></span><br>' + it.asof + "</span>";
+    '<span class="side"><span class="dot ' +
+    (it.exists ? (it.fresh ? "fresh" : "stale") : "none") + '"></span>' +
+    '<span class="asof">' + it.asof + "</span></span>";
   b.onclick = () => select(it.key);
   nav.appendChild(b);
 });
@@ -150,13 +173,30 @@ select(ITEMS.some(x => x.key === last) ? last : (ITEMS.find(x => x.exists) || IT
 // 壳自身深浅色(各看板内仍有自己的切换)
 try { if (localStorage.getItem(LS_THEME) === "dark") root.dataset.theme = "dark"; } catch (e) {}
 const tb = document.getElementById("theme");
-const paintTb = () => { tb.textContent = root.dataset.theme === "dark" ? "☀️ 浅色" : "🌙 深色"; };
+const paintTb = () => { tb.innerHTML = (root.dataset.theme === "dark" ? "☀️ " : "🌙 ") +
+  '<span class="tbw">' + (root.dataset.theme === "dark" ? "浅色" : "深色") + "</span>"; };
 tb.onclick = () => {
   root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
   try { localStorage.setItem(LS_THEME, root.dataset.theme); } catch (e) {}
   paintTb();
 };
 paintTb();
+
+// 左侧导航可收缩: 图标轨模式(52px;文字隐·新鲜度点转角标·悬停 title 带名称时间), Ctrl/⌘+B 快捷
+const LS_COLLAPSED = "sa_home_collapsed";
+const asideEl = document.querySelector("aside"), cb = document.getElementById("collapse");
+const paintCb = () => { cb.textContent = asideEl.classList.contains("mini") ? "»" : "«"; };
+const setCollapsed = m => {
+  asideEl.classList.toggle("mini", m);
+  try { localStorage.setItem(LS_COLLAPSED, m ? "1" : "0"); } catch (e) {}
+  paintCb();
+};
+cb.onclick = () => setCollapsed(!asideEl.classList.contains("mini"));
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "B")) { e.preventDefault(); cb.click(); }
+});
+try { if (localStorage.getItem(LS_COLLAPSED) === "1") setCollapsed(true); } catch (e) {}
+paintCb();
 </script>
 </body>
 </html>

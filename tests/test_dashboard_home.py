@@ -69,6 +69,13 @@ def test_render_home_markers(tmp_path):
     for _, fname, _, name, *_ in DASHBOARDS:
         assert fname in html
         assert name in html
+    # 左侧导航可收缩: 切换按钮 + 图标轨 CSS + 记忆键 + 快捷键 + 新鲜度点角标结构
+    assert 'id="collapse"' in html
+    assert "aside.mini" in html and "width:52px" in html
+    assert "sa_home_collapsed" in html
+    assert 'e.key === "b" || e.key === "B"' in html
+    assert 'class="side"' in html                        # dot 从 asof 文本里拆出→收缩后可做角标
+    assert "white-space:normal" in html                  # 副标题可换行,时间戳不被 nowrap 截断
     # 未注入占位符残留
     assert "__ITEMS_JSON__" not in html and "__GEN_AT__" not in html
 
