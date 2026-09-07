@@ -16,7 +16,7 @@ from . import panel as pnl
 
 
 def _ret_windows(s: pd.Series) -> dict:
-    """序列 → {cur, date, m20, m60, yoy}(近20/60日+同比涨幅,窗口不足自动收缩)。空 → {}。"""
+    """序列 → {cur, date, m10, m20, m60, yoy}(近10/20/60日+同比涨幅,窗口不足自动收缩)。空 → {}。"""
     if s is None or len(s) < 2:
         return {}
     s = s.astype(float).dropna()
@@ -29,7 +29,7 @@ def _ret_windows(s: pd.Series) -> dict:
         return float(s.iloc[-1]) / float(s.iloc[-1 - n]) - 1.0
 
     return {"cur": float(s.iloc[-1]), "date": str(s.index[-1]),
-            "m20": _chg(20), "m60": _chg(60), "yoy": _chg(252)}
+            "m10": _chg(10), "m20": _chg(20), "m60": _chg(60), "yoy": _chg(252)}
 
 
 def _ref_series(store, variety: str, ref: str):
@@ -44,7 +44,7 @@ def target_rows(store, config=None) -> tuple[list[dict], list[dict]]:
     """投资标的映射行。返回 (rows, nav_missing):
 
     rows 每行 = (标的 × 品种) 错配快照:{symbol/name/kind/variety/in_pool/note, etf, comm,
-    gap20/gap60/gap_yoy, ref_kind};nav_missing = NAV 未回填的标的(提示跑 --targets)。
+    gap10/gap20/gap60/gap_yoy, ref_kind};nav_missing = NAV 未回填的标的(提示跑 --targets)。
     品种无数据 → 该行诚实跳过(不出假数字)。"""
     cfg = config or get_config()
     specs = (cfg.params.get("commodity") or {}).get("targets") or []
@@ -75,7 +75,7 @@ def target_rows(store, config=None) -> tuple[list[dict], list[dict]]:
                 "symbol": sym, "name": spec.get("name", ""), "kind": spec.get("kind", ""),
                 "variety": v, "in_pool": sym in pool, "note": spec.get("note", ""),
                 "etf": etf, "comm": st, "ref_kind": ref,
-                "gap20": etf["m20"] - st["m20"], "gap60": etf["m60"] - st["m60"],
-                "gap_yoy": etf["yoy"] - st["yoy"],
+                "gap10": etf["m10"] - st["m10"], "gap20": etf["m20"] - st["m20"],
+                "gap60": etf["m60"] - st["m60"], "gap_yoy": etf["yoy"] - st["yoy"],
             })
     return rows, missing

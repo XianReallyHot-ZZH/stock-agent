@@ -232,8 +232,17 @@ def test_render_full_page_sections():
     for kw in ["商品异动雷达", "商品环境总览", "品种面板", "品种时序", "比价与内外盘对照",
                "投资标的映射", "读图说明", "中证商品期货指数", "LME铜", "国内定价", "commodity-dark"]:
         assert kw in h, f"缺 {kw}"
-    # 投资标的映射:错配 pp 格式 + 池内标的带研究看板跳转(512400 在池) + T+0 纪律注记
+    # 投资标的映射:四组错配列(近10/20/60日+同比) pp 格式 + 池内标的带研究看板跳转(512400 在池) + T+0 纪律注记
     assert "错配60日" in h and "pp" in h
+    for kw in ["ETF近10日", "品种近10日", "错配10日", "ETF近20日", "品种近20日", "错配20日"]:
+        assert kw in h, f"缺列 {kw}"
+    assert "±4.1" in h                                    # 短窗阈值随窗宽√缩放的口径注记
+    # 标的表 12 数值列可排序(与面板同法):表头 onclick + data-v 通道 + 排序 JS
+    assert 'id="targets-body"' in h and "function sortTargets" in h
+    for col in range(2, 14):
+        assert f'onclick="sortTargets({col})"' in h, f"缺排序列 {col}"
+    i0 = h.index('id="targets-table"')
+    assert h[i0:h.index("</table>", i0)].count("data-v=") >= 22 * 12   # 每行 12 数值格全带 data-v
     assert 'href="research_report.html"' in h
     assert "永不进宇宙" in h or "T+1 假设不合" in h
     # 主语徽标:铜=国际(LME铜),螺纹钢=国内定价
@@ -412,12 +421,19 @@ def test_target_rows_gap_math():
     assert not missing_all                               # Stub 给了 NAV → 无缺
     etf_m60 = (200.0 + 299 * 0.8) / (200.0 + 239 * 0.8) - 1.0
     dom_m60 = (100.0 + 299 * 0.5) / (100.0 + 239 * 0.5) - 1.0
+    etf_m10 = (200.0 + 299 * 0.8) / (200.0 + 289 * 0.8) - 1.0
+    dom_m10 = (100.0 + 299 * 0.5) / (100.0 + 289 * 0.5) - 1.0
+    etf_m20 = (200.0 + 299 * 0.8) / (200.0 + 279 * 0.8) - 1.0
+    dom_m20 = (100.0 + 299 * 0.5) / (100.0 + 279 * 0.5) - 1.0
     for r in rows:
         if r["symbol"] == "501018":                      # ref=intl:ETF 与品种同一条 stub 序列 → 错配 0
             assert r["ref_kind"] == "intl"
             assert r["gap60"] == pytest.approx(0.0, abs=1e-12)
+            assert r["gap10"] == pytest.approx(0.0, abs=1e-12)
         else:                                            # ref=dom:错配 = etf(intl 斜率) − 国内
             assert r["gap60"] == pytest.approx(etf_m60 - dom_m60)
+            assert r["gap10"] == pytest.approx(etf_m10 - dom_m10)
+            assert r["gap20"] == pytest.approx(etf_m20 - dom_m20)
         assert r["gap_yoy"] == pytest.approx(r["etf"]["yoy"] - r["comm"]["yoy"])
     by_sym = {r["symbol"]: r for r in rows}
     assert by_sym["512400"]["in_pool"] is True           # 池内标的(研究看板可跳)

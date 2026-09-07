@@ -495,13 +495,15 @@ document.addEventListener('DOMContentLoaded', function(){
 
 
 # ---------------------------------------------------------------- 🎫 投资标的映射(二期)
-def _gap_color(g) -> str:
-    """错配度着色:≥+10pp=ETF领先(蓝) / ≤−10pp=ETF落后·错杀观察(橙) / 常态灰。"""
+def _gap_color(g, win: int = 60) -> str:
+    """错配度着色:阈值随窗宽 √ 缩放(波动率尺度)——60日/同比=±10pp、20日≈±5.8、10日≈±4.1。
+    ≥+阈值=ETF领先(蓝) / ≤−阈值=ETF落后·错杀观察(橙) / 常态灰。"""
     if _nan(g):
         return "var(--muted)"
-    if float(g) >= 0.10:
+    t = 0.10 * (win / 60.0) ** 0.5
+    if float(g) >= t:
         return "#1e3a8a"
-    if float(g) <= -0.10:
+    if float(g) <= -t:
         return "#b45309"
     return "var(--text)"
 
@@ -524,24 +526,39 @@ def _targets_section(store, config=None) -> str:
         name_cell = (f'<b>{html.escape(r["name"])}</b><span class="muted"> {r["symbol"]}</span>'
                      f'<br><span class="muted" style="font-size:10px">{html.escape(r["kind"])}'
                      f'{" · 对照国际" if r["ref_kind"] == "intl" else ""}</span>{pool_link}{note}')
-        g60, gy = r["gap60"], r["gap_yoy"]
+        g10, g20, g60, gy = r["gap10"], r["gap20"], r["gap60"], r["gap_yoy"]
 
         def _pp(v):
             return "—" if _nan(v) else f"{v*100:+.1f}pp"
 
+        def _dv(v):        # 排序用 data-v(缺失→空串,JS 端沉底;与面板同法)
+            return "" if _nan(v) else f"{v:.6g}"
+
+        def _num(v, color=""):
+            c = f";color:{color}" if color else ""
+            return (f"<td style='{td};text-align:center{c}' data-v='{_dv(v)}'>"
+                    f"{'—' if _nan(v) else _pct(v, True)}</td>")
+
         body.append(
             f"<tr><td style='{td}'>{name_cell}</td>"
             f"<td style='{td};text-align:center'><b>{html.escape(r['variety'])}</b></td>"
-            f"<td style='{td};text-align:center'>{_pct(r['etf']['m60'], True)}</td>"
-            f"<td style='{td};text-align:center'>{_pct(r['comm']['m60'], True)}</td>"
-            f"<td style='{td};text-align:center;color:{_gap_color(g60)};font-weight:600'>{_pp(g60)}</td>"
-            f"<td style='{td};text-align:center'>{_pct(r['etf']['yoy'], True)}</td>"
-            f"<td style='{td};text-align:center'>{_pct(r['comm']['yoy'], True)}</td>"
-            f"<td style='{td};text-align:center;color:{_gap_color(gy)};font-weight:600'>{_pp(gy)}</td></tr>")
+            f"{_num(r['etf']['m10'])}{_num(r['comm']['m10'])}"
+            f"<td style='{td};text-align:center;color:{_gap_color(g10, 10)};font-weight:600' data-v='{_dv(g10)}'>{_pp(g10)}</td>"
+            f"{_num(r['etf']['m20'])}{_num(r['comm']['m20'])}"
+            f"<td style='{td};text-align:center;color:{_gap_color(g20, 20)};font-weight:600' data-v='{_dv(g20)}'>{_pp(g20)}</td>"
+            f"{_num(r['etf']['m60'])}{_num(r['comm']['m60'])}"
+            f"<td style='{td};text-align:center;color:{_gap_color(g60)};font-weight:600' data-v='{_dv(g60)}'>{_pp(g60)}</td>"
+            f"{_num(r['etf']['yoy'])}{_num(r['comm']['yoy'])}"
+            f"<td style='{td};text-align:center;color:{_gap_color(gy)};font-weight:600' data-v='{_dv(gy)}'>{_pp(gy)}</td></tr>")
+    # 12 数值列(2..13)可点击三态排序(与面板同法:降序→升序→还原配置原序)
+    tcols = ["ETF近10日", "品种近10日", "错配10日", "ETF近20日", "品种近20日", "错配20日",
+             "ETF近60日", "品种近60日", "错配60日", "ETF同比", "品种同比", "错配同比"]
     head = (f"<tr><th style='{th};text-align:left'>标的</th><th style='{th}'>映射品种</th>"
-            f"<th style='{th}'>ETF近60日</th><th style='{th}'>品种近60日</th>"
-            f"<th style='{th}'>错配60日</th><th style='{th}'>ETF同比</th>"
-            f"<th style='{th}'>品种同比</th><th style='{th}'>错配同比</th></tr>")
+            + "".join(
+                f"<th style='{th}' id='tth-{i}' class='sortable' title='点击排序(降序→升序→还原)' "
+                f"onclick=\"sortTargets({i})\">{lbl}</th>"
+                for i, lbl in enumerate(tcols, start=2))
+            + "</tr>")
     n_syms = len({r["symbol"] for r in rows})
     miss_html = ""
     if missing:
@@ -550,12 +567,51 @@ def _targets_section(store, config=None) -> str:
                      " — python scripts/backfill_commodity.py --targets</p>")
     return (f'<div class="alerts"><h2>🎫 投资标的映射(大A) '
             f'<span class="count">{n_syms} 标的 · {len(rows)} 映射 · 错配度=ETF−品种</span></h2>'
-            f'<p class="muted">错配=ETF(NAV)涨幅−标的商品涨幅(同窗口;蓝≥+10pp=ETF领先/溢价、'
-            f'橙≤−10pp=ETF落后·错杀观察)。期货ETF 的 NAV 含展期结构、QDII 含汇率=「含摩擦的跟踪差」;'
+            f'<p class="muted">错配=ETF(NAV)涨幅−标的商品涨幅(近10/20/60日+同比四组同窗口;蓝≥+阈值=ETF'
+            f'领先/溢价、橙≤−阈值=ETF落后·错杀观察,阈值随窗宽√缩放:10/20/60日≈±4.1/±5.8/±10pp·同比=±10pp)。'
+            f'期货ETF 的 NAV 含展期结构、QDII 含汇率=「含摩擦的跟踪差」;'
             f'股票ETF 是股票组合代理(含个股 alpha)。观察非信号,不构成买卖建议;'
-            f'T+0 品种与引擎 T+1 假设不合永不进宇宙。</p>'
-            f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
-            f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div>{miss_html}</div>')
+            f'T+0 品种与引擎 T+1 假设不合永不进宇宙。十二数值列表头可点击排序(降序→升序→还原)。</p>'
+            f'<div style="overflow-x:auto"><table id="targets-table" style="width:100%;border-collapse:collapse;font-size:13px">'
+            f'<thead>{head}</thead><tbody id="targets-body">{"".join(body)}</tbody></table></div>{miss_html}</div>'
+            + "\n<script>" + _TARGETS_SORT_JS + "</script>")
+
+
+# 标的表排序:12 数值列(2..13)三态(降序→升序→还原配置原序);数值藏 td 的 data-v(缺失沉底)。
+# 与 _PANEL_SORT_JS 同法不同表;纯客户端重排,不重算。
+_TARGETS_SORT_JS = """
+var targetsSortCol = null, targetsSortDir = 0;    // dir: 0=原序 1=降序 2=升序
+var targetsOrigRows = null;
+function sortTargets(col){
+  var tb = document.getElementById('targets-body');
+  if(!tb) return;
+  if(targetsSortCol !== col){ targetsSortCol = col; targetsSortDir = 1; }
+  else { targetsSortDir = (targetsSortDir + 1) % 3; if(targetsSortDir === 0) targetsSortCol = null; }
+  if(!targetsOrigRows) targetsOrigRows = Array.prototype.slice.call(tb.rows);
+  var rows;
+  if(targetsSortCol === null){
+    rows = targetsOrigRows.slice();
+  } else {
+    rows = Array.prototype.slice.call(tb.rows);
+    var c = targetsSortCol;
+    rows.sort(function(a, b){
+      var va = parseFloat(a.cells[c].getAttribute('data-v'));
+      var vb = parseFloat(b.cells[c].getAttribute('data-v'));
+      if(isNaN(va)) va = -Infinity;
+      if(isNaN(vb)) vb = -Infinity;
+      return (va - vb) * (targetsSortDir === 2 ? 1 : -1);
+    });
+  }
+  rows.forEach(function(r){ tb.appendChild(r); });
+  document.querySelectorAll('#targets-table th.sortable').forEach(function(th){
+    th.textContent = th.textContent.replace(/\\s*[▲▼]$/, '');
+  });
+  if(targetsSortCol !== null){
+    var th = document.getElementById('tth-' + targetsSortCol);
+    if(th) th.textContent = th.textContent + (targetsSortDir === 2 ? ' ▲' : ' ▼');
+  }
+}
+"""
 
 
 # ---------------------------------------------------------------- 🔬 基差·期限结构·库存(二期剩余)
@@ -657,7 +713,8 @@ _LEGEND_HTML = """
 无权重无展期调整,<b>非官方指数</b>,只作温度对照。指数点位无绝对意义(只看变化率);全看板「同比」
 均=近 252 交易日(约一年)口径。</div>
 <div><b>⚖ 比价</b> · 螺矿比≈钢厂利润代理(近似);分位=全史位置。观察非信号。</div>
-<div><b>🎫 投资标的</b> · 错配=ETF(NAV)涨幅−品种涨幅:正=ETF领先(情绪/展期溢价)、负=ETF落后
+<div><b>🎫 投资标的</b> · 错配=ETF(NAV)涨幅−品种涨幅(近10/20/60日+同比四组同窗口,着色阈值随窗宽
+√缩放:10/20/60日≈±4.1/±5.8/±10pp·同比=±10pp):正=ETF领先(情绪/展期溢价)、负=ETF落后
 (商品涨了ETF没涨=错杀观察,或股票端独立逻辑)。期货ETF NAV 含展期、QDII 含汇率、股票ETF 含个股
 alpha——都是「含摩擦的跟踪差」。T+0 品种永不进引擎宇宙;偏离度/筹码在行业研究看板不复刻。</div>
 <div><b>数据腿</b> · 国内 17 品种=sina 连续合约(backfill_stock_data --comm);国际基准=sina 外盘
@@ -714,7 +771,7 @@ h2 { font-size:16px; margin:0 0 10px; }
 .subj.intl { background:#2563eb; }
 .subj.dom { background:#94a3b8; }
 .unit { color:var(--muted); font-size:10px; margin-left:3px; }
-/* 面板可排序表头(近10/20/60日·偏离度;三态:降序→升序→还原) */
+/* 可排序表头(面板 近10/20/60日·偏离度 / 标的表 12 数值列;三态:降序→升序→还原) */
 .sortable { cursor:pointer; user-select:none; }
 .sortable:hover { color:#2563eb; }
 /* 放大模态(迁自个股看板) */
