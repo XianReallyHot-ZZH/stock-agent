@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from stockagent.research import timing as tm
 
@@ -217,6 +218,23 @@ def test_timing_snapshot_event_rank_rebound_day_hypothetical():
     snap = tm.timing_snapshot(pd.DataFrame({"acc_nav": nav}, index=idx), None, ma_period=60)
     assert snap["nav_dev_rank"] == 2                    # 只有 T-3 那个谷比今天深 → 第2低
     assert snap["nav_dev_cur"] < 0                      # 仍在超卖侧
+
+
+def test_timing_snapshot_daily_flow_uses_last_real_share_date():
+    # 份额 T+1 滞后:nav 到 T、份额只到 T-3(且 T-3 有真实变动)——「日申赎」必须取
+    # 最后一个真实份额观测日的值,而非 ffill 出来的 Δ=0(2026-09-08 收盘后全 0 bug)
+    idx = _idx(300)
+    nav = pd.DataFrame({"unit_nav": np.linspace(1.0, 1.3, 300),
+                        "acc_nav": np.linspace(1.0, 1.3, 300)}, index=idx)
+    shares = np.full(297, 1e9)
+    shares[-1] = 1.05e9                                  # T-3 那天真实 +5%
+    sh_df = pd.DataFrame({"shares": shares}, index=idx[:297])
+    snap = tm.timing_snapshot(nav, sh_df, ma_period=60)
+    dfl = snap["daily_flow"]
+    assert dfl["date"] == str(idx[296].date())           # 最后真实观测日,非 nav 末日
+    assert dfl["pct"] == pytest.approx(5.0)              # +5%,不是 ffill 的 0
+    assert dfl["flow_yi"] == pytest.approx(0.05e9 * float(nav["unit_nav"].iloc[296]) / 1e8)  # Δ份×当日净值
+    assert snap["nav_last"] == str(idx[299].date())      # 滞后判定基准
 
 
 # ---------------- chip_direction（筹码方向 · 近端加权投票 + 死区） ----------------

@@ -443,7 +443,21 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         un = pd.to_numeric(nav_df["unit_nav"], errors="coerce").dropna()
         if len(un):
             unit_nav_al = un.reindex(shares_series.index)
-    daily_flow = latest_daily_flow(shares_series, unit_nav_al)
+    # 「日申赎」列 = 最新**可得**申赎日。交易所份额 T+1 公布:nav 日历末端若有 ffill
+    # 补齐的无份额日,直接取最后一行会读出 Δ=0 的假「今日无申赎」(2026-09-08 修:
+    # 收盘后刷新看板时排名表日申赎列全 0)——截到最后一个真实份额观测日再算,
+    # 滞后于 nav 末日时由展示层标 @日期。
+    adj_cut, nav_cut = shares_series, unit_nav_al
+    _last_raw = None
+    if shares_df is not None and "shares" in getattr(shares_df, "columns", []):
+        _sh_raw = pd.to_numeric(shares_df["shares"], errors="coerce").dropna()
+        if len(_sh_raw):
+            _last_raw = str(_sh_raw.index[-1])[:10]
+    if _last_raw is not None and adj_cut is not None:
+        _mask = adj_cut.index.astype(str) <= _last_raw
+        adj_cut = adj_cut[_mask]
+        nav_cut = nav_cut[_mask] if nav_cut is not None else None
+    daily_flow = latest_daily_flow(adj_cut, nav_cut)
     # 横幅「第N低/高」= 事件序假设排名（全量 episode·不截断 top-N）：今天若算独立
     # episode 排第几。今天正是谷/峰点时与明细图 ▲▼ 第N **同数**；episode 内反弹日
     # 则为假设性排名（图上第N=第N深谷点**日**，横幅第N=今天插入事件序的位置——
@@ -463,6 +477,7 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         "nav_dev_min": ext["min_dev"],
         "nav_extreme_events": events,
         "nav_dev_rank": nav_dev_rank,
+        "nav_last": str(nav_series.index[-1])[:10],   # 展示层判「日申赎」滞后用
         "scissor": scissor,
         "chip": chip,
         "daily_flow": daily_flow,

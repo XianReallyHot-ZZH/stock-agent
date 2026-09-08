@@ -1171,6 +1171,8 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
         # 主值=金额亿（Δ份额×当日unit_nav·拆分已调整），副行=日增减% + 自身全历史
         # 带符号分位；≥95% 红=罕见大额净申购 / ≤5% 绿=罕见大额净赎回（A股资金流
         # 语义·与筹码列相反，读图说明④注明）。历史不足250日 → 诚实显示 —。
+        # 份额 T+1 公布：列取最新**可得**申赎日，滞后 nav 末日时标 @MM-DD（2026-09-08
+        # 修：此前取对齐日历末行，收盘后刷新会全列显示 ffill 出来的假 0.00亿）。
         dfl = snap.get("daily_flow") or {}
         fy = dfl.get("flow_yi")
         if dfl.get("data_sufficient") and not _nan(dfl.get("pct")):
@@ -1186,10 +1188,15 @@ def _ranking_rows(snapshots: dict, meta: dict, style_filter: str | None = None) 
             hot = ("flow-hot" if dfl["pct"] > 0 else "flow-cold") if pt >= 0.95 else ""
             pt_html = f"{lbl}<b class='{hot}'>{_fmt_pctile(pt)}</b>" if hot else f"{lbl}{_fmt_pctile(pt)}"
             n_side = dfl.get("n_side")
+            stale = ""
+            if dfl.get("date") and snap.get("nav_last") \
+                    and str(dfl["date"])[:10] != str(snap["nav_last"])[:10]:
+                stale = (f" · <span title='份额T+1公布·最新可得申赎日'>"
+                         f"@{str(dfl['date'])[5:10]}</span>")
             flow_cell = (f"<td class='c bold' title=\"{dfl.get('date') or ''} · 最新日净申赎"
                          f" · {lbl[:-2]}样本{n_side}日\">"
                          f"{fy_html}"
-                         f"<br><span class='sub2 muted'>{dfl['pct']:+.1f}% · {pt_html}</span></td>")
+                         f"<br><span class='sub2 muted'>{dfl['pct']:+.1f}%{stale} · {pt_html}</span></td>")
         else:
             flow_cell = "<td class='c'><span class='ghost'>—</span></td>"
         out += (

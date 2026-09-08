@@ -271,6 +271,22 @@ def test_flow_events_strip_figure_default_window_range():
     assert pd.Timestamp(rng[1]) > pd.Timestamp("2026-08-14")                   # 末端+1天缓冲
 
 
+def test_rank_flow_cell_marks_stale_share_date():
+    # 份额 T+1 滞后:日申赎列显示最新可得日的真实值 + @MM-DD 滞后标注(悬停解释)
+    snaps = {"159915": {"nav_dev_pct": 0.5, "nav_dev_cur": 0.0, "nav_extreme_events": [],
+                        "data_sufficient": True, "style": "growth",
+                        "chip": {"state": "flat", "flows": {}},
+                        "nav_last": "2026-09-07",
+                        "daily_flow": {"data_sufficient": True, "date": "2026-09-04",
+                                       "flow_yi": 1.23, "pct": 0.6, "pctile": 0.55,
+                                       "pctile_kind": "side", "n_side": 400}}}
+    html = rep.render(snaps, {"159915": {"shares": None, "nav": None}},
+                      {"159915": {"name": "创业板ETF", "group": "成长宽基"}}, as_of="2026-09-07")
+    assert "+1.23亿" in html                       # 真实值,不是 ffill 的 0.00亿
+    assert "@09-04" in html                        # 滞后标注
+    assert "份额T+1公布" in html                    # 悬停解释
+
+
 def test_flow_events_banner_present_and_absent():
     # 有事件 → 横幅：标题+条目+「最新」徽标+跳转链接；无事件 → 整横幅省略
     base = _flow_mini()
