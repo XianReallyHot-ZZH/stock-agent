@@ -99,8 +99,8 @@ def _merged_runs(mask: np.ndarray, merge_gap: int) -> list[tuple[int, int]]:
 
 def deviation_extreme_events(close: pd.Series, period: int = MA_PERIOD,
                              lo_pct: float = 0.05, hi_pct: float = 0.95,
-                             merge_gap: int = 5, top_n: int = 8) -> list[dict]:
-    """偏离度历史极值事件（全历史口径，纯观察用）——「第几极值」。
+                             merge_gap: int = 5, top_n: int = 10) -> list[dict]:
+    """偏离度历史极值事件（全历史口径，纯观察用）——「第几极值」（各侧 Top-10）。
 
     在全历史分位 ≤lo_pct(超卖) / ≥hi_pct(超买) 的连续区间（相邻抖动段按 merge_gap 合并）
     内取最深处一点（谷 / 峰），标注其全历史「第几」（同侧事件按深度排序，
@@ -142,6 +142,25 @@ def deviation_extreme_events(close: pd.Series, period: int = MA_PERIOD,
             e["rank"] = k
     out = [e for e in events if "rank" in e]
     out.sort(key=lambda e: e["date"])                   # 按日期升序（便于绘图）
+    return out
+
+
+def side_percentile(x: pd.Series, *, side_min_obs: int = 30) -> pd.Series:
+    """逐点**方向内**分位（0-1，通用原语）：每点在其自身符号侧（≥0 / <0）的全历史
+    池里按幅度 |x| 的百分位（rank average·pct）——正负各自统计，某侧样本 <
+    side_min_obs 时该侧退绝对值双向分位（诚实降级）。量纲无关（%数/小数同秩）。
+
+    消费方：research/flow.daily_flow_pctile（日增减%·日度净申赎图悬停）与
+    nav_deviation_figure（偏离度图悬停「正/负偏离分位」）——同一把尺子。
+    返回与 x 同索引的 Series；x 为 NaN 的点 → NaN。"""
+    if x is None or x.dropna().empty:
+        return pd.Series(dtype=float)
+    pos, neg = x[x >= 0], x[x < 0]
+    out = x.abs().rank(method="average", pct=True).copy()   # 双向兜底(某侧样本过少时)
+    if len(pos) >= side_min_obs:
+        out.loc[pos.index] = pos.abs().rank(method="average", pct=True)
+    if len(neg) >= side_min_obs:
+        out.loc[neg.index] = neg.abs().rank(method="average", pct=True)
     return out
 
 
@@ -396,7 +415,7 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
                    "weights": {}, "vote_threshold": chip_vote_threshold}
     if nav_series is None or len(nav_series) < ma_period:
         return {"nav_dev_cur": np.nan, "nav_dev_pct": np.nan, "nav_dev_max": np.nan,
-                "nav_dev_min": np.nan, "nav_extreme_events": [],
+                "nav_dev_min": np.nan, "nav_extreme_events": [], "nav_dev_rank": None,
                 "scissor": {"detected": False}, "chip": _chip_empty,
                 "daily_flow": {"data_sufficient": False},
                 "share_splits": [],
@@ -425,12 +444,25 @@ def timing_snapshot(nav_df, shares_df, ma_period: int = MA_PERIOD,
         if len(un):
             unit_nav_al = un.reindex(shares_series.index)
     daily_flow = latest_daily_flow(shares_series, unit_nav_al)
+    # 横幅「第N低/高」= 事件序假设排名（全量 episode·不截断 top-N）：今天若算独立
+    # episode 排第几。今天正是谷/峰点时与明细图 ▲▼ 第N **同数**；episode 内反弹日
+    # 则为假设性排名（图上第N=第N深谷点**日**，横幅第N=今天插入事件序的位置——
+    # 两个语义并存，2026-09-08 定稿：用户要求横幅保留且不限前十）。
+    nav_dev_rank = None
+    cur_d = ext["cur_dev"]
+    if cur_d == cur_d:
+        _side = "low" if cur_d < 0 else "high"
+        ev_all = deviation_extreme_events(nav_series, period=ma_period, top_n=10 ** 9)
+        deeper = sum(1 for e in ev_all if e["side"] == _side and
+                     (e["dev"] < cur_d if _side == "low" else e["dev"] > cur_d))
+        nav_dev_rank = deeper + 1
     return {
         "nav_dev_cur": ext["cur_dev"],
         "nav_dev_pct": ext["pct"],
         "nav_dev_max": ext["max_dev"],
         "nav_dev_min": ext["min_dev"],
         "nav_extreme_events": events,
+        "nav_dev_rank": nav_dev_rank,
         "scissor": scissor,
         "chip": chip,
         "daily_flow": daily_flow,

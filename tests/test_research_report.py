@@ -60,31 +60,22 @@ def test_partition_boundary_inclusive():
 
 # ---------------- _extreme_rank ----------------
 
-def test_extreme_rank_low_side():
-    events = [
-        {"date": 1, "dev": -0.20, "side": "low", "rank": 1},
-        {"date": 2, "dev": -0.18, "side": "low", "rank": 2},
-        {"date": 3, "dev": -0.15, "side": "low", "rank": 3},
-    ]
-    assert rep._extreme_rank(_snap(0.01, -0.21, events)) == 1     # 比所有事件更极端 → 第1低
-    assert rep._extreme_rank(_snap(0.03, -0.19, events)) == 2     # 仅次于 -0.20
-    assert rep._extreme_rank(_snap(0.04, -0.16, events)) == 3     # 介于 rank2 / rank3
-    assert rep._extreme_rank(_snap(0.05, -0.10, events)) is None  # 不在 top 极端 → None
-
-
-def test_extreme_rank_high_side():
-    events = [
-        {"date": 1, "dev": 0.25, "side": "high", "rank": 1},
-        {"date": 2, "dev": 0.20, "side": "high", "rank": 2},
-    ]
-    assert rep._extreme_rank(_snap(0.99, 0.26, events)) == 1      # 比所有高 → 第1高
-    assert rep._extreme_rank(_snap(0.96, 0.21, events)) == 2      # 仅次于 0.25
-    assert rep._extreme_rank(_snap(0.95, 0.15, events)) is None   # 不在 top
+def test_extreme_rank_hypothetical_event_order():
+    # 「第N低/高」= 事件序假设排名(timing.nav_dev_rank·全量 episode 不截断):
+    # 今天是谷/峰点时与图 ▲▼ 第N 同数;episode 内反弹日给出假设性排名(可为 10+)
+    snap = _snap(0.01, -0.21)
+    snap["nav_dev_rank"] = 1
+    assert rep._extreme_rank(snap) == 1
+    snap2 = _snap(0.97, +0.20)
+    snap2["nav_dev_rank"] = 14                 # 不限前十
+    assert rep._extreme_rank(snap2) == 14
+    assert rep._extreme_rank(_snap(0.01, -0.21)) is None       # 无该 key → None
 
 
 def test_extreme_rank_nan_and_empty():
     assert rep._extreme_rank(_snap(NaN, NaN)) is None
-    assert rep._extreme_rank(_snap(0.02, -0.15, events=[])) is None   # 无事件
+    snap = _snap(0.02, -0.15, events=[])
+    assert rep._extreme_rank(snap) is None                     # 无事件 → 无 rank
 
 
 # ---------------- _order_detail (逐标的明细顺序：置顶优先) ----------------
@@ -140,6 +131,19 @@ def test_shares_nav_figure_yaxis_titles():
     fig = rep.shares_nav_figure("测试ETF", shares, nav)
     assert fig.layout.yaxis.title.text == "累计净值"        # 左轴（净值）
     assert fig.layout.yaxis2.title.text == "份额（亿份）"   # 右轴（份额）
+
+
+def test_nav_deviation_figure_hover_side_pctile():
+    # 悬停分位标签：正/负偏离各自统计（两侧样本各~70 天 ≥30）；最深处各 = 100%
+    idx = pd.date_range("2025-01-01", periods=200, freq="B")
+    nav = pd.DataFrame({"acc_nav": 100 + 20 * np.sin(np.linspace(0, 6 * np.pi, 200))}, index=idx)
+    fig = rep.nav_deviation_figure("T", nav, {"nav_dev_cur": 0.01, "nav_dev_pct": 0.5,
+                                              "nav_extreme_events": []})
+    bars = [tr for tr in fig.data if tr.type == "bar"]
+    labels = {t[0] for tr in bars for t in (tr.customdata or []) if t}
+    assert "正偏离分位 100.0%" in labels and "负偏离分位 100.0%" in labels
+    assert not any(l.startswith("绝对值") for l in labels)   # 两侧样本充足 → 无降级标签
+    assert all("%{customdata[0]}" in tr.hovertemplate for tr in bars)
 
 
 def test_detail_figures_default_3y_range():

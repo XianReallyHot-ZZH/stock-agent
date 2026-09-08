@@ -73,6 +73,34 @@ def test_deviation_extreme_events_have_ranked_extremes():
         assert ranks == list(range(1, len(ranks) + 1))
 
 
+def test_deviation_extreme_events_default_top10():
+    # 慢振荡序列:极值区间多 → 默认各侧截到 Top-10(2026-09-08 从 8 放宽)
+    s = pd.Series(100 + 30 * np.sin(np.linspace(0, 40 * np.pi, 4000)), index=_idx(4000))
+    evs = tm.deviation_extreme_events(s, period=60)
+    for side in ("low", "high"):
+        ranks = sorted(e["rank"] for e in evs if e["side"] == side)
+        assert ranks == list(range(1, 11))            # 两侧各满 10 个
+
+
+# ---------------- side_percentile（方向内分位·悬停通用原语） ----------------
+
+def test_side_percentile_pools_and_fallback():
+    # 正负各 40 天:各自池内统计,两侧最深处各 = 100%
+    vals = list(np.linspace(0.01, 0.05, 40)) + list(np.linspace(-0.05, -0.01, 40))
+    sp = tm.side_percentile(pd.Series(vals, index=_idx(80)))
+    assert sp.iloc[39] == 1.0 and sp.iloc[40] == 1.0
+    assert sp.notna().all()
+    # 负侧仅 3 天(<30) → 负日退绝对值双向分位;正侧样本也不足 → 全部双向
+    s2 = pd.Series([0.01, 0.02, -0.06, 0.03, -0.01, 0.04, -0.02, 0.05], index=_idx(8))
+    sp2 = tm.side_percentile(s2)
+    ar = s2.abs().rank(method="average", pct=True)
+    assert list(sp2) == list(ar)
+    # NaN 透传;空序列 → 空
+    sp3 = tm.side_percentile(pd.Series([np.nan, 0.01, np.nan]))
+    assert sp3.iloc[0] != sp3.iloc[0] and sp3.iloc[1] == sp3.iloc[1]
+    assert tm.side_percentile(pd.Series(dtype=float)).empty
+
+
 # ---------------- scissor_divergence ----------------
 
 def test_scissor_divergent_share_up_nav_down():
@@ -167,6 +195,28 @@ def test_timing_snapshot_prefers_acc_nav():
     nav_df = pd.DataFrame({"unit_nav": unit, "acc_nav": np.linspace(1.0, 1.2, 200)}, index=idx)
     snap = tm.timing_snapshot(nav_df, None, ma_period=60)
     assert snap["nav_col"] == "acc_nav"
+
+
+def test_timing_snapshot_event_rank_today_is_trough():
+    # 尾部深跌到最后一根(今天=episode 谷点) → nav_dev_rank = 事件 rank(图 ▼第N 同数)
+    idx = _idx(200)
+    nav = np.linspace(1.0, 1.2, 200)
+    nav[-8:] = nav[-8] * np.linspace(1.0, 0.80, 8)      # 尾部 -20% 直落,今天最深
+    snap = tm.timing_snapshot(pd.DataFrame({"acc_nav": nav}, index=idx), None, ma_period=60)
+    lows = [e for e in snap["nav_extreme_events"] if e["side"] == "low"]
+    assert snap["nav_dev_rank"] == 1                    # 史上最深谷=今天
+    assert str(lows[0]["date"])[:10] == str(idx[-1])[:10]
+
+
+def test_timing_snapshot_event_rank_rebound_day_hypothetical():
+    # 谷点在 T-3、今天从谷底反弹(同 episode·非谷点) → 假设性排名 = 更深 episode 数+1
+    idx = _idx(200)
+    nav = np.linspace(1.0, 1.2, 200)
+    nav[-8:-3] = nav[-8] * np.linspace(1.0, 0.80, 5)    # 跌到 T-3 触底 -20%
+    nav[-3:] = nav[-4] * np.linspace(1.0, 1.03, 3)      # 今天反弹但仍深跌
+    snap = tm.timing_snapshot(pd.DataFrame({"acc_nav": nav}, index=idx), None, ma_period=60)
+    assert snap["nav_dev_rank"] == 2                    # 只有 T-3 那个谷比今天深 → 第2低
+    assert snap["nav_dev_cur"] < 0                      # 仍在超卖侧
 
 
 # ---------------- chip_direction（筹码方向 · 近端加权投票 + 死区） ----------------

@@ -165,8 +165,10 @@ def shares_nav_figure(name: str, shares_df, nav_df, ma_period: int = 60,
 
 
 def nav_deviation_figure(name: str, nav_df, snap: dict, ma_period: int = 60) -> go.Figure:
-    """净值 vs MA60（上）+ 偏离度副图（下）：正/负偏离柱 + 历史极值虚线 + top-N 极值 ▲/▼
-    「第几」标记（来自 timing.deviation_extreme_events）+ 当前点分位 chip。"""
+    """净值 vs MA60（上）+ 偏离度副图（下）：正/负偏离柱 + 历史极值虚线 + Top-10 极值
+    ▲/▼「第几」标记（来自 timing.deviation_extreme_events）+ 当前点分位 chip。
+    悬停分位（2026-09-08）：每天偏离度的**正/负各自统计**历史分位
+    （timing.side_percentile·与日度净申赎图同把尺子；某侧样本<30 退绝对值诚实标注）。"""
     fig = go.Figure()
     nav_y, nav_label = _nav_series(nav_df)
     if nav_y is None or len(nav_y) < ma_period:
@@ -175,6 +177,18 @@ def nav_deviation_figure(name: str, nav_df, snap: dict, ma_period: int = 60) -> 
     ma = tm.ma_series(nav_y, ma_period)
     dev = tm.deviation_series(nav_y, ma_period)
     idx = pd.to_datetime(nav_y.index)
+    # 悬停分位标签：正/负偏离各自统计的全历史分位
+    side_pt = tm.side_percentile(dev)
+    n_pos, n_neg = int((dev >= 0).sum()), int((dev < 0).sum())
+    dev_labels = []
+    for v, pt in zip(dev.to_numpy(), side_pt.to_numpy()):
+        if v != v or pt != pt:
+            dev_labels.append("—")
+        else:
+            tag = ("正偏离" if v >= 0 else "负偏离") if \
+                ((n_pos if v >= 0 else n_neg) >= 30) else "绝对值"
+            dev_labels.append(f"{tag}分位 {pt:.1%}")
+    dev_cd = [[s] for s in dev_labels]
     dc = dev.dropna()
     mx = float(dc.max()) if len(dc) else float("nan")
     mn = float(dc.min()) if len(dc) else float("nan")
@@ -195,9 +209,13 @@ def nav_deviation_figure(name: str, nav_df, snap: dict, ma_period: int = 60) -> 
     pos = dev.where(dev >= 0, np.nan)
     neg = dev.where(dev < 0, np.nan)
     fig.add_trace(go.Bar(x=idx, y=pos.values, name="正偏离", marker_color=C_DEV_POS,
-                         hovertemplate="%{x|%Y-%m-%d}<br>偏离 %{y:.1%}<extra></extra>"), row=2, col=1)
+                         customdata=dev_cd,
+                         hovertemplate=("%{x|%Y-%m-%d}<br>偏离 %{y:.1%}"
+                                        "<br>%{customdata[0]}<extra></extra>")), row=2, col=1)
     fig.add_trace(go.Bar(x=idx, y=neg.values, name="负偏离", marker_color=C_DEV_NEG,
-                         hovertemplate="%{x|%Y-%m-%d}<br>偏离 %{y:.1%}<extra></extra>"), row=2, col=1)
+                         customdata=dev_cd,
+                         hovertemplate=("%{x|%Y-%m-%d}<br>偏离 %{y:.1%}"
+                                        "<br>%{customdata[0]}<extra></extra>")), row=2, col=1)
     if not np.isnan(mx):
         fig.add_hline(y=mx, row=2, col=1, line=dict(color=C_DEV_POS, width=1, dash="dot"),
                       annotation_text=f"正极值 +{mx:.0%}", annotation_position="top left")
@@ -375,20 +393,11 @@ _EARN_WINDOW_GRACE_DAYS = 14   # 披露窗扫尾天数（截止后仍算开窗�
 
 
 def _extreme_rank(snap: dict) -> int | None:
-    """当前偏离在「同侧历史极端事件」里的排名（与图里 ▲▼ 第N 标记同源）。不在 top-N 内 → None。"""
-    cur = snap.get("nav_dev_cur")
-    if _nan(cur):
-        return None
-    side = "low" if cur < 0 else "high"
-    evs = [e for e in (snap.get("nav_extreme_events") or []) if e.get("side") == side]
-    if not evs:
-        return None
-    if side == "low":
-        more = sum(1 for e in evs if e["dev"] < cur)   # 比当前更低（更极端）的事件数
-    else:
-        more = sum(1 for e in evs if e["dev"] > cur)
-    rank = more + 1
-    return rank if rank <= len(evs) else None
+    """当前日的「第N低/高」= 事件序假设排名（timing.timing_snapshot 的 nav_dev_rank·
+    全量 episode 不截断）：今天若算独立 episode 排第几。今天正是谷/峰点时与明细图
+    ▲▼ 第N **同数**；episode 内反弹日为假设性排名（图上第N=第N深谷点**日**，横幅
+    第N=今天插入事件序的位置——两个语义并存，2026-09-08 定稿）。NaN → None。"""
+    return snap.get("nav_dev_rank")
 
 
 def _partition_extremes(snapshots: dict) -> tuple[list, list]:

@@ -33,6 +33,7 @@ import pandas as pd
 
 from stockagent.research.timing import split_adjusted_shares
 from stockagent.research.timing import _merged_runs   # 同包私有复用:极值区间合并(与偏离度极值同法)
+from stockagent.research.timing import side_percentile
 
 YI = 1e8  # 份 × 元/份 → 亿元
 
@@ -443,16 +444,9 @@ def daily_flow_pctile(pct: pd.Series, *, side_min_obs: int = 30) -> pd.Series:
     赎回日比赎回日）。某方向样本 < side_min_obs 时该方向退绝对值双向分位
     （与 daily_flow_events 的诚实降级同规则）。量纲无关（%数/小数同秩）。
 
+    实现为 timing.side_percentile 通用原语的薄委托（偏离度图悬停同把尺子）。
     返回与 pct 同索引的 Series；pct 为 NaN 的日子 → NaN。"""
-    if pct is None or pct.dropna().empty:
-        return pd.Series(dtype=float)
-    pos, neg = pct[pct >= 0], pct[pct < 0]
-    out = pct.abs().rank(method="average", pct=True).copy()   # 双向兜底(某方向样本过少时)
-    if len(pos) >= side_min_obs:
-        out.loc[pos.index] = pos.abs().rank(method="average", pct=True)
-    if len(neg) >= side_min_obs:
-        out.loc[neg.index] = neg.abs().rank(method="average", pct=True)
-    return out
+    return side_percentile(pct, side_min_obs=side_min_obs)
 
 
 def flow_extreme_events(pct: pd.Series, *, lo_pct: float = 0.05, hi_pct: float = 0.95,
