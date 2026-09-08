@@ -376,26 +376,36 @@ def commodity_price_figure(variety: str, series: pd.Series) -> go.Figure:
 
 
 def commodity_dev_stats(series: pd.Series, period: int = 60, top_k: int = 10) -> dict:
-    """商品偏离度统计(放大视图下行标注用,纯):当前偏离 + 历史极值 Top-K + 当前第几高/第几低。
+    """商品偏离度统计(放大视图下行标注用,纯):当前偏离 + 历史极值事件 Top-K + 事件序假设排名。
 
+    极值口径与行业研究 ETF 偏离度图**同法**(2026-09-08 改版,ti.deviation_extreme_events):
+    全历史分位 ≥95%/≤5% 的连续区间(±5 交易日合并)只取最深处一天=一个事件——连日
+    高位/深跌算一次、只标最深那天;highs/lows = 同侧按深度排 Top-K
+    [{r:事件排名(1=最极端), v:偏离值, d:发生日}](放大视图在发生位置打点标「第几高/低」)。
+    旧版为朴素 Top-K **日**排名(同一轮极端的每一根 K 线各占一席、平盘日也会凑数),已弃。
+    rank_high/rank_low = 事件序假设排名(全量事件不截断):当前偏离若算独立事件排第几
+    ——今天正是峰/谷点时与图上第 N 标注同数。
     MA 口径与 commodity_price_figure 的 MA60 同源(ti.ma_series)——图与标注必为同一条线。
-    highs/lows = 历史 Top-K 偏离点 [{r:排名(1=最极端), v:偏离值, d:发生日}](放大视图在
-    发生位置打点标「第几高/第几低」);并列值按时间先后稳定排序。偏离度序列本身由前端
-    从已下发的价格/MA60 两条 trace 逐点相除派生(零重复传参),本函数只下发小标量数组。
-    偏离值 <20 期(与 deviation_extremes 同门槛)或非有限值 → {}。"""
+    偏离度序列本身由前端从已下发的价格/MA60 两条 trace 逐点相除派生(零重复传参),
+    本函数只下发小标量数组。偏离值 <20 期(与 deviation_extremes 同门槛)或非有限值 → {}。"""
     if series is None or len(series) <= period:
         return {}
-    dev = ti.deviation_series(series.astype(float), period).dropna()
+    s = series.astype(float)
+    dev = ti.deviation_series(s, period).dropna()
     if len(dev) < 20:
         return {}
     cur = float(dev.iloc[-1])
     mx, mn = float(dev.max()), float(dev.min())
     if not all(pd.notna(v) and abs(v) != float("inf") for v in (cur, mx, mn)):
         return {}
-    desc = dev.sort_values(ascending=False, kind="stable")
-    asc = dev.sort_values(ascending=True, kind="stable")
-    highs = [{"r": i + 1, "v": float(v), "d": str(d)} for i, (d, v) in enumerate(desc.iloc[:top_k].items())]
-    lows = [{"r": i + 1, "v": float(v), "d": str(d)} for i, (d, v) in enumerate(asc.iloc[:top_k].items())]
+    # 全量事件一次算出(top_n=∞):Top-K 列表=截前 top_k;假设排名=比当前更极端的事件数+1
+    ev_all = ti.deviation_extreme_events(s, period=period, top_n=10 ** 9)
+    highs = [{"r": e["rank"], "v": e["dev"], "d": str(e["date"])}
+             for e in ev_all if e["side"] == "high"][:top_k]     # rank 连续=深度序
+    lows = [{"r": e["rank"], "v": e["dev"], "d": str(e["date"])}
+            for e in ev_all if e["side"] == "low"][:top_k]
+    rank_high = sum(1 for e in ev_all if e["side"] == "high" and e["dev"] > cur) + 1
+    rank_low = sum(1 for e in ev_all if e["side"] == "low" and e["dev"] < cur) + 1
     # 快腿(2026-09 提速改版):20日动量 + 60日新高/新低(价格口径,非偏离度)
     m20_n = min(20, len(series) - 1)
     momentum20 = float(series.iloc[-1]) / float(series.iloc[-1 - m20_n]) - 1.0
@@ -409,8 +419,8 @@ def commodity_dev_stats(series: pd.Series, period: int = 60, top_k: int = 10) ->
             "momentum20": m20,                     # 近20日价格动量(快腿横幅用;异常值→None)
             "new_high60": new_high60,              # 现价创 60 日新高(突破腿)
             "new_low60": new_low60,                # 现价创 60 日新低(突破腿)
-            "rank_high": int((dev > cur).sum()) + 1,   # 第几高(1=历史最偏高)
-            "rank_low": int((dev < cur).sum()) + 1,    # 第几低(1=历史最偏低)
+            "rank_high": rank_high,                # 事件序假设排名(1=无更深事件)
+            "rank_low": rank_low,
             "n": int(len(dev))}
 
 

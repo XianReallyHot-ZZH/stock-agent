@@ -3,6 +3,7 @@ No network — synthetic diagnose dicts only(实盘看板另跑 stock_report.py 
 import math
 import re
 
+import numpy as np
 import pandas as pd
 
 from stockagent.tracker import stock_report as srep
@@ -210,37 +211,54 @@ def test_render_commodity_modal_7th():
 
 
 def test_commodity_dev_stats_rank():
-    """偏离度统计:排名=全历史序数(1=最极端);MA 口径与 commodity_price_figure 的 MA60 同源;
-    highs/lows=历史 Top-K 极值点(放大视图打「第几高/第几低」标注),并列值按时间先后稳定排序。"""
+    """偏离度统计(2026-09-08 起事件序口径,与行业研究 ETF 偏离度极值同法):
+    分位≥95%/≤5% 连续区间±5交易日合并只取最深处一天=一个事件;highs/lows=同侧按深度
+    Top-K;rank_high/low=事件序假设排名(当前若独立成事件排第几,今天=峰谷点时与图同数);
+    连日高位不再每根K线各占一席、平盘日不再凑「第几低」。"""
     from stockagent.tracker import stock_figures as sfig
+    from stockagent.tracker import indicators as ti
 
-    idx = pd.date_range("2024-01-01", periods=101, freq="B").strftime("%Y-%m-%d")
-    # 末端尖峰:当前偏离=历史最偏高 → 第1高/最后1低(尖峰日自身进 MA60 分母:MA=(59×100+140)/60)
-    up = pd.Series([100.0] * 100 + [140.0], index=idx)
-    st = sfig.commodity_dev_stats(up)
-    assert st["rank_high"] == 1 and st["rank_low"] == st["n"]
+    n = 260
+    idx = pd.date_range("2024-01-01", periods=n, freq="B").strftime("%Y-%m-%d")
+    px = np.full(n, 100.0)
+    # 事件A:双尖峰相隔3日(+28/+30)——同区间(≤5日)合并,只标 +30 那天
+    px[100], px[103] = 128.0, 130.0
+    # 事件B/C:孤立高位 +25/+20;两次深跌 −25/−18;末端温和 +5(当前偏离,非极值)
+    px[140] = 125.0
+    px[180] = 120.0
+    px[120] = 75.0
+    px[200] = 82.0
+    px[-1] = 105.0
+    s = pd.Series(px, index=idx)
+    st = sfig.commodity_dev_stats(s)
+    # 等价性:highs/lows = ti.deviation_extreme_events 同侧截 Top-K
+    evs = ti.deviation_extreme_events(s, period=60, top_n=10)
+    assert st["highs"] == [{"r": e["rank"], "v": e["dev"], "d": str(e["date"])}
+                           for e in sorted((e for e in evs if e["side"] == "high"),
+                                           key=lambda e: e["rank"])]
+    assert st["lows"] == [{"r": e["rank"], "v": e["dev"], "d": str(e["date"])}
+                          for e in sorted((e for e in evs if e["side"] == "low"),
+                                          key=lambda e: e["rank"])]
+    # 合并去重:事件A只出一个标注(=更深的 05-23 那天),+28 那天不再单独占席
+    assert st["highs"][0]["d"] == idx[103] and idx[100] not in [e["d"] for e in st["highs"]]
+    # 平坦序列里温和的末端 +5.2% 也进 95% 区(分位98.5%)→ 第4个高位事件=今天(与图「现在」标同数)
+    assert [e["r"] for e in st["highs"]] == [1, 2, 3, 4]   # A(28.8%)>B(23.8%)>C(19.1%)>今天
+    assert [e["r"] for e in st["lows"]] == [1, 2]          # 两次深跌
+    # 事件序假设排名:当前温和正偏离 → 比它高的3个事件+1=第4高;低位侧2个事件更深+1=第3低
+    assert st["rank_high"] == 4 and st["rank_low"] == 3
+    # 快腿口径不变(窗内含 82/100 序列,末端 105 即 60 日最高)
+    assert st["new_high60"] is True and st["new_low60"] is False
+    assert abs(st["momentum20"] - 0.05) < 1e-9
+
+    # 末端尖峰:今天=峰点 → 假设排名与图上标注同数(第1高);平盘段不再凑「第几低」
+    up = pd.Series([100.0] * 100 + [140.0],
+                   index=pd.date_range("2024-01-01", periods=101, freq="B").strftime("%Y-%m-%d"))
+    st2 = sfig.commodity_dev_stats(up)
+    assert st2["rank_high"] == 1 and st2["highs"][0]["r"] == 1
+    assert st2["lows"] == []                                # 41个并列0值分位居中,不入≤5%区
     expect = 140 / ((59 * 100 + 140) / 60) - 1
-    assert abs(st["cur"] - expect) < 1e-9
-    assert st["max"] == st["highs"][0]["v"] and abs(st["highs"][0]["v"] - expect) < 1e-9
-    assert st["min"] == 0.0 and st["lows"][0]["v"] == 0.0
-    # 分位(与 deviation_extremes 同口径):101 根里有效偏离 42 个,尖峰前全 0 → pct=41/42
-    assert abs(st["pct"] - 41 / 42) < 1e-9
-    # Top-10:第1高=尖峰日;并列 0 值按时间先后稳定排序(idx[59] 是首个有效偏离日)
-    assert st["highs"][0]["d"] == idx[-1] and st["highs"][0]["r"] == 1
-    assert st["highs"][1] == {"r": 2, "v": 0.0, "d": idx[59]}
-    assert [e["d"] for e in st["highs"][1:]] == [idx[59 + k] for k in range(9)]
-    assert [e["d"] for e in st["lows"]] == [idx[59 + k] for k in range(10)]
-    assert [e["r"] for e in st["highs"]] == list(range(1, 11))
-    assert [e["r"] for e in st["lows"]] == list(range(1, 11))
-    # 快腿(2026-09 提速改版):20日动量 + 60日新高/新低(价格口径)
-    assert abs(st["momentum20"] - 0.4) < 1e-9 and st["new_high60"] is True and st["new_low60"] is False
-    # 末端跳水:第1低/最后1高
-    dn = pd.Series([100.0] * 100 + [60.0], index=idx)
-    st2 = sfig.commodity_dev_stats(dn)
-    assert st2["rank_low"] == 1 and st2["rank_high"] == st2["n"]
-    assert st2["lows"][0]["d"] == idx[-1] and st2["highs"][0]["d"] == idx[59]
-    assert st2["pct"] == 0.0                                   # 跳水日=历史最偏低(分位 0)
-    assert abs(st2["momentum20"] + 0.4) < 1e-9 and st2["new_low60"] is True and st2["new_high60"] is False
+    assert abs(st2["cur"] - expect) < 1e-9
+    assert abs(st2["momentum20"] - 0.4) < 1e-9 and st2["new_high60"] is True
     # 数据不足(偏离值 <20 期)→ {}(诚实缺省,前端不加偏离度行)
     assert sfig.commodity_dev_stats(pd.Series([100.0] * 50)) == {}
     assert sfig.commodity_dev_stats(None) == {}
