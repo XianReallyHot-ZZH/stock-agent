@@ -30,6 +30,7 @@ from plotly.subplots import make_subplots
 
 from . import earnings as ern
 from . import timing as tm
+from . import flow as rfl
 from .flow import alert_window_label, cluster_flow_events
 
 CHART_HEIGHT = 460
@@ -1278,14 +1279,19 @@ def _detail_chips(snap: dict) -> str:
     return "".join(chips)
 
 
-def flow_daily_figure(label: str, shares_df, nav_df, flow_events: list[dict] | None = None):
+def flow_daily_figure(label: str, shares_df, nav_df):
     """日度净申赎（事件级）：柱 = 净申赎额（亿元 = Δ份额 × 当日单位净值·拆分已调整，
     红=净申购/绿=净赎回），线 = 份额日增减%（右轴，Δ份额/前日份额——分母随时间
     变化，与柱不同形：柱看这笔申赎的金额大小，线看它相对基金当时体量的大小）。
 
-    flow_events（二期·下钻标记）：该 ETF 在📡横幅事件集（今日尺度·最大窗）里的
-    事件日——柱区上方标记轨 ▲申购/▼赎回，悬停带方向内分位，与横幅同源互证；
-    从横幅点条目跳下来第一眼就能对上「那天发生了什么」。
+    ▲▼ 极值标注（2026-09-08 重定义，与📡横幅事件**解耦**）：日增减% 的**全历史**
+    极值「第k高/第k低」（flow.flow_extreme_events·与偏离度图极值标注同法·Top-N·
+    连日大额合并只标最深一天）——时序图=全量历史观察，横幅=近窗异动（99%分位+
+    1亿地板），两套口径互不牵连；标记落在线上实际值处，悬停带当日金额。
+
+    悬停分位（柱/线同带）：每天的**方向内**历史分位（flow.daily_flow_pctile·
+    申购日比申购日/赎回日比赎回日·与排名表「日申赎」列同口径；某方向样本<30
+    退绝对值双向分位诚实标注）——「这天对它自己算多大动静」一眼可读。
 
     份额必须用拆分前复权口径（timing.split_adjusted_shares）——原始份额跨拆分日
     会画出一根假 +100%/数百亿的巨柱。无份额历史 → None（明细图组自动缩短）。"""
@@ -1296,35 +1302,52 @@ def flow_daily_figure(label: str, shares_df, nav_df, flow_events: list[dict] | N
     nav_al = nav.reindex(adj.index)
     flow_yi = (adj.diff() * nav_al) / 1e8
     pct = adj.pct_change() * 100.0
+    # 悬停分位标签：方向内分位(申购向/赎回向)，某方向样本<30 → 绝对值双向(诚实标注)
+    side_pt = rfl.daily_flow_pctile(pct)
+    n_pos, n_neg = int((pct >= 0).sum()), int((pct < 0).sum())
+    pt_labels = []
+    for v, pt in zip(pct.to_numpy(), side_pt.to_numpy()):
+        if v != v or pt != pt:
+            pt_labels.append("—")
+        else:
+            tag = ("申购向" if v >= 0 else "赎回向") if \
+                ((n_pos if v >= 0 else n_neg) >= 30) else "绝对值"
+            pt_labels.append(f"{tag}分位 {pt:.1%}")
     bar_colors = [("#dc2626" if (v == v and v >= 0) else "#16a34a") for v in flow_yi.values]
+    pt_cd = [[s] for s in pt_labels]
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Bar(
         x=adj.index, y=flow_yi, name="净申赎额(亿)",
-        marker_color=bar_colors,
-        hovertemplate="%{x|%Y-%m-%d}<br>净申赎: %{y:+.2f}亿<extra></extra>"), secondary_y=False)
+        marker_color=bar_colors, customdata=pt_cd,
+        hovertemplate=("%{x|%Y-%m-%d}<br>净申赎: %{y:+.2f}亿"
+                       "<br>%{customdata[0]}<extra></extra>")), secondary_y=False)
     fig.add_trace(go.Scatter(
         x=adj.index, y=pct, name="份额日增减%",
-        line=dict(color="#2563eb", width=1.2),
-        hovertemplate="%{x|%Y-%m-%d}<br>日增减: %{y:+.2f}%<extra></extra>"), secondary_y=True)
+        line=dict(color="#2563eb", width=1.2), customdata=pt_cd,
+        hovertemplate=("%{x|%Y-%m-%d}<br>日增减: %{y:+.2f}%"
+                       "<br>%{customdata[0]}<extra></extra>")), secondary_y=True)
     ev_note = ""
-    if flow_events:
-        ymax = float(np.nanmax(np.abs(flow_yi.values))) if flow_yi.notna().any() else 1.0
-        lane_y = ymax * 1.14                                   # 柱区上方的固定标记轨
-        for side, sym, color in (("in", "triangle-up", "#dc2626"), ("out", "triangle-down", "#16a34a")):
-            evs = [e for e in flow_events if e.get("side") == side]
-            if not evs:
+    extremes = rfl.flow_extreme_events(adj.pct_change().dropna())
+    if extremes:
+        for side, sym, color, tpos in (("in", "triangle-up", "#dc2626", "top center"),
+                                       ("out", "triangle-down", "#16a34a", "bottom center")):
+            sev = [e for e in extremes if e["side"] == side]
+            if not sev:
                 continue
             fig.add_trace(go.Scatter(
-                x=[str(e["date"])[:10] for e in evs], y=[lane_y] * len(evs),
-                mode="markers", name=f"📡事件·{'申购' if side == 'in' else '赎回'}",
+                x=[str(e["date"])[:10] for e in sev],
+                y=[e["pct"] * 100.0 for e in sev],          # 落在线上实际值处(右轴%)
+                mode="markers+text",
+                name=f"{'▲ 申购第k高' if side == 'in' else '▼ 赎回第k低'}",
+                text=[f"第{e['rank']}{'高' if side == 'in' else '低'}" for e in sev],
+                textposition=tpos, textfont=dict(size=9),
                 marker=dict(symbol=sym, size=9, color=color,
                             line=dict(color="white", width=1)),
-                customdata=[[e["flow_yi"], e["pct"], e["pctile"]] for e in evs],
-                hovertemplate=("%{x|%Y-%m-%d} · 📡横幅事件日<br>净申赎 %{customdata[0]:+.1f}亿"
-                               " · 日增减 %{customdata[1]:+.1%}<br>方向内分位 %{customdata[2]:.1%}"
-                               "<extra></extra>")), secondary_y=False)
-        fig.update_yaxes(range=[None, ymax * 1.28], secondary_y=False)   # 只扩上界给标记轨留位
-        ev_note = " · ▲▼横幅事件日"
+                customdata=[[flow_yi.get(e["date"], float("nan"))] for e in sev],
+                hovertemplate=("%{x|%Y-%m-%d} · 日增减%历史极值·%{text}<br>"
+                               "日增减 %{y:+.2f}% · 净申赎 %{customdata[0]:+.1f}亿"
+                               "<extra></extra>")), secondary_y=True)
+        ev_note = " · ▲▼日增减%历史极值"
     fig.update_layout(**_base_layout(f"{label} · 日度净申赎（柱:亿元=Δ份额×当日净值 · 线:份额日增减% · 拆分已调整{ev_note}）",
                                      CHART_HEIGHT))
     fig.update_xaxes(type="date", rangeselector=_RANGE_BUTTONS,
@@ -1344,10 +1367,9 @@ def _fmt_pctile(pt: float) -> str:
     return f"{pt:.1%}" if (pt >= 0.95 or pt <= 0.005) else f"{pt:.0%}"
 
 
-def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int,
-              flow_events: list[dict] | None = None) -> list:
+def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int) -> list:
     """每 ETF 明细图组：份额 vs 净值（剪刀差叠加）+ 净值-MA 偏离度（极值标记 + 分位）
-    + 日度净申赎（事件级：柱=亿元·线=%·📡横幅事件日标记轨）。"""
+    + 日度净申赎（柱=亿元·线=%·▲▼日增减%历史极值「第k高/低」标注）。"""
     nm = meta.get(sym, {}).get("name", sym)
     aum = snap.get("aum_yi")
     label = f"{nm}({sym})" + (f" · 规模{aum:.0f}亿" if not _nan(aum) else "")
@@ -1358,7 +1380,7 @@ def _etf_figs(sym: str, snap: dict, meta: dict, series_map: dict, ma_period: int
                           scissor=snap.get("scissor")),
         nav_deviation_figure(label, sm.get("nav"), snap, ma_period=ma_period),
     ]
-    fd = flow_daily_figure(label, sm.get("shares"), sm.get("nav"), flow_events=flow_events)
+    fd = flow_daily_figure(label, sm.get("shares"), sm.get("nav"))
     if fd is not None:
         figs.append(fd)
     return figs
@@ -1829,17 +1851,14 @@ def render(snapshots: dict, series_map: dict, meta: dict, as_of: str,
     # 滚入视口才 Plotly.newPlot、离开 purge 释放——把同时在画的图从 66 张压到 ~3-5 张。
     # 明细改折叠面板（details 默认收起、置顶展开）：收起=零渲染，展开即触发 IO 渲染。
     from plotly.offline import get_plotlyjs
-    # 📡横幅事件（今日尺度·最大窗）按 symbol 分组——日度净申赎图上打标记轨（二期）
-    flow_evs_by_sym: dict[str, list[dict]] = {}
-    for e in (flow or {}).get("events") or []:
-        flow_evs_by_sym.setdefault(e["symbol"], []).append(e)
+    # 日度净申赎图的 ▲▼ 极值标注（日增减%全历史「第k高/低」）由 flow_daily_figure
+    # 内部自算（flow_extreme_events），与📡横幅事件解耦——无需在 render 层组装事件集
     charts_json: dict[str, list[str]] = {}
     chart_blocks = []
     jump_options = ['<option value="">跳转到 ETF…</option>']
     for sym, snap in ordered:
         nm = meta.get(sym, {}).get("name", sym)
-        figs = _etf_figs(sym, snap, meta, series_map, ma_period,
-                         flow_events=flow_evs_by_sym.get(sym))
+        figs = _etf_figs(sym, snap, meta, series_map, ma_period)
         charts_json[sym] = [f.to_json() for f in figs]
         star = "⭐ " if sym in pin_set else ""
         open_attr = " open" if sym in pin_set else ""

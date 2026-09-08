@@ -169,12 +169,17 @@ def test_flow_daily_figure_values_and_axes():
     nav = pd.DataFrame({"unit_nav": np.full(30, 2.0), "acc_nav": np.full(30, 2.0)}, index=idx)
     fig = rep.flow_daily_figure("测试ETF(000000)", shares, nav)
     assert fig is not None
-    bar, line = fig.data
+    bar, line = fig.data[:2]                    # 后续 trace = ▲▼极值标注(如有)
     assert bar.type == "bar" and line.type == "scatter"
     assert bar.y[20] == pytest.approx(1.0)          # 5e7份 × 2.0 / 1e8 = +1亿
     assert line.y[20] == pytest.approx(5.0)         # 1.05/1.0−1 = +5%
     assert fig.layout.yaxis.title.text.startswith("净申赎额")
     assert fig.layout.yaxis2.title.text == "日增减%"
+    # 悬停分位标签：本例申购池 29 天(<30) → 退绝对值双向分位;+5% 是全史最大 → 100%
+    assert bar.customdata[20] == ["绝对值分位 100.0%"]
+    assert line.customdata[20] == ["绝对值分位 100.0%"]
+    assert "%{customdata[0]}" in bar.hovertemplate and "%{customdata[0]}" in line.hovertemplate
+    assert bar.customdata[0] == ["—"]                          # 首日 pct NaN → 占位
     # 柱色：红=净申购 绿=净赎回（第20天申购→红；无变化日 v=0 → 红(≥0)）
     assert bar.marker.color[20] == "#dc2626"
 
@@ -198,6 +203,24 @@ def test_flow_daily_figure_no_history_none():
     shares = pd.DataFrame({"shares": [1e9, 1e9]}, index=idx)
     nav = pd.DataFrame({"unit_nav": [1.0, 1.0], "acc_nav": [1.0, 1.0]}, index=idx)
     assert rep.flow_daily_figure("X(0)", shares, nav) is None   # <3 观测
+
+
+# ---------------- flow_daily_figure · ▲▼日增减%历史极值标注（与横幅解耦） ----------------
+
+def test_flow_daily_figure_extreme_markers():
+    # 40 天平盘 + 第20天 +5%（史上最大单日申购）→ ▲「第1高」标在线上实际值处(右轴%)
+    idx = pd.date_range("2026-01-01", periods=40, freq="D")
+    sh = np.full(40, 1e9); sh[20:] = 1.05e9
+    shares = pd.DataFrame({"shares": sh}, index=idx)
+    nav = pd.DataFrame({"unit_nav": np.full(40, 2.0), "acc_nav": np.full(40, 2.0)}, index=idx)
+    fig = rep.flow_daily_figure("测试ETF(000000)", shares, nav)
+    up = [t for t in fig.data if getattr(t.marker, "symbol", None) == "triangle-up"]
+    dn = [t for t in fig.data if getattr(t.marker, "symbol", None) == "triangle-down"]
+    assert len(up) == 1 and list(up[0].text) == ["第1高"]
+    assert up[0].y[0] == pytest.approx(5.0, rel=1e-6)      # 标记落在线上实际值(%)
+    assert up[0].customdata[0][0] == pytest.approx(1.0)    # 悬停金额 = +1亿(5e7份×2.0)
+    assert "历史极值" in up[0].hovertemplate
+    assert dn == []                                         # 无赎回极值日 → 无 ▼ 轨
 
 
 
@@ -388,28 +411,17 @@ def test_flow_events_banner_mode_switch():
 
 
 def test_flow_daily_figure_event_markers():
-    # 事件标记轨：▲申购/▼赎回悬停带分位；y=柱区上方固定轨；标题注明
+    # 2026-09-08 重定义：横幅事件标记轨已退役，图自带「日增减%历史极值」标注——
+    # 与横幅解耦（横幅=近窗异动，图=全量历史观察）。本测试锁「无横幅耦合残留」。
     idx = pd.date_range("2026-01-01", periods=30, freq="D")
     sh = np.full(30, 1e9); sh[20:] = 1.05e9
     shares = pd.DataFrame({"shares": sh}, index=idx)
     nav = pd.DataFrame({"unit_nav": np.full(30, 2.0), "acc_nav": np.full(30, 2.0)}, index=idx)
-    evs = [{"symbol": "000000", "date": "2026-01-21", "flow_yi": 1.0, "pct": 0.05,
-            "pctile": 0.995, "pctile_kind": "side", "side": "in"},
-           {"symbol": "000000", "date": "2026-01-25", "flow_yi": -0.8, "pct": -0.04,
-            "pctile": 0.992, "pctile_kind": "side", "side": "out"}]
-    fig = rep.flow_daily_figure("测试ETF(000000)", shares, nav, flow_events=evs)
+    fig = rep.flow_daily_figure("测试ETF(000000)", shares, nav)
     names = [t.name for t in fig.data]
-    assert "📡事件·申购" in names and "📡事件·赎回" in names
-    tin = fig.data[names.index("📡事件·申购")]
-    tout = fig.data[names.index("📡事件·赎回")]
-    assert tin.x == ("2026-01-21",) and tout.x == ("2026-01-25",)
-    assert tin.marker.symbol == "triangle-up" and tout.marker.symbol == "triangle-down"
-    assert tin.y[0] == tout.y[0]                                    # 同一固定轨
-    assert fig.layout.yaxis.range[1] >= tin.y[0]                    # 上界给标记轨留位
-    assert "横幅事件日" in fig.layout.title.text
-    # 无 events → 无标记轨（向后兼容）
-    fig2 = rep.flow_daily_figure("测试ETF(000000)", shares, nav)
-    assert len(fig2.data) == 2 and "横幅事件日" not in fig2.layout.title.text
+    assert "📡事件·申购" not in names and "📡事件·赎回" not in names
+    assert "横幅事件日" not in fig.layout.title.text
+    assert "历史极值" in fig.layout.title.text
 
 
 # ---------------- render 结构（主题/tab/折叠明细/快速跳转/回顶部/排序） ----------------

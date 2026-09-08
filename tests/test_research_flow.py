@@ -264,6 +264,75 @@ def test_daily_flow_events_empty():
     assert fl.daily_flow_events(panel) == []                    # 无变化日 → 无事件
 
 
+# ---------------- flow_extreme_events（日增减%历史极值·第k高/低·与横幅解耦） ----------------
+
+def _pct_series(vals: list[float]) -> pd.Series:
+    return pd.Series(vals, index=_idx(len(vals)))
+
+
+def test_flow_extreme_events_sides_and_ranks():
+    # 平静基线 ±0.2% + 三天大申购(相邻≤merge_gap→并一区间只标最深) + 孤立大赎回。
+    # 注:top-5% 区按构造总含 ~5%·n 个点(基线顶部也会进),靠 rank 排序+top_n 截断
+    # 保证图上只剩真正最猛的——这里断言「植入事件占住 rank 头部」
+    rng = np.random.default_rng(7)
+    base = list(rng.uniform(-0.002, 0.002, 300))
+    base[50], base[51], base[52] = 0.06, 0.09, 0.055            # 连簇 → 只标最深 +9%
+    base[200] = -0.07                                          # 孤立大赎回
+    base[250] = 0.03                                           # 次大申购
+    evs = fl.flow_extreme_events(_pct_series(base))
+    ins = sorted((e for e in evs if e["side"] == "in"), key=lambda e: e["rank"])
+    outs = sorted((e for e in evs if e["side"] == "out"), key=lambda e: e["rank"])
+    assert (str(ins[0]["date"])[:10], round(ins[0]["pct"], 4)) == (str(_idx(300)[51])[:10], 0.09)
+    assert (str(ins[1]["date"])[:10], round(ins[1]["pct"], 4)) == (str(_idx(300)[250])[:10], 0.03)
+    assert (str(outs[0]["date"])[:10], round(outs[0]["pct"], 4)) == (str(_idx(300)[200])[:10], -0.07)
+    assert ins[0]["rank"] == 1 and outs[0]["rank"] == 1         # 1 = 史上最猛,唯一不重复
+    assert all(e["rank"] <= 10 for e in evs)                    # top_n=10 截断
+    assert [str(e["date"])[:10] for e in evs] == sorted(str(e["date"])[:10] for e in evs)
+
+
+def test_flow_extreme_events_top_n_and_empty():
+    rng = np.random.default_rng(3)
+    base = list(rng.uniform(-0.002, 0.002, 400))
+    for j in range(10):                                        # 10 个彼此远离的申购极值日
+        base[30 * j + 5] = 0.05 + 0.001 * j
+    evs = fl.flow_extreme_events(_pct_series(base), top_n=3)
+    ins = sorted((e for e in evs if e["side"] == "in"), key=lambda e: e["rank"])
+    assert [e["rank"] for e in ins] == [1, 2, 3]                # top_n 截断
+    assert [round(e["pct"], 4) for e in ins] == [0.059, 0.058, 0.057]   # 按深度降序
+    assert fl.flow_extreme_events(_pct_series([0.0] * 10)) == []   # 全 0 → 无极值区
+    assert fl.flow_extreme_events(pd.Series(dtype=float)) == []     # 空 → []
+
+
+# ---------------- daily_flow_pctile（逐日方向内分位·悬停口径） ----------------
+
+def test_daily_flow_pctile_side_pools():
+    # 40 申购日(0..39 线性) + 40 赎回日：方向各自统计,史上最大申购=100%、最深赎回=100%
+    rng = np.random.default_rng(11)
+    vals = list(rng.uniform(0.0, 0.01, 40)) + list(rng.uniform(-0.01, 0.0, 40))
+    s = fl.daily_flow_pctile(_pct_series(vals))
+    assert s.iloc[:40].max() == pytest.approx(1.0)             # 申购池最猛日 = 100%
+    assert s.iloc[40:].max() == pytest.approx(1.0)             # 赎回池最深日 = 100%
+    assert s.notna().all()                                     # 无 NaN 泄漏
+    # 同值同秩：方向内分位 ≠ 双向秩(赎回 -0.009 的分位按赎回池算,不因申购尾巴抬高)
+    assert s.iloc[40:].min() > 0
+
+
+def test_daily_flow_pctile_abs_fallback_and_units():
+    # 赎回方向仅 3 天(<30) → 赎回日退绝对值双向分位;申购日仍方向内
+    vals = [0.01, 0.02, 0.03, -0.05, 0.04, -0.01, 0.005, -0.02]
+    s = fl.daily_flow_pctile(_pct_series(vals))
+    abs_rank = pd.Series(vals).abs().rank(method="average", pct=True)
+    for i in (3, 5, 7):                                        # 赎回日 → 双向口径
+        assert s.iloc[i] == pytest.approx(abs_rank.iloc[i])
+    # 量纲无关:%数与小数同秩
+    s_pct = fl.daily_flow_pctile(_pct_series([v * 100 for v in vals]))
+    assert np.allclose(s.to_numpy(), s_pct.to_numpy())
+    # NaN 日保持 NaN;空/None → 空
+    s_nan = fl.daily_flow_pctile(pd.Series([np.nan, 0.01, np.nan, -0.02]))
+    assert s_nan.iloc[0] != s_nan.iloc[0]
+    assert fl.daily_flow_pctile(pd.Series(dtype=float)).empty
+
+
 # ---------------- pool_flow_state（增量vs存量 标签树） ----------------
 
 def _roll(**cols) -> pd.DataFrame:

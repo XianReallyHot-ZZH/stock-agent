@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from stockagent.research.timing import split_adjusted_shares
+from stockagent.research.timing import _merged_runs   # 同包私有复用:极值区间合并(与偏离度极值同法)
 
 YI = 1e8  # 份 × 元/份 → 亿元
 
@@ -433,6 +434,70 @@ def cluster_flow_events(events: list[dict], *, gap_days: int = 7) -> list[dict]:
         _flush(sym, cur)
     episodes.sort(key=lambda ep: (ep["n"], abs(ep["net_yi"])), reverse=True)
     return episodes
+
+
+def daily_flow_pctile(pct: pd.Series, *, side_min_obs: int = 30) -> pd.Series:
+    """逐日方向内分位（0-1，日度净申赎图悬停温度计）：每一天在其**自身方向**
+    （≥0 申购日 / <0 赎回日）的全历史池里按幅度 |x| 的百分位——与排名表「日申赎」
+    列 / timing.latest_daily_flow 同一口径（rank average·pct；申购日比申购日·
+    赎回日比赎回日）。某方向样本 < side_min_obs 时该方向退绝对值双向分位
+    （与 daily_flow_events 的诚实降级同规则）。量纲无关（%数/小数同秩）。
+
+    返回与 pct 同索引的 Series；pct 为 NaN 的日子 → NaN。"""
+    if pct is None or pct.dropna().empty:
+        return pd.Series(dtype=float)
+    pos, neg = pct[pct >= 0], pct[pct < 0]
+    out = pct.abs().rank(method="average", pct=True).copy()   # 双向兜底(某方向样本过少时)
+    if len(pos) >= side_min_obs:
+        out.loc[pos.index] = pos.abs().rank(method="average", pct=True)
+    if len(neg) >= side_min_obs:
+        out.loc[neg.index] = neg.abs().rank(method="average", pct=True)
+    return out
+
+
+def flow_extreme_events(pct: pd.Series, *, lo_pct: float = 0.05, hi_pct: float = 0.95,
+                        merge_gap: int = 5, top_n: int = 10) -> list[dict]:
+    """日增减%（日申赎强度）**历史极值**事件——「第k高/第k低」。
+
+    2026-09-08 起日度净申赎时序图的 ▲▼ 极值标注改用本函数，与📡横幅事件**解耦**：
+    横幅=近窗异动（99% 方向内分位+1亿地板·窗口/口径可切），本函数=**全量历史观察**
+    （时序图的定位）——两套口径互不牵连，各有各的问题域。
+
+    与 timing.deviation_extreme_events 同法：全历史分位 ≥hi_pct(申购极值)/≤lo_pct(赎回
+    极值)的连续区间（相邻抖动段按 merge_gap 合并——连日大额申赎算一个事件、只标最深的
+    一天）内取最深处一点，标注同侧「第几」（1 = 史上最大单日申购/赎回，唯一不重复），
+    各侧取前 top_n。全历史口径不防前视：纯观察不交易，无所谓。
+
+    pct = 份额日增减（小数，pct_change 口径·拆分前复权）。量纲无关（只做 rank）。
+    Returns [{date, pct, side('in'/'out'), rank}, ...] 按日期升序；短序列/全 NaN → []。"""
+    if pct is None or pct.dropna().empty:
+        return []
+    vals = pct.to_numpy(dtype=float)
+    idx = pct.index
+    pct_full = pct.rank(pct=True)                     # 0=最负/赎回最深, 1=最正/申购最深
+    mask_in = (pct_full >= hi_pct).fillna(False).to_numpy()
+    mask_out = (pct_full <= lo_pct).fillna(False).to_numpy()
+
+    events: list[dict] = []
+    for side, mask, pick in (("in", mask_in, np.nanargmax), ("out", mask_out, np.nanargmin)):
+        if not mask.any():
+            continue
+        for start, end in _merged_runs(mask, merge_gap):
+            seg = vals[start:end]
+            if seg.size == 0 or np.all(np.isnan(seg)):
+                continue
+            i = start + int(pick(seg))                # 区间最深处一点在全序列中的位置
+            if np.isnan(vals[i]):
+                continue
+            events.append({"date": idx[i], "pct": float(vals[i]), "side": side})
+    for side, reverse in (("in", True), ("out", False)):
+        side_evs = [e for e in events if e["side"] == side]
+        side_evs.sort(key=lambda e: e["pct"], reverse=reverse)   # in 降序(最大申购在前)/out 升序
+        for k, e in enumerate(side_evs[:top_n], start=1):
+            e["rank"] = k
+    out = [e for e in events if "rank" in e]
+    out.sort(key=lambda e: str(e["date"]))            # 按日期升序（便于绘图）
+    return out
 
 
 # 窗口交易日数 → 横幅按钮标签（未命中映射的窗口退「N日」）
