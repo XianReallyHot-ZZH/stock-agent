@@ -654,6 +654,27 @@ def _turnover_figure(turnover_df: pd.DataFrame, index_close: pd.Series,
                          dict(count=5, label="5年", step="year", stepmode="backward"),
                          dict(label="全部", step="all"),
                      ], bgcolor=_PAL["surface"], activecolor=_PAL["grid"]))
+    # 默认窗口=近3年(全历史交 rangeslider(下)+快捷按钮(上),同③估值图模式);y 轴按可见段
+    # 显式设范围——plotly 的 autorange 对全量数据算、不随 x 窗口收缩,不设则 1991 起的
+    # 全史 y 幅会把近3年压成细条;后续按钮/拖拽由页面 _yfit 按可见段重算
+    first_dt, last_dt = (pd.to_datetime(turnover_df.index[0]),
+                         pd.to_datetime(turnover_df.index[-1]))
+    start3 = last_dt - pd.DateOffset(years=3)
+    if start3 > first_dt:
+        fig.update_xaxes(range=[start3, last_dt])
+
+        def _vis_rng(vals) -> list:
+            lo, hi = float(np.nanmin(vals)), float(np.nanmax(vals))
+            pad = (hi - lo) * 0.08 or hi * 0.05 or 1.0
+            return [lo - pad, hi + pad]
+
+        i_mask = pd.to_datetime(index_close.index) >= start3
+        if i_mask.any():
+            fig.update_yaxes(range=_vis_rng(index_close.to_numpy()[i_mask]), secondary_y=False)
+        t_mask = pd.to_datetime(turnover_df.index) >= start3
+        if t_mask.any():
+            fig.update_yaxes(range=_vis_rng((turnover_df.loc[t_mask, "total"] / 1e8).to_numpy()),
+                             secondary_y=True)
     return fig
 
 
