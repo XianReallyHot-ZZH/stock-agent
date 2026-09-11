@@ -6,7 +6,7 @@ A股板块轮动 ETF 决策助手。规则引擎出决策、大模型出解释�
 
 ```bash
 # 开发
-python -m pytest tests/ -q                    # 跑全部测试（958 个）
+python -m pytest tests/ -q                    # 跑全部测试（1000 个）
 python scripts/run_backtest.py                 # 单次回测（默认信号）
 python scripts/sweep_params.py                 # 参数扫描（全部信号）
 python scripts/walk_forward.py                 # 样本外验证
@@ -22,8 +22,8 @@ python scripts/plot_shares.py                  # 画份额+净值交互图（注
 # 八看板总入口壳页（左侧导航 iframe 装载八看板 · data/index.html · 无数据依赖秒级）
 python scripts/dashboard_home.py               # 生成 + 打开（八看板 HTML 各自生成后刷新即见；记住上次选择；绿点=今日/黄点=过期/灰点=未生成给命令；左侧导航可收缩成图标轨 «/Ctrl⌘B·状态记忆）
 
-# 候选个股池（pool，第六看板 · 只读筛选旁路 · 全覆盖池六策略漏斗，详见 docs/stock_pool/CONTEXT.md）
-python scripts/backfill_stock_pool.py --all    # 冷启动：spot→consensus兜底→行业→日线(~1.5-3h断点续跑)→分红；日度增量由 dashboard_data_check --fix 自动带（~45-75min）
+# 候选个股池（pool，第六看板 · 只读筛选旁路 · 全覆盖池六策略漏斗，详见 docs/stock_pool/CONTEXT.md）⏸ 数据更新已暂停(2026-08-29,等用户指令重启；旧 HTML 冻结在 08-27 仍可看)
+python scripts/backfill_stock_pool.py --all    # 冷启动：spot→consensus兜底→行业→日线(~1.5-3h断点续跑)→分红；日度增量原由 dashboard_data_check --fix 自动带(~45-75min)——暂停期 --fix 默认跳过池腿，恢复时跑 --fix --pool 一次性补齐
 python scripts/stock_pool_report.py            # 生成 data/stock_pool.html（六表：①偏离超卖复合分 ②猛×深跌[窗口A/B] ③修正动量个股版 ④PEAD ⑤变脸监测 ⑥双击候选+stage-2；--no-stage2 跳过候选腿）
 python scripts/validate_deviation_extreme.py   # 策略1 event-study（三臂 vs 基线 → data/deviation_extreme_study.html + 结论写 meta 注入看板读图说明）
 python scripts/validate_pead.py                # PEAD event-study（surprise 两臂 → data/pead_study.html + 结论注入）
