@@ -197,3 +197,39 @@ def test_framework_calendar_upcoming_not_truncated(tmp_path):
     assert html.count("初请失业金") == 19          # 无截断: 19 条全在
     assert "2026-09-17" in html                    # 最远催化剂(FOMC)在表内
     assert "排期至 2026-09-17" in html             # 标注实际排期上限
+
+
+def test_framework_calendar_upcoming_excludes_past_datetimes(tmp_path):
+    """已过时点不得进「即将公布」(2026-09 修复): 续请失业金/国债竞拍等源常不回填 actual,
+    旧逻辑只看 actual.isna() 会把昨天的行永久留在未来排期; 判定改按 asof 时刻。"""
+    from stockagent.western_macro import framework
+    st = Store(tmp_path / "t.sqlite")
+    rows = [
+        # 昨天的续请失业金: 时点已过 + 源永不回填 actual → 必须进「已公布」(公布列「—」)
+        {"date": "2026-09-10", "time": "20:30", "region": "美国",
+         "event": "美国截至9月5日当周续请失业金人数(万)",
+         "actual": None, "forecast": None, "previous": 177.0, "importance": 2},
+        # 今晚 CPI: asof 09-11 09:00 时未到 → 留在「即将公布」
+        {"date": "2026-09-11", "time": "20:30", "region": "美国", "event": "美国8月CPI年率未季调(%)",
+         "actual": None, "forecast": 3.4, "previous": 3.4, "importance": 2},
+        # 今天早些时候(06:30)的 COMEX 库存: 已过 → 不进「即将公布」
+        {"date": "2026-09-11", "time": "06:30", "region": "美国",
+         "event": "美国9月10日COMEX黄金库存-每日更新(百盎司)",
+         "actual": None, "forecast": None, "previous": None, "importance": 2},
+        # 真未来
+        {"date": "2026-09-17", "time": "02:00", "region": "美国",
+         "event": "美国9月联邦基金利率目标上限(%)",
+         "actual": None, "forecast": None, "previous": 4.0, "importance": 3},
+    ]
+    st.upsert_economic_calendar(rows)
+    c = {"miss": "#c00", "edge": "#080", "ink2": "#666"}
+    html = framework._economic_calendar_block(st, c, "2026-09-11 09:00")
+    up = html[html.find("即将公布"):html.find("↑高于")]     # 只查未来排期表段(止于脚注, 脚注提及续请失业金)
+    assert "续请失业金" not in up and "COMEX黄金库存" not in up
+    assert "2026-09-11 20:30" in up and "2026-09-17" in up
+    assert "续请失业金" in html                            # 仍在已公布表(带「—」)
+    # 纯日期 asof(无时刻)→按当日 00:00 保守判定: 当晚 CPI 仍算未来(宁多留不误杀)
+    html2 = framework._economic_calendar_block(st, c, "2026-09-11")
+    up2 = html2[html2.find("即将公布"):html2.find("↑高于")]
+    assert "2026-09-11 20:30" in up2
+    assert "续请失业金" not in up2                           # 昨日行仍被剔除(与时刻无关)

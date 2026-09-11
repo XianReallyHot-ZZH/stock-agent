@@ -579,12 +579,12 @@ def _upcoming_impact(event: str, c: dict) -> str:
 
 def _economic_calendar_block(store, c: dict, asof: str) -> str:
     """📰 经济日历/事件: 近期已公布美国高重要性数据(公布vs预期=surprise) + 未来 FOMC/CPI/非农 时点。"""
-    from datetime import date, timedelta
-    today = (asof or date.today().isoformat())[:10]
+    from datetime import date, datetime, timedelta
     try:
-        t0 = date.fromisoformat(today)
-    except ValueError:
-        t0 = date.today()
+        now_dt = datetime.fromisoformat(asof)      # "YYYY-MM-DD HH:MM"; 纯日期→当日00:00(保守: 当日事件仍算未来)
+    except (TypeError, ValueError):
+        now_dt = datetime.now()
+    t0 = now_dt.date()
     back = (t0 - timedelta(days=7)).isoformat()
     fwd = (t0 + timedelta(days=45)).isoformat()
     df = store.get_economic_calendar(region="美国", since=back, until=fwd, min_importance=2)
@@ -612,8 +612,19 @@ def _economic_calendar_block(store, c: dict, asof: str) -> str:
         tag = " ↑高于" if d > 1e-9 else (" ↓低于" if d < -1e-9 else "")
         return f'<span style="color:{col}"><b>{a:g}</b>{tag}</span>'
 
-    # 近期已公布(公布值存在)
-    rel = df[df["actual"].notna()].sort_values("date", ascending=False).head(12)
+    # 「已过时点」按时刻(asof=北京时间)判定, 不只看 actual 有无——续请失业金/国债竞拍等
+    # 次指标源常不回填公布值, 只看 actual 会把它们永久滞留在「即将公布」(2026-09 修复)
+    def _is_past(row) -> bool:
+        try:
+            s = f"{row['date'][:10]} {row['time'][:5]}" if row["time"] else row["date"][:10]
+            return datetime.fromisoformat(s) <= now_dt
+        except (TypeError, ValueError):
+            return str(row["date"])[:10] < t0.isoformat()   # 时刻解析不动→按日退化
+
+    past = df.apply(_is_past, axis=1)
+
+    # 近期已公布 = 已过时点(公布值缺→公布列「—」); 已有公布值的个别源错位行也归此
+    rel = df[past | df["actual"].notna()].sort_values("date", ascending=False).head(12)
     rows_r = "".join(
         f"<tr><td class='muted'>{r['date']}</td><td class='stmt'>{r['event']}</td>"
         f"<td>{cell_actual(r['actual'], r['forecast'])}</td>"
@@ -625,9 +636,9 @@ def _economic_calendar_block(store, c: dict, asof: str) -> str:
               '<table><tr><th>日期</th><th>事件</th><th>公布</th><th>预期</th><th>前值</th><th>对黄金影响</th></tr>'
               + rows_r + '</table>') if len(rel) else '<div class="muted">无近期已公布。</div>')
 
-    # 未来排期(公布值缺): 不截行——head(15) 曾把 FOMC/非农/CPI 砍掉(2026-08 发现),
+    # 未来排期 = 时刻未过且无公布值; 不截行——head(15) 曾把 FOMC/非农/CPI 砍掉(2026-08 发现),
     # 全量展示到源排期上限; 日历源(百度)通常只给约未来30天, 45天是请求窗口非保证。
-    up = df[df["actual"].isna()].sort_values(["date", "time"])
+    up = df[(~past) & df["actual"].isna()].sort_values(["date", "time"])
     rows_u = "".join(
         f"<tr><td class='muted'>{r['date']} {r['time'] or ''}</td><td class='stmt'>{r['event']}</td>"
         f"<td class='muted'>{r['forecast'] if r['forecast']==r['forecast'] else '—'}</td>"
@@ -645,7 +656,8 @@ def _economic_calendar_block(store, c: dict, asof: str) -> str:
             '<span class="muted">(美国 · 重要性≥2 · 利率/通胀/就业/美债/Fed · 数据真伪+催化剂时点)</span></div>'
             + tbl_r + tbl_u
             + '<div class="muted" style="font-size:11px;margin-top:6px">↑高于/↓低于=公布 vs 预期(surprise); '
-            '方向对黄金的影响因指标而异(如 CPI 超预期=加息压力=短线利空, 非农走弱=降息预期=利好)。</div></div>')
+            '方向对黄金的影响因指标而异(如 CPI 超预期=加息压力=短线利空, 非农走弱=降息预期=利好); '
+            '已公布表公布列「—」=时点已过但日历源未收录公布值(续请失业金/竞拍等次指标常见)。</div></div>')
 
 
 def render_macro_framework(store, out_path: Path, asof: str = "") -> Path:
