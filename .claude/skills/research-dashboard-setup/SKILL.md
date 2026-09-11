@@ -49,7 +49,7 @@ python scripts/research_report.py
 | stage | 数据 | 耗时 | 备注 |
 |---|---|---|---|
 | 价格+日历 | update_data.py | ~5min | 全 symbols，必须最先 |
-| 份额 SSE | fund_etf_scale_sse 按日 | ~9min | 515880 通信不在源头 869 只里（已知缺，看板画参考虚线）|
+| 份额 SSE | fund_etf_scale_sse 按日 | ~9min | 515880 通信已有完整历史(2021起;曾不在源头名单里,现已含) |
 | 份额 SZSE | fund_scale_daily_szse 按月 | ~9min | 深市历史（创业板/纳指等）|
 | NAV | fund_etf_fund_info_em | ~2min | 真 NAV，主接口失败自动回退备用接口；偏离度用 acc_nav |
 | 业绩预期底座 | stage 4.5 | ~2min | 指数成分(csindex官方权重·30指数) + 一致预期整表快照(~2800只) + 快报/正式报三环链 + etf_earnings 重算 |
@@ -57,8 +57,8 @@ python scripts/research_report.py
 | 渲染 | research_report.py | ~10s | 纯可视化，无 LLM |
 
 ## 验证
-- `python scripts/dashboard_data_check.py` 应显示：price/shares/nav 新鲜 N/N（515880 份额全缺是已知）+ 指数成分 30 个 · 一致预期快照当日
-- 打开 `data/research_report.html`，应见：顶部「偏离度极端区」横幅 + 价值/成长/周期 三类 tab 分页排名表（偏离度/剪刀差/筹码/业绩预期列，表头可排序）+ 逐标的明细折叠面板（默认收起，点开见「⛓业绩预期链」三环状态条 + 份额净值图（剪刀差窗口）与净值-MA60 偏离度图（第几极值 ▲▼ 标记））。业绩预期列上=预告 label、下=一致预期 g（修正动量冷启动期显示「累积中 1/4」属正常——快照需 4 周攒满）。置顶 创业板/科创50 默认展开在最前（⭐）。右上 🌙/☀️ 可切深浅色。
+- `python scripts/dashboard_data_check.py` 应显示：price/shares/nav 新鲜 N/N + 指数成分 30 个 · 一致预期快照当日
+- 打开 `data/research_report.html`，应见：顶部「偏离度极端区」横幅 + 价值/成长/周期 三类 tab 分页排名表（偏离度/筹码/日申赎/业绩预期列，表头可排序）+ 逐标的明细折叠面板（默认收起，点开见「⛓业绩预期链」三环状态条 + 份额净值图（剪刀差窗口）与净值-MA60 偏离度图（第几极值 ▲▼ 标记））。业绩预期列上=预告 label、下=一致预期 g（修正动量冷启动期显示「累积中 1/4」属正常——快照需 4 周攒满）。置顶 创业板/科创50 默认展开在最前（⭐）。右上 🌙/☀️ 可切深浅色。
 
 ## 常见坑
 - **plotly 未装**：报 `ModuleNotFoundError: plotly` → `pip install plotly`（已在 requirements）

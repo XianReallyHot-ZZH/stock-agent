@@ -10,7 +10,7 @@ description: Refresh data and generate the 宏观框架看板 (macro_framework.h
 ## 触发场景
 - "刷新宏观框架看板 / 黄金定位器 / macro dashboard / 宏观看板"
 - 用户要看当前黄金阶段定位 + 微观紧缺证据 + 经济日历催化剂
-- 盘中快速看黄金(不想等全量 4 看板刷新)
+- 盘中快速看黄金(不想等七看板全量刷新)
 
 ## 标准流程
 
@@ -64,11 +64,12 @@ PYTHONIOENCODING=utf-8 python scripts/macro_framework_report.py
 - **FRED / NY Fed**:`backfill_gold_micro.py` 含 2 个非-akshare 免费源(FRED CSV + NY Fed XLS)。本网若拦 → 该组跳过(逐组容错),其余照跑。
 - **GOFO / 全球 ETF**:无免费源(LBMA 2015 停发 / GLD·IAU 无公开 API),看板相应位置标注缺口。
 - **经济日历远期**:百度财经日历(`news_economic_baidu`)对 >3 周的远期日期可能未排上 FOMC(直查 9/16 返回空);临近会自动补全。前看 45 天覆盖到能抓到的最远事件。
+- **经济日历次指标缺公布值**:续请失业金/国债竞拍等次指标源永不回填 actual→「已公布/即将公布」**按 asof 时刻判定**(2026-09-11 修复,旧行只看 actual 有无、已过时点滞留未来排期):已过时点进「已公布」表公布列显示「—」(脚注注明源未收录),属正常非缺陷。
 - **CFTC 周频**:CFTC 持仓报告每周二发布(滞后),非日频。
 
 ## 与 dashboards skill 的关系
 - **本 skill**(`macro-dashboard`):只刷宏观框架看板一个(快,~3 分钟)。
-- **`dashboards`**:全刷 5 个看板(研究+指数+个股+宏观+仓位,冷启动 ~1hr,日常 ~10 分钟)。
+- **`dashboards`**:全刷八看板壳页(研究/指数/个股/大宗商品/宏观框架/国内宏观/仓位 + ⏸候选池暂停中,实际刷七个;冷启动 ~1hr,日常 ~15-20 分钟)。
 - 日常盘中看黄金 → 本 skill;盘前/周五全套 → `dashboards`。
 
 ## 端点真相
