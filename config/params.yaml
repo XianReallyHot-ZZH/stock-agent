@@ -260,56 +260,31 @@ position_plan:
     split: {equity_min: 0.40, equity_max: 0.60}
     high:  {equity_min: 0.10, equity_max: 0.30}
 
-# ---- 候选个股池 (V7 pool · 第六看板 · 只读筛选旁路 · 不喂引擎 · ADR-0001) ----
-# 宇宙 = 研报覆盖池(consensus ~2800) ∩ 现货快照非ST(~2300)。六张策略表见 stockagent/pool/。
-# 行业→三类粗分 + 周期商品映射在 config/stock_industry.yaml(板块名以东财端点为准)。
+# ---- 候选个股池 (V8 pool · 第六看板 · 高业绩池(陈氏季度池) · 只读筛选旁路 · 不喂引擎 · ADR-0001) ----
+# 宇宙 = 全市场非 ST(2026-09 重写:不再 ∩ consensus——陈氏方法纯财务筛选,不依赖研报覆盖)。
+# 主对象 = 高业绩池: 三环地板(预告单腿→快报双轴→正式扣非双轴,逐环收紧) + 两轨估值
+# (非周期 PEG/周期 PB 分位) + 风险红黄旗 + Top-N;行业→三类粗分在 config/stock_industry.yaml。
+# 旧六表(S1/S2/E4/PEAD/变脸/stage-2)已退役,策略参数随之移除;方法论存档 docs/stock_pool/。
 stock_pool:
-  universe:
-    min_reports: 3              # 研报数门(consensus 覆盖偏差防护,E2 同款)
+  universe:                       # V8(2026-09 重写): 全市场非 ST
     exclude_name_prefixes: ["ST", "*ST", "S*ST", "SST", "退"]
   prices:
-    ma_period: 60               # 偏离均线(S1 触发器)
-    history_years: 3            # 冷启动日线回溯窗(250日回撤+偏离分位深度够用)
-    dividend_refresh_days: 7    # 分红表(运行时前复权事件源)刷新节奏(天)
-    cliff_lo: 0.05              # 除权嫌疑带:孤立单日跌 [lo,hi]+分红户+±5日无记录。
-    cliff_hi: 0.12              # ≤3%除息对MA60偏离分位扰动可忽略(实证:波动周69%池子有孤立1.5%断崖);
-                                # 只抓10转N/巨息级(≥5%,全池~4.7%);>12%多为真崩盘(深跌本就要抓)
-  strategy1:                    # ① 偏离超卖(复合分:触发+护栏+企稳)
-    trigger_pct: 0.05           # 自身历史百分位 ≤5% 触发(非横截面!)
-    depth_weight: 0.6           # 深度因子权重(depth=(trigger−pct)/trigger)
-    stabilize_weight: 0.4       # 企稳因子权重(stabilize_factor 原语义:≥−5%→1.0/−15..−5%→0.6/<−15%→0.25)
-    guard_forecast_loss_types: ["首亏", "续亏", "增亏"]   # 预亏族预告 → 护栏拦截
-    guard_revision_drop_pct: 3.0  # 一致预期4周下修超此% → 护栏拦截
-    new_badge_days: 5           # 事件日距今 ≤N 交易日 → 「新」徽标(零状态,从事件日推)
-    top_n: 50
-  strategy2:                    # ② 业绩预期猛×深跌(独立于 P1;窗口A全类型+B仅周期)
-    drawdown_min: 0.40          # 250日回撤 ≥40% = 深跌(同 P1 口径)
-    drawdown_lookback_days: 250
-    recent_window: 60
-    growth:                     # 成长猛 = 三腿(rank/修正/加速)均值, ≥2 腿才 valid
-      rank_gate: 0.80           # 前瞻 g(eps_fy2/fy1−1) 池内分位 ≥80% 腿满分
-      accel_min_pp: 5.0         # 已报增速加速(同尾二阶差) ≥5pp 腿满分
-    cyclic:                     # 周期猛 = 商品健康×股价落后(alignment) + g 确认
-      min_consensus_g: 0.10     # 一致预期 g ≥10% 才算「确认」(纯商品预期顶防护)
-      lag_scale: 0.20           # alignment 落后度标尺(leading.py 同款)
-    window_b_grace_days: 14     # 窗口B起点=上期正式报截止+grace
-    top_n: 50
-  revision:                     # ③ 一致预期修正动量(个股版 E4)
-    lookback_weeks: 4
-    min_snapshots: 4            # 不足 → 「累积中 N/4」诚实横幅
-    deadband: 0.01              # ±1% 死区外才算方向
-    top_n: 50
-  pead:                         # ④ 预告超预期漂移(surprise=预告yoy−隐含预期)
-    surprise_min_pp: 10.0       # |surprise| ≥10pp 才入表
-    periods_back: 8
-    top_n: 50
-  facechange:                   # ⑤ 业绩变脸监测(同尾比较,累计口径防御)
-    gear_down_pp: 20.0          # 跳档:最新同尾 − 上年同期 ≤−20pp 且上年同期 ≥0
-    consec_neg_min: 3           # 连亏:连续 ≥3 报告期 np_yoy<0
-    turn_up_pp: 10.0            # 拐头向上:≥2步下行后回升 ≥10pp
-    top_n: 50
-  stage2:                       # 入围候选深挖(诊断卡/双击/含金量腿)
-    top_n: 30
-    weekly_refresh_days: 7
+    history_years: 3              # 冷启动日线回溯窗(PB 分位历史深度)
+    dividend_refresh_days: 7      # 分红表(运行时前复权事件源)刷新节奏(天)
+  high_pool:                      # 高业绩池(陈氏季度池): 三环地板+两轨估值+风险分层+Top-N
+    floor_np_yoy: 50.0            # 地板: 净利同比 ≥50%(预告强制披露线同锚;预告环单腿/快报正式环双轴)
+    floor_rev_yoy: 20.0           # 地板: 营收同比 ≥20%(预告环无营收数据,天然单腿——口径差异读图说明注明)
+    top_n: 100                    # 池容量: 非周期 PEG 轨 + 周期 PB 分位轨各自排名合并取前 N
+    peg_max: 1.0                  # 非周期估值门: PEG=PE_ttm/扣非g ≤1.0(「业绩没出股价已上天」筛掉)
+    pb_pct_max: 0.30              # 周期估值门: PB 自身历史分位 ≤30%(周期底 PE 爆表被误杀,PB 低=资产便宜)
+    mktcap_filter_on: false       # 市值过滤默认关(陈老师原文「一般」是软措辞;消融臂裁决后再决定常开)
+    mktcap_filter_pct: 0.80       # 开启时: 总市值 ≤全市场 P80(分位口径防通胀漂移)
+    risk:                         # 红旗硬剔/黄旗人工复审(教学详版 docs/stock_pool/MANUAL_REVIEW.md)
+      goodwill_equity_red: 0.30   # 红旗: 商誉/净资产 >30%(sina 逐股精筛腿)
+      dual_high_cash_pct: 0.15    # 红旗: 存贷双高代理 = 货币资金/总资产 ≥15% 且 资产负债率 ≥40%
+      dual_high_debt_ratio: 0.40  #   (有息负债批量端点不可得的代理口径,zcfz 腿;读图说明注明)
+      receivable_rev_yellow: 0.50 # 黄旗: 应收/营收 >50%(建筑军工行业性高,不硬杀交人工)
+      goodwill_jump_yellow: 0.30  # 黄旗: 商誉环比激增 >30%(并购增长代理,人工查 F10)
+    theme_windows: []             # 主题死线事实标注 [{label, until}](可证伪,配套 docs/CLAIMS_LEDGER.md)
   display:
     table_rows_default: 50

@@ -25,7 +25,7 @@ DASHBOARDS = [
     ("commodity", "commodity.html", "🛢", "大宗商品",
      "品种面板·国际基准·比价·雷达", "python scripts/commodity_report.py"),
     ("pool", "stock_pool.html", "🎯", "候选个股池",
-     "六策略筛全池·超卖/猛×深跌/PEAD/变脸", "python scripts/stock_pool_report.py"),
+     "高业绩池·三环地板·两轨估值·红黄旗", "python scripts/stock_pool_report.py"),
     ("position", "position.html", "⚖️", "仓位管理",
      "估值档·预案对照·档位统计", "python scripts/position_report.py"),
 ]

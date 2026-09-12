@@ -377,6 +377,27 @@ def _switches_table_html(events: list[dict]) -> str:
             "命中与消失均是状态变化,非荐股依据。</div>")
 
 
+_DISCIPLINE_HTML = """
+<details style="margin-top:8px;border:1px solid var(--border);border-radius:8px;
+padding:8px 14px;font-size:13px;color:var(--ink-sec)">
+<summary style="cursor:pointer;font-weight:600">⑥ 外部方法参考：陈老师仓位纪律（事实陈列 · 2026-09-12 随高业绩池重写纳入）</summary>
+<div style="margin-top:6px;line-height:2">
+出处：《我在蚂蚁这几年的投资之路》（重远投资观·陈老师，2020-06）与星球问答（2026-08）。
+<b>只是陈列他公开的规则原文，不是本看板给用户的建议</b>——你的仓位规则在 params.yaml
+<code>position_plan</code>，两层互不覆盖。
+<ul style="margin:6px 0;padding-left:18px">
+<li>同时持有多个行业的多只股票，规避单个行业单个公司的不可预估风险</li>
+<li>任何一只单一股票分批买入，原则最多 3%~4% 仓位；即使特别看好，总仓位绝不能超过 5%</li>
+<li>买入前对可预见事件做好预案（高估值高成长不达预期/行业监管/对手崛起）</li>
+<li>单股因上涨导致仓位占比超 10% 时适时减仓；减仓至成本价为 0 后不再受该规则约束（数倍长牛股）</li>
+<li>公司爆出业绩造假或基本面逻辑根本变化，亏损状态也及时卖出止损</li>
+<li>确信度决定仓位：略信→试水，基本确信→重仓，极度确信→可加杠杆（原文如此；杠杆属其个人选择）</li>
+</ul>
+</div>
+</details>
+"""
+
+
 def render_position_report(store, params: dict, output_path,
                            title: str = "仓位管理看板") -> str:
     """组装五块 section,写出离线自包含 HTML(data/position.html)。返回输出路径。"""
@@ -465,6 +486,7 @@ def render_position_report(store, params: dict, output_path,
         f"<h2>③ 预案表 × 档位统计</h2><section>{sec3}</section>"
         f"<h2>④ 档位切换事件(只记事实)</h2><section>{_switches_table_html(switches)}</section>"
         f"<h2>⑤ 读图说明(实证口径与边界)</h2><section>{sec5}</section>"
+        f"{_DISCIPLINE_HTML}"
         f"<script>{_JS}</script></body></html>"
     )
     out = Path(output_path)

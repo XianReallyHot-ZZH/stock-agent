@@ -1,10 +1,11 @@
-"""候选池 universe 推导(纯函数)——consensus 覆盖池 ∩ 现货快照(非 ST/退)。
+"""候选池 universe 推导(纯函数)——全市场现货快照非 ST(V8, 2026-09 重写)。
 
-宇宙口径(计划锁定): stock_consensus 最新快照(n_reports≥min_reports 门,~2800→~2300)
-∩ stock_spot 最新快照名称过滤(ST/*ST/S*ST/SST/退 前缀排除) ∩ 代码段过滤
-(60/68/00/30 = 沪主板/科创/深主板/创业;北交所 8/4 与 B股 9 sina 不支持)。
+宇宙口径(重写锁定): stock_spot 最新快照(名称过滤 ST/*ST/S*ST/SST/退 前缀排除) ∩ 代码段过滤
+(60/68/00/30 = 沪主板/科创/深主板/创业;北交所 8/4 与 B股 9 排除)。**不再 ∩ consensus**——
+陈氏高业绩池是纯财务筛选,不依赖研报覆盖(方法论对齐;consensus 仍由研究看板维护但与本池无关)。
+spot 扩列(V8): mktcap/float_mktcap/pe_dyn/pb 随宇宙带出(市值列+股本反推原料)。
 行业 join: industry_member(东财板块,月更) × config/stock_industry.yaml(板块→三类+商品)。
-未映射板块 → type=None:策略1/PEAD/变脸/修正不受影响,策略2 猛分不可算(诚实不入表)。
+未映射板块 → type=None:不入周期 PB 轨(走 PEG 轨),诚实降级。
 """
 from __future__ import annotations
 
@@ -32,34 +33,27 @@ def is_supported_code(code) -> bool:
     return s.startswith(SUPPORTED_CODE_PREFIXES)
 
 
-def derive_universe(consensus: pd.DataFrame, spot: pd.DataFrame,
-                    min_reports: int = 3,
+def derive_universe(spot: pd.DataFrame,
                     exclude_prefixes: tuple[str, ...] = EXCLUDED_NAME_PREFIXES) -> pd.DataFrame:
-    """consensus(最新快照, indexed by code,含 n_reports) ∩ spot(indexed by code,含 name)
-    → indexed by code [name, n_reports, eps_fy1, eps_fy2, fy1_year, fy2_year]。
+    """现货快照(latest_stock_spot 输出, indexed by code,含 name + V8 扩列)
+    → indexed by code [name, close, mktcap, float_mktcap, pe_dyn, pb](扩列缺列安全降级)。
 
-    纯函数:两个输入帧由调用方(screen.py)从 store 取;缺列时安全降级(eps 列可缺)。
-    """
-    keep_cols = [c for c in ("eps_fy1", "eps_fy2", "fy1_year", "fy2_year") if c in consensus.columns]
-    out_cols = ["name", "n_reports", *keep_cols] if "n_reports" in consensus.columns else ["name", *keep_cols]
-    if len(consensus) == 0 or len(spot) == 0 or "name" not in spot.columns:
-        return pd.DataFrame(columns=out_cols)  # 空输入契约:带列空帧(冷启动期)
-    cons = consensus.copy()
-    if "n_reports" in cons.columns:
-        cons = cons[cons["n_reports"] >= min_reports]
-    df = cons.join(spot[["name"]], how="inner")
-    if len(df) == 0:
-        return pd.DataFrame(columns=out_cols)
+    纯函数:输入帧由调用方(screen.py)从 store 取。空输入契约:带列空帧(冷启动期)。"""
+    keep = [c for c in ("name", "close", "mktcap", "float_mktcap", "pe_dyn", "pb")
+            if c in spot.columns]
+    if len(spot) == 0 or "name" not in spot.columns:
+        return pd.DataFrame(columns=keep or ["name"])
+    df = spot.copy()
     df = df[[not is_excluded_name(n, exclude_prefixes) for n in df["name"]]]
     df = df[[is_supported_code(c) for c in df.index]]
-    return df[[c for c in out_cols if c in df.columns]]
+    return df[keep]
 
 
 def join_industry(universe: pd.DataFrame, industry_map: pd.DataFrame,
                   class_cfg: dict) -> pd.DataFrame:
     """universe + industry_map(indexed by code [industry]) + class_cfg(板块→{type,commodity})
     → 追加列 [industry, type, commodity_variety]。无行业/行业未映射 → type=None,
-    industry 列保留实际板块名或「未映射」(展示用;type 才是分流依据)。"""
+    industry 列保留实际板块名或「未映射」(展示用;type 才是分流依据——周期 PB 轨 vs PEG 轨)。"""
     imap = industry_map[["industry"]] if "industry" in industry_map.columns else industry_map
     df = universe.join(imap, how="left")
 
@@ -69,7 +63,9 @@ def join_industry(universe: pd.DataFrame, industry_map: pd.DataFrame,
         entry = (class_cfg or {}).get(str(ind)) or {}
         return str(ind), entry.get("type"), entry.get("commodity")
 
-    triples = [_classify(ind) for ind in df.get("industry")]
+    ind_col = df["industry"] if "industry" in df.columns else \
+        pd.Series([None] * len(df), index=df.index, dtype=object)
+    triples = [_classify(ind) for ind in ind_col]
     # dtype=object: pandas 3 str dtype 会把 None 强转 NaN,下游 is None 契约会破
     df = df.assign(
         industry=pd.Series([t[0] or "未映射" for t in triples], index=df.index, dtype="object"),

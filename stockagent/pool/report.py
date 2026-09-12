@@ -1,9 +1,9 @@
-"""候选个股池看板渲染(fat renderer)——单页 + 锚点导航(六表交叉引用不宜藏进 tab)。
+"""候选个股池看板渲染(fat renderer)——高业绩池(陈氏季度池)V8 单主轴, 2026-09 重写。
 
-Section 序: 头部状态行 / 读图说明(口径+validator 结论注入) / ①偏离超卖 / ②猛×深跌 /
-③修正动量 / ④PEAD / ⑤变脸监测 / ⑥双击候选(stage-2 腿) / stage-2 候选卡 / 页脚。
+Section 序: 头部状态行 / ①池总览(当前切面) / ②行业构成(涌现簇) / ③风险筛与人工复审(SOP)
+/ ④披露时钟与环比 diff / ⑤历史池回放 / ⑥读图说明(口径+validator 结论注入) / 页脚。
 视觉语言与 research/tracker 看板同源(CSS vars + chips + sortable + 默认浅色可切深)。
-v1 无内嵌 Plotly(表为主;stage-2 卡图管线见后续),主题切换因此无需 purge。
+v1 无内嵌 Plotly(表为主),主题切换无需 purge。
 """
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ h2{font-size:17px;margin:30px 0 6px;color:var(--head)}
 .summary-box b{color:var(--text)}
 .banner{background:var(--card);border:1px solid var(--border);border-radius:8px;
       padding:8px 14px;margin:10px 0;font-size:13px;color:var(--text2)}
+.banner.hot{border-left:4px solid var(--crit)}
 .banner.cold{border-left:4px solid var(--warn)}
 table{border-collapse:collapse;width:100%;margin:10px 0 4px;font-size:13px;background:var(--card)}
 th{background:var(--thbg);padding:8px 10px;text-align:right;border-bottom:2px solid var(--border2)}
@@ -55,11 +56,16 @@ table.sortable th[data-key].desc::after{content:" ▼"}
 .count{color:var(--muted);font-weight:normal;font-size:12px}
 .chip{font-size:11px;padding:1px 8px;border-radius:9px;background:var(--chipbg);
       color:var(--text2);border:1px solid var(--border);white-space:nowrap}
-.pos{color:var(--crit)} body.dark .pos{color:#f87171}   /* A股红=涨 */
+.chip.warn{color:var(--warn);border-color:var(--warn)}
+.chip.ok{color:var(--ok);border-color:var(--ok)}
+.pos{color:var(--crit)} body.dark .pos{color:#f87171}   /* A股红=涨/正 */
 .neg{color:var(--link)} body.dark .neg{color:#60a5fa}
 .dim{color:var(--muted)}
 .badge-new{font-size:10px;background:#16a34a;color:#fff;border-radius:4px;padding:0 4px;margin-left:3px}
-.badge-suspect{font-size:10px;background:#fcd34d;color:#78350f;border-radius:4px;padding:0 4px;margin-left:3px}
+details.sop{background:var(--card);border:1px solid var(--border);border-radius:8px;
+      padding:8px 14px;margin:8px 0;font-size:13px;color:var(--text2)}
+details.sop summary{cursor:pointer;color:var(--text);font-weight:600}
+details.sop div{margin-top:6px;line-height:1.9}
 footer{margin-top:40px;padding-top:12px;border-top:1px solid var(--border);color:var(--faint);
       font-size:11.5px;line-height:1.8}
 """
@@ -90,6 +96,8 @@ document.querySelectorAll('table.sortable th[data-key]').forEach(function(th){
 });
 """
 
+_RING_LABEL = {"forecast": "预告", "express": "快报", "actual": "正式报"}
+
 
 def _e(v) -> str:
     return _html.escape(str(v)) if v is not None else ""
@@ -102,10 +110,22 @@ def _fmt_pct(v, digits=1) -> str:
     return f"<span class='{cls}'>{v * 100:+.{digits}f}%</span>"
 
 
+def _fmt_num(v, digits=1, suffix="") -> str:
+    if v is None or v != v:
+        return "—"
+    return f"{v:.{digits}f}{suffix}"
+
+
+def _fmt_mktcap(v) -> str:
+    """市值(元)→ 亿。"""
+    if v is None or v != v:
+        return "—"
+    return f"{float(v) / 1e8:.0f}亿"
+
+
 def _anchor_nav() -> str:
-    items = [("s1", "① 偏离超卖"), ("s2", "② 猛×深跌"), ("rev", "③ 修正动量"),
-             ("pead", "④ PEAD"), ("face", "⑤ 变脸监测"), ("davis", "⑥ 双击候选"),
-             ("stage2", "候选深挖")]
+    items = [("pool", "① 池总览"), ("sector", "② 行业构成"), ("risk", "③ 风险与人工复审"),
+             ("clock", "④ 披露时钟·diff"), ("history", "⑤ 历史回放"), ("guide", "⑥ 读图说明")]
     return ("nav class='anchor'>" +
             "".join(f"<a href='#{i}'>{t}</a>" for i, t in items) + "</nav>")
 
@@ -120,210 +140,247 @@ def _table(headers: list[tuple[str, str]], rows: list[list[str]],
     return f"<table id='{table_id}' class='{cls}'><thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>"
 
 
-def _s1_section(rows: list[dict], total: int, cfg_note: dict) -> str:
-    out = [f"<h2 id='s1'>① 偏离超卖候选 <span class='count'>展示 {len(rows)} / 触发 {total}"
-           f"(全池扫描,自身历史百分位 ≤{cfg_note.get('trigger_pct', 0.05):.0%})</span></h2>",
-           "<div class='hint'>触发=自身 MA60 偏离历史百分位 ≤5%(非横截面);复合分="
-           "0.6×深度+0.4×企稳;护栏未过的行照显示但分数为空(排除出候选)。⚠️=除权嫌疑"
-           "(分红表未及刷新,周更自愈,不入深挖);🆕=近 5 日新触发。</div>"]
+def _pool_section(snap: dict) -> str:
+    rows = snap.get("rows") or []
+    note = snap.get("cfg_note") or {}
+    out = [f"<h2 id='pool'>① 高业绩池 · 当前切面 <span class='count'>"
+           f"{len(rows)} 只(过地板 {snap.get('n_floor_pass', 0)} → 估值/风险门后 Top-{note.get('top_n', 100)})</span></h2>",
+           "<div class='hint'>地板=净利同比 ≥{:.0f}% 且营收同比 ≥{:.0f}%(预告环单腿·无营收数据);"
+           "非周期轨 PEG=PE_ttm/扣非g ≤{:.1f}(「业绩没出股价已上天」筛掉);周期轨 PB 自身历史分位 ≤{:.0f}%"
+           "(周期底 PE 爆表被误杀,PB 低=资产便宜);红旗硬剔/黄旗带旗入池交人工。入场=该股自身披露日"
+           "(逐股状态机,point-in-time);下一次披露不过地板即出池——「自然被淘汰」,不预测持续性。</div>".format(
+               note.get("floor_np_yoy", 50.0), note.get("floor_rev_yoy", 20.0),
+               note.get("peg_max", 1.0), (note.get("pb_pct_max", 0.30) or 0) * 100)]
     body = []
     for r in rows:
-        new = "<span class='badge-new'>新</span>" if (r.get("days_in_run") or 99) <= 5 else ""
-        sus = "<span class='badge-suspect'>⚠️除权</span>" if r.get("suspect") else ""
-        score = f"{r['score']:.0f}" if r.get("score") is not None else \
-            f"<span class='dim' title='{_e('、'.join(r.get('guard_flags') or []))}'>护栏:{_e('、'.join(r.get('guard_flags') or [])[:24])}</span>"
+        flags = "".join(f"<span class='chip warn'>{_e(f)}</span> "
+                        for f in (r.get("yellow") or []))
+        ring = _RING_LABEL.get(r.get("ring"), "—")
+        m = r.get("metrics") or {}
+        score = r.get("score")
+        if r.get("track") == "peg":
+            score_html = (f"<td data-v='{score:.3f}'>{score:.2f}</td>"
+                          f"<td data-v='{r.get('pe_ttm') if r.get('pe_ttm') is not None else -1}'>"
+                          f"{_fmt_num(r.get('pe_ttm'), 1)}</td>"
+                          f"<td class='dim'>—</td>")
+        else:
+            score_html = (f"<td data-v='{score:.3f}'>{score:.0%}</td><td class='dim'>—</td>"
+                          f"<td data-v='{score:.3f}'>{_fmt_num((r.get('pb_pct')), 0)}</td>")
+        np_v = r.get("np_yoy_bulk")
         body.append([
-            f"<td>{_e(r['name'])} <span class='dim'>{r['code']}</span>{new}{sus}</td>",
+            f"<td>{_e(r['name'])} <span class='dim'>{r['code']}</span> {flags}</td>",
             f"<td>{_e(r.get('industry') or '未映射')}</td>",
             f"<td>{_e(r.get('type') or '—')}</td>",
-            f"<td data-v='{r['dev_pct']:.4f}'>{r['dev_pct']:.1%}</td>",
-            f"<td data-v='{r['cur_dev']:.4f}'>{_fmt_pct(r['cur_dev'])}</td>",
-            f"<td data-v='{r['stabilize']:.2f}'>{r['stabilize']:.2f}</td>",
-            f"<td data-v='{r['score'] if r.get('score') is not None else -1}'>{score}</td>",
+            f"<td><span class='chip'>{ring}</span></td>",
+            f"<td>{_e(r.get('announce_date') or '—')}</td>",
+            f"<td data-v='{np_v if np_v is not None else -999}'>"
+            f"<span class='{'pos' if (np_v or 0) > 0 else 'neg'}'>{_fmt_num(np_v, 0, '%')}</span>"
+            f" <span class='chip' title='扣非=正式环精筛口径/归母=粗筛回退'>{_e(r.get('np_axis') or '')}</span></td>",
+            f"<td data-v='{r['rev_yoy'] if r.get('rev_yoy') is not None else -999}'>"
+            f"{_fmt_num(r.get('rev_yoy'), 0, '%')}</td>",
+            score_html,
+            f"<td data-v='{float(r['mktcap']) if r.get('mktcap') is not None else -1}'>"
+            f"{_fmt_mktcap(r.get('mktcap'))}</td>",
         ])
-    out.append(_table([("name", "股票"), ("industry", "行业"), ("type", "类型"),
-                       ("dev_pct", "偏离分位"), ("cur_dev", "当前偏离"),
-                       ("stabilize", "企稳"), ("score", "复合分")], body))
+    out.append(_table(
+        [("name", "股票"), ("industry", "行业"), ("type", "类型"), ("ring", "入场环"),
+         ("entered", "入场日"), ("np", "净利yoy"), ("rev", "营收yoy"),
+         ("score", "PEG/PB分位"), ("pe", "PE_ttm"), ("pb", "PB分位"), ("mktcap", "市值")],
+        body))
     return "".join(out)
 
 
-def _s2_section(rows: list[dict], total: int, window_note) -> str:
-    wb = ""
-    if window_note:
-        wb = (f" 窗口B(仅周期): {window_note['start']}~{window_note['end']}"
-              f"(下期 {window_note['period']})")
-    out = [f"<h2 id='s2'>② 业绩预期猛 × 深跌 <span class='count'>展示 {len(rows)} / 资格 {total}</span></h2>",
-           f"<div class='hint'>资格 = 250日回撤≥40% ∧ 披露窗口有效 ∧ 猛分有效。周期猛=商品健康×"
-           f"股价落后+g确认(纯研报g筛周期=买在预期顶);成长猛=前瞻g分位/4周上修/已报加速 三腿≥2。"
-           f"窗口A=预告/快报落地→正式报截止(全类型);{wb}。Q1 期窗口B 天然为空(年报截止晚于Q1预告开窗)。</div>"]
+def _sector_section(snap: dict) -> str:
+    comp = snap.get("composition") or {}
+    emerg = snap.get("emergent")
+    out = ["<h2 id='sector'>② 行业构成 <span class='count'>"
+           f"{comp.get('n_industries', 0)} 个行业 · 共 {comp.get('n_total', 0)} 只</span></h2>",
+           "<div class='hint'>行业暴露从池里涌现,不自上而下预判——先有高业绩筛选,再看哪类行业占比过半"
+           "(陈老师 7 月由此发现商品周期占半数)。看板只陈列事实,不做配比建议。</div>"]
+    if emerg:
+        inds = "、".join(emerg["industries"][:12]) + ("…" if len(emerg["industries"]) > 12 else "")
+        out.append(f"<div class='banner hot'>🔥 涌现簇: 商品关联周期占比 "
+                   f"<b>{emerg['share']:.0%}</b>({emerg['n']}/{emerg['n_total']})"
+                   f"——{inds}</div>")
+    else:
+        out.append("<div class='banner'>无涌现簇(商品关联周期占比 &lt;50%)——常态,非故障</div>")
     body = []
-    for r in rows:
-        conf = "✔" if r.get("confirmed") else "<span class='dim'>未确认</span>"
+    for d in comp.get("by_industry") or []:
+        body.append([
+            f"<td>{_e(d['industry'])}</td>",
+            f"<td data-v='{d['n']}'>{d['n']}</td>",
+            f"<td data-v='{d['share']:.4f}'>{d['share']:.0%}</td>",
+        ])
+    typ = comp.get("by_type") or {}
+    typ_line = " · ".join(f"{k} {v}" for k, v in sorted(typ.items(), key=lambda x: -x[1]))
+    out.append(f"<div class='banner'>类型分布: {_e(typ_line or '—')}</div>")
+    out.append(_table([("industry", "行业"), ("n", "池内只数"), ("share", "占比")], body))
+    return "".join(out)
+
+
+def _risk_section(snap: dict) -> str:
+    gaps = snap.get("gaps") or {}
+    rows = snap.get("rows") or []
+    flagged = [r for r in rows if r.get("yellow")]
+    out = ["<h2 id='risk'>③ 风险筛与人工复审 <span class='count'>"
+           f"{len(flagged)} 只带黄旗</span></h2>",
+           "<div class='hint'>红旗(商誉/净资产>30% · 存贷双高代理)=信号本身即风险,硬剔不入池;"
+           "黄旗=需要人判断行业语境,带旗入池交人工。模型缩小范围→<b>人工排除</b>是方法论自带的"
+           "最后一步,看板不冒充人工。</div>"]
+    body = []
+    for r in flagged:
+        m = r.get("metrics") or {}
+        notes = []
+        if m.get("receivable_rev") is not None:
+            notes.append(f"应收/营收 {m['receivable_rev']:.0%}")
+        if m.get("goodwill_jump") is not None:
+            notes.append(f"商誉环比 {m['goodwill_jump']:+.0%}")
+        if m.get("goodwill_equity") is not None:
+            notes.append(f"商誉/净资产 {m['goodwill_equity']:.0%}")
         body.append([
             f"<td>{_e(r['name'])} <span class='dim'>{r['code']}</span></td>",
             f"<td>{_e(r.get('industry') or '未映射')}</td>",
-            f"<td>{_e(r.get('type') or '—')}</td>",
-            f"<td><span class='chip'>{_e(r['chip'])}</span></td>",
-            f"<td data-v='{r['days_to_formal']}'>{r['days_to_formal']}日</td>",
-            f"<td data-v='{r['drawdown']:.3f}'>{_fmt_pct(r['drawdown'])}</td>",
-            f"<td data-v='{r['fierce']:.3f}'>{r['fierce']:.2f}</td>",
-            f"<td class='dim'>{_e(r.get('legs') or '')}</td>",
-            f"<td>{conf if r.get('type') == 'cyclic' else '—'}</td>",
+            f"<td style='text-align:left'>" +
+            "".join(f"<span class='chip warn'>{_e(f)}</span> " for f in r["yellow"]) + "</td>",
+            f"<td class='dim' style='text-align:left'>{_e(' · '.join(notes))}</td>",
         ])
-    out.append(_table([("name", "股票"), ("industry", "行业"), ("type", "类型"),
-                       ("chip", "窗口"), ("days", "距正式报"), ("drawdown", "250日回撤"),
-                       ("fierce", "猛分"), ("legs", "猛分分解"), ("confirmed", "g确认")], body))
+    out.append(_table([("name", "股票"), ("industry", "行业"),
+                       ("flags", "黄旗"), ("metrics", "度量")], body, sortable=False))
+    if gaps:
+        gl = " · ".join(f"{k}×{v}" for k, v in sorted(gaps.items(), key=lambda x: -x[1]))
+        out.append(f"<div class='banner cold'>数据缺口(诚实呈现,不冒充安全): {_e(gl)}</div>")
+    out.append(_sop_details())
     return "".join(out)
 
 
-def _rev_section(rev: dict) -> str:
-    cold = rev.get("cold_start")
-    banner = ""
-    if cold:
-        banner = (f"<div class='banner cold'>⏳ 一致预期修正动量 累积中 {cold['have']}/{cold['need']} ——"
-                  f"E0 周度快照自 2026-08 起积累,约 {cold['need'] - cold['have']} 周后激活"
-                  f"(期间本表为空,诚实降级非故障)</div>")
-    rows = rev.get("rows") or []
+def _sop_details() -> str:
+    """内嵌人工复审 SOP checklist(教学层;详版 docs/stock_pool/MANUAL_REVIEW.md)。"""
+    return (
+        "<details class='sop'><summary>📋 人工复审 SOP(每个旗怎么查·点开教学)</summary><div>"
+        "<b>扭亏</b> → 查上年同期是否「洗大澡」(资产减值/商誉冲销堆基数)、本期增长是否主业贡献;"
+        "东财 F10「财务分析」+ 年报「非经常性损益」节。<br>"
+        "<b>商誉激增(并购代理)</b> → F10「并购重组」公告:增长是买来的还是内生?业绩承诺(对赌)"
+        "占净利比例、承诺到期年(到期后变脸高发);扣非滤不掉并表——连续计入。<br>"
+        "<b>应收/营收高</b> → 先看行业(建筑/军工/政府客户行业性高,不硬杀);再查应收增速 vs 营收"
+        "增速(应收涨更快=放松信用换收入)、1 年以上账龄占比、经营现金流/净利(ocf 长期低于净利=纸面富贵)。<br>"
+        "<b>存贷双高(代理口径)</b> → 查利息收入 vs 货币资金规模是否匹配(账上巨款却高息借款="
+        "康得新式前科);有息负债精确口径需 F10 资产负债表(短借+长借+应付债券)——批量端点无该列,"
+        "本旗是代理,读图说明⑥注明。<br>"
+        "<b>营运资本/长期负债(无自动数据源)</b> → F10 手查:(流动资产−流动负债)/长期借款,"
+        "陈老师原文四条之一,过低=短债长投错配。<br>"
+        "<b>未精筛</b> → sina 精筛腿(扣非/商誉)未拉到,本次用归母口径,报告脚本下次自动补。<br>"
+        "<b>通用·增长质量</b> → 归母 vs 扣非背离(一次性利润识别,个股诊断看板 Q1 同原语);"
+        "增长靠提价还是放量;单客户依赖度(前五客户占比)。"
+        "</div></details>")
+
+
+def _clock_section(snap: dict) -> str:
+    clock = snap.get("clock") or {}
+    mix = clock.get("ring_mix") or {}
+    pmix = clock.get("period_mix") or {}
+    diff = snap.get("diff") or {}
+    pmix_txt = " · ".join(f"{k}×{v}" for k, v in sorted(pmix.items(), reverse=True))
+    data_p = clock.get("data_period")
+    out = [f"<h2 id='clock'>④ 披露时钟 · 环比 diff</h2>",
+           f"<div class='banner'>管道期 <b>{_e(clock.get('period', ''))}</b>"
+           f"(正式报截止 {_e(clock.get('formal_deadline', ''))},剩 {clock.get('days_to_formal', 0)} 天 · "
+           f"预告开窗 {_e(clock.get('forecast_open', ''))}) · "
+           f"数据期 <b>{_e(data_p or '—')}</b>"
+           + (f"<span class='dim'>({_e(pmix_txt)})</span>" if pmix_txt and len(pmix) > 1 else "")
+           + f" · 过地板路径: 预告 {mix.get('forecast', 0)} / 快报 {mix.get('express', 0)} / "
+           f"正式 {mix.get('actual', 0)}</div>",
+           "<div class='hint'>管道期=披露管道仍在飞行的最老一期;数据期=池当前由哪个报告期的环撑着"
+           "(披露间隙期上期环撑到下期披露落地才换血——状态机语义,无任意批重建时点)。"
+           "每季三环(预告→快报→正式报)滚动重筛,每环落地即重判——"
+           "「每个季度的正式报、预报、快报,都会根据最新的业绩做调整组合」。</div>"]
+    for tw in clock.get("theme_windows") or []:
+        out.append(f"<div class='banner hot'>⏱ 主题死线(事实陈列·可证伪,见 CLAIMS_LEDGER): "
+                   f"{_e(tw.get('label', ''))} —— 窗至 {_e(tw.get('until', ''))}</div>")
+    ent = diff.get("entered") or []
+    ext = diff.get("exited") or []
+    out.append(f"<div class='banner'>环比 新进 <b>{len(ent)}</b> · 淘汰 <b>{len(ext)}</b>"
+               "(vs 上次快照;「增速不行了下季度自然被淘汰」的可视化)</div>")
+    if ent:
+        out.append("<div style='line-height:2.2'>🟢 新进: " + "".join(
+            f"<span class='chip'>{_e(d['name'])}</span> " for d in ent[:60]) + "</div>")
+    if ext:
+        out.append("<div style='line-height:2.2'>🔴 淘汰: " + "".join(
+            f"<span class='chip'>{_e(d['name'])}</span> " for d in ext[:60]) + "</div>")
+    return "".join(out)
+
+
+def _history_section(snap: dict) -> str:
+    hist = snap.get("history") or []
+    concl = snap.get("conclusion")
     body = []
-    for r in rows:
-        cls = "pos" if r["rev_pct"] > 0 else "neg"
+    for h in hist[:12]:
         body.append([
-            f"<td>{_e(r.get('name', r['code']))} <span class='dim'>{r['code']}</span></td>",
-            f"<td data-v='{r['rev_pct']:.4f}'><span class='{cls}'>{r['rev_pct']:+.1f}%</span></td>",
-            f"<td>{'⬆' if r['up'] else ('⬇' if r['down'] else '·')}</td>",
+            f"<td>{_e(h['asof'])}</td>",
+            f"<td data-v='{h['n']}'>{h['n']}</td>",
+            f"<td>{_e(h.get('period') or '—')}</td>",
         ])
-    return (f"<h2 id='rev'>③ 一致预期修正动量(个股版 E4) <span class='count'>Top {len(rows)}</span></h2>"
-            f"{banner}"
-            + _table([("name", "股票"), ("rev", "4周EPS修正"), ("dir", "方向")], body))
+    out = ["<h2 id='history'>⑤ 历史池回放 <span class='count'>留档 {len(hist)} 份快照</span></h2>",
+           "<div class='hint'>池成员逐次渲染留档(pool_membership 表);深回放与业绩对齐归验证器"
+           "——<b>实证结论</b>: " +
+           (_e(concl) if concl else
+            "未运行 python scripts/validate_high_earnings_pool.py —— 结论注入占位") + "</div>",
+           _table([("asof", "快照日"), ("n", "池规模"), ("period", "报告期")], body)]
+    return "".join(out)
 
 
-def _pead_section(rows: list[dict], conclusion: str | None) -> str:
-    concl = conclusion or "未运行 python scripts/validate_pead.py —— 结论注入占位"
-    body = []
-    for r in rows:
-        cls = "pos" if r["surprise_pp"] > 0 else "neg"
-        body.append([
-            f"<td>{_e(r.get('name', r['code']))} <span class='dim'>{r['code']}</span></td>",
-            f"<td>{_e(r['period'])}</td>",
-            f"<td>{_e(r.get('type') or '')}</td>",
-            f"<td data-v='{r['forecast_yoy']:.1f}'>{r['forecast_yoy']:.0f}%</td>",
-            f"<td data-v='{r['expected']:.1f}'>{r['expected']:.0f}%</td>",
-            f"<td data-v='{r['surprise_pp']:.1f}'><span class='{cls}'>{r['surprise_pp']:+.0f}pp</span>"
-            f" <span class='chip'>{r['leg']}</span></td>",
-            f"<td>{_e(r['announce_date'])}</td>",
-        ])
-    return (f"<h2 id='pead'>④ PEAD 预告超预期 <span class='count'>|surprise|≥10pp,Top {len(rows)}</span></h2>"
-            f"<div class='hint'>surprise = 预告yoy − 公告时点隐含预期(leg C=consensus隐含·年报期 / "
-            f"leg A=上年同期实际;point-in-time 无前视)。漂移是否成立由 event-study 裁决:"
-            f"<br><b>实证结论</b>: {_e(concl)}</div>"
-            + _table([("name", "股票"), ("period", "报告期"), ("type", "类型"),
-                      ("yoy", "预告yoy"), ("expected", "隐含预期"),
-                      ("surprise", "surprise"), ("date", "公告日")], body))
-
-
-def _face_section(up: list[dict], down: list[dict]) -> str:
-    def _rows(rs):
-        body = []
-        for r in rs:
-            tail = " → ".join(f"{p[4:]}:{v:.0f}%" for p, v in (r.get("tail") or []))
-            body.append([
-                f"<td>{_e(r['name'])} <span class='dim'>{r['code']}</span></td>",
-                f"<td>{_e(r.get('industry') or '未映射')}</td>",
-                f"<td style='text-align:left'>{_e(r['detail'])}</td>",
-                f"<td class='dim' style='text-align:left'>{_e(tail)}</td>",
-            ])
-        return _table([("name", "股票"), ("industry", "行业"), ("detail", "变脸"),
-                       ("tail", "近4期序列")], body, sortable=False)
-
-    return (f"<h2 id='face'>⑤ 业绩变脸监测 <span class='count'>向下 {len(down)} · 向上 {len(up)}</span></h2>"
-            f"<div class='hint'>陈老师方法论系统化: 跳档(小米型)/趋势破位(腾讯型)/连亏(美团型)"
-            f"→ 向下(喂策略1护栏);拐头向上 → 埋伏正因子。np_yoy 累计口径,同尾比较防失真。</div>"
-            f"<div class='banner' style='border-left:4px solid var(--crit)'>▼ 向下(策略1 护栏来源)</div>"
-            + _rows(down)
-            + f"<div class='banner' style='border-left:4px solid var(--ok)'>▲ 向上(拐头)</div>"
-            + _rows(up))
-
-
-def _davis_section(rows: list[dict]) -> str:
-    body = []
-    for r in rows:
-        body.append([
-            f"<td>{_e(r.get('name', r['code']))} <span class='dim'>{r['code']}</span></td>",
-            f"<td>{_e(r.get('label') or '—')}</td>",
-            f"<td style='text-align:left'>{_e(r.get('note') or '')}</td>",
-        ])
-    return (f"<h2 id='davis'>⑥ 戴维斯双击候选 <span class='count'>{len(rows)}</span></h2>"
-            f"<div class='hint'>S1∪S2 头部候选 × 估值/财务腿(周度按需拉)——业绩方向×估值方向"
-            f"六档(stage-2 深挖,baidu 估值腿就绪后填)。</div>"
-            + _table([("name", "股票"), ("label", "档位"), ("note", "注记")], body))
-
-
-def _stage2_section(cards: list[dict]) -> str:
-    if not cards:
-        return ("<h2 id='stage2'>候选深挖(stage-2)</h2><div class='banner'>stage-2 候选腿未就绪——"
-                "生成时自动对每策略 Top-30 并集周度拉估值/财报腿(--no-stage2 跳过);"
-                "腿齐后此处为候选 davis 摘要卡,双击表同源。</div>")
-    blocks = []
-    for c in cards:
-        blocks.append(f"<details><summary>{_e(c.get('name', c['code']))} "
-                      f"<span class='dim'>{c['code']}</span> "
-                      f"<span class='chip'>{_e(c.get('tag', ''))}</span></summary>"
-                      f"<div class='hint'>{_e(c.get('summary', ''))}</div></details>")
-    return ("<h2 id='stage2'>候选深挖(stage-2)<span class='count'>Top 候选诊断卡</span></h2>"
-            + "".join(blocks))
+def _guide_section(snap: dict) -> str:
+    note = snap.get("cfg_note") or {}
+    return (
+        "<div class='summary-box' id='guide'><b>⑥ 读图说明</b> —— 只读筛选旁路,永不喂交易引擎"
+        "(ADR-0001);给候选不给买卖点,人决策综合多看板。<br>"
+        "<b>三环口径差异(数据先天,非妥协)</b>: 预告环只有净利维度(单腿地板);快报环双轴未审计;"
+        "正式环=扣非双轴(sina 逐股精筛,幸存者才有;未拉到时归母回退+「未精筛」旗)。<br>"
+        "<b>估值口径</b>: PE_ttm=市值/TTM归母净利(TTM=上年报+本期YTD−上年同期YTD);市值_t=现股本"
+        "(现市值/现价反推)×价_t——回放近似,股本缓变假设;PB=raw价/每股净资产(报告期阶梯,公告日"
+        "point-in-time);spot 动态 PE 仅交叉核对列不进判定。<br>"
+        "<b>代理口径诚实注</b>: 存贷双高=货币资金/总资产≥15%∧资产负债率≥40%(有息负债批量端点无列);"
+        "并购代理=商誉环比激增(陈老师的人工甄别不可全自动);营运资本/长期负债无数据源→纯人工项。<br>"
+        "<b>温度计非开关</b>: 8 季×3 环≈20 个有效窗口,对「70% 场合跑赢所有指数」是小样本检验——"
+        "验证器结论照实注入,可能显示无 edge,那是诚实。</div>")
 
 
 def render(snapshot: dict) -> str:
-    """渲染 data/stock_pool.html(snapshot=screen.build_pool_snapshot 契约)。纯字符串拼装。"""
+    """渲染 data/stock_pool.html(snapshot=screen.build_high_earnings_snapshot 契约)。纯字符串拼装。"""
     u = snapshot.get("universe_stats") or {}
-    pf = snapshot.get("price_freshness") or {}
-    concl_d = (snapshot.get("conclusions") or {}).get("deviation")
-    concl_p = (snapshot.get("conclusions") or {}).get("pead")
-    n4 = snapshot.get("n_snapshots", 0)
-    cold4 = n4 < 4
-
+    note = snapshot.get("cfg_note") or {}
     stats = (
         f"<div class='statline'>"
-        f"<div class='stat'>宇宙 <b>{u.get('n', 0)}</b> 只(覆盖池∩非ST)</div>"
-        f"<div class='stat'>行业映射 <b>{u.get('pct', 0):.0%}</b>"
-        f"<span class='dim'>(周期{u.get('n_cyclic', 0)}/成长{u.get('n_growth', 0)}/价值{u.get('n_value', 0)})</span></div>"
-        f"<div class='stat'>价格新鲜 <b>{pf.get('fresh', 0)}/{pf.get('n', 0)}</b>(≤7日)</div>"
-        f"<div class='stat'>披露周期 <b>{_e(snapshot.get('period', ''))}</b></div>"
-        f"<div class='stat'>E4 快照 <b>{n4}</b>/4{' ⏳' if cold4 else ''}</div>"
-        f"<div class='stat'>行业快照 <b>{_e(snapshot.get('industry_snapshot') or '无')}</b></div>"
+        f"<div class='stat'>宇宙 <b>{u.get('n', 0)}</b> 只(全市场非ST)</div>"
+        f"<div class='stat'>过地板 <b>{snapshot.get('n_floor_pass', 0)}</b></div>"
+        f"<div class='stat'>池 <b>{snapshot.get('n_gated_pool', 0)}</b>"
+        f"<span class='dim'>(PEG轨 {snapshot.get('n_track_peg', 0)}/PB轨 {snapshot.get('n_track_pb', 0)}"
+        f" · Top-{note.get('top_n', 100)})</span></div>"
+        f"<div class='stat'>报告期 <b>{_e(snapshot.get('period', ''))}</b></div>"
+        f"<div class='stat'>行业映射 <b>{u.get('pct', 0):.0%}</b></div>"
+        f"<div class='stat'>spot <b>{_e(snapshot.get('spot_date') or '无')}</b></div>"
         f"</div>")
-
-    guide = (
-        "<div class='summary-box'><b>读图说明</b> —— 只读筛选旁路,永不喂交易引擎(ADR-0001);"
-        "给候选不给买卖点,人决策综合多看板。口径: ①偏离=自身历史百分位(非横截面);"
-        "价格=raw存储+分红表运行时前复权(除权嫌疑行带⚠️);业绩=np_yoy 累计口径(同尾比较);"
-        "猛分仅周期/成长(价值无猛概念);窗口B仅周期(商品可观测)。<br>"
-        f"<b>策略1 实证</b>: {_e(concl_d) or '未运行 python scripts/validate_deviation_extreme.py —— 结论注入占位'}<br>"
-        f"<b>PEAD 实证</b>: {_e(concl_p) or '未运行 python scripts/validate_pead.py —— 结论注入占位'}"
-        "</div>")
 
     body = (
         f"<div class='wrap'>"
-        f"<header><h1>🎯 候选个股池</h1>"
-        f"<span class='meta'>as of {_e(snapshot.get('as_of', ''))} · 第六看板 · 只读</span>"
+        f"<header><h1>🎯 候选个股池 · 高业绩池</h1>"
+        f"<span class='meta'>as of {_e(snapshot.get('as_of', ''))} · 第六看板 · 只读 ·"
+        f" 陈氏季度池 V8</span>"
         f"<button id='theme-btn' onclick='toggleTheme()'>🌙</button></header>"
-        f"{stats}{_anchor_nav()}{guide}"
-        + _s1_section(snapshot.get("s1_rows") or [], snapshot.get("s1_total", 0),
-                      (snapshot.get("cfg_note") or {}))
-        + _s2_section(snapshot.get("s2_rows") or [], snapshot.get("s2_total", 0),
-                      snapshot.get("window_note"))
-        + _rev_section(snapshot.get("revision") or {})
-        + _pead_section(snapshot.get("pead_rows") or [], concl_p)
-        + _face_section(snapshot.get("face_rows_up") or [], snapshot.get("face_rows_down") or [])
-        + _davis_section(snapshot.get("davis_rows") or [])
-        + _stage2_section(snapshot.get("stage2_cards") or [])
-        + "<footer>生成: python scripts/stock_pool_report.py · 数据: stock_pool 参数节(config/params.yaml) ·"
-          " 行业映射: config/stock_industry.yaml(未映射板块不入策略2,其余策略不受影响)<br>"
-          "只读诊断 · 永不喂交易引擎(docs/adr/0001 同款围栏) · 温度计非开关,实证结论可能显示无 edge——那是诚实</footer>"
+        f"{stats}{_anchor_nav()}"
+        + _pool_section(snapshot)
+        + _sector_section(snapshot)
+        + _risk_section(snapshot)
+        + _clock_section(snapshot)
+        + _history_section(snapshot)
+        + _guide_section(snapshot)
+        + "<footer>生成: python scripts/stock_pool_report.py · 参数: config/params.yaml stock_pool.high_pool ·"
+          " 行业映射: config/stock_industry.yaml(未映射→PEG轨,不入周期PB轨)<br>"
+          "方法论出处: 重远投资观(季度高业绩池·2026-09 提炼, docs/stock_pool/MANUAL_REVIEW.md 存档) ·"
+          " 只读诊断 · 永不喂交易引擎(docs/adr/0001 同款围栏) · 温度计非开关,实证结论可能显示无 edge——那是诚实</footer>"
         f"</div>")
     return ("<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            f"<title>候选个股池 · {snapshot.get('as_of', '')}</title>"
+            f"<title>候选个股池 · 高业绩池 · {snapshot.get('as_of', '')}</title>"
             f"<style>{_CSS}</style><script>{_JS}</script></head><body>{body}</body></html>")
 
 

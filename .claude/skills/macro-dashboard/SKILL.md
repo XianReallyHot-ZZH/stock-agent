@@ -69,7 +69,7 @@ PYTHONIOENCODING=utf-8 python scripts/macro_framework_report.py
 
 ## 与 dashboards skill 的关系
 - **本 skill**(`macro-dashboard`):只刷宏观框架看板一个(快,~3 分钟)。
-- **`dashboards`**:全刷八看板壳页(研究/指数/个股/大宗商品/宏观框架/国内宏观/仓位 + ⏸候选池暂停中,实际刷七个;冷启动 ~1hr,日常 ~15-20 分钟)。
+- **`dashboards`**:全刷八看板壳页(研究/指数/个股/大宗商品/宏观框架/国内宏观/仓位/候选池[V8 高业绩池 2026-09 重启];冷启动 ~1hr,日常 ~15-20 分钟)。
 - 日常盘中看黄金 → 本 skill;盘前/周五全套 → `dashboards`。
 
 ## 端点真相

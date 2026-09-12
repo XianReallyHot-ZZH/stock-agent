@@ -11,6 +11,11 @@ Usage:
 """
 from __future__ import annotations
 
+[已退役 2026-09-12] V8 重写(六表退役,用户批准 Q1=A): 本验证器属于旧策略1/PEAD 表,
+其结论已写 meta(deviation_extreme_conclusion / pead_conclusion)留档;脚本的 pool.screen/
+pool.universe 依赖已随重写变更,import 会失败——留盘存档,勿直接运行。
+
+
 import argparse
 import sys
 from datetime import datetime, timedelta

@@ -174,6 +174,10 @@ CREATE TABLE IF NOT EXISTS stock_report_actual (
     announce_date TEXT,
     np_yoy        REAL,
     rev_yoy       REAL,
+    eps           REAL,            -- 每股收益(累计口径; V8 高业绩池扩列 2026-09, 旧库迁移 NULL)
+    bvps          REAL,            -- 每股净资产(PB 分位轨原料; V8 扩列)
+    np_abs        REAL,            -- 净利润绝对值(累计; TTM 自算原料; V8 扩列)
+    rev_abs       REAL,            -- 营业总收入绝对值(累计; 应收占比分母; V8 扩列)
     source        TEXT,
     PRIMARY KEY (symbol, report_period)
 );
@@ -423,12 +427,16 @@ CREATE TABLE IF NOT EXISTS wm_rules (
     note         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_wm_rules_episode ON wm_rules(episode_date);
-CREATE TABLE IF NOT EXISTS stock_spot (           -- 候选个股池(V7): 全市场现货快照·日更单调用
-    code   TEXT NOT NULL,                        -- 6 位代码
-    date   TEXT NOT NULL,                        -- 快照日 YYYY-MM-DD
-    name   TEXT,                                 -- 最新名称(ST/退 过滤 + 展示名唯一来源)
-    close  REAL,                                 -- 现货最新价(仅调试;筛选一律用 daily_prices 复权序列)
-    source TEXT,
+CREATE TABLE IF NOT EXISTS stock_spot (           -- 候选个股池(V7→V8): 全市场现货快照·日更单调用
+    code          TEXT NOT NULL,                 -- 6 位代码
+    date          TEXT NOT NULL,                 -- 快照日 YYYY-MM-DD
+    name          TEXT,                          -- 最新名称(ST/退 过滤 + 展示名唯一来源)
+    close         REAL,                          -- 现货最新价(仅调试;筛选一律用 daily_prices 复权序列)
+    mktcap        REAL,                          -- 总市值(元; V8 高业绩池市值列+股本反推原料, 2026-09 扩列)
+    float_mktcap  REAL,                          -- 流通市值(元; V8 扩列)
+    pe_dyn        REAL,                          -- 市盈率-动态(V8; spot 交叉核对列)
+    pb            REAL,                          -- 市净率(V8; spot 交叉核对列)
+    source        TEXT,
     PRIMARY KEY (code, date)
 );
 CREATE INDEX IF NOT EXISTS idx_stock_spot_code ON stock_spot(code);
@@ -441,6 +449,32 @@ CREATE TABLE IF NOT EXISTS industry_member (     -- 候选个股池(V7): 东财�
     PRIMARY KEY (industry, code)
 );
 CREATE INDEX IF NOT EXISTS idx_industry_member_code ON industry_member(code);
+CREATE TABLE IF NOT EXISTS stock_balance (       -- 候选个股池(V8 高业绩池): 资产负债表汇总·按报告期整表
+    symbol        TEXT NOT NULL,                 -- zcfz 批量端点(无商誉/借款列——商誉走 sina 逐股精筛腿)
+    report_period TEXT NOT NULL,
+    announce_date TEXT,
+    cash          REAL,                          -- 货币资金(存贷双高代理分子)
+    receivables   REAL,                          -- 应收账款(应收占比黄旗)
+    inventory     REAL,                          -- 存货
+    total_assets  REAL,                          -- 总资产
+    total_liab    REAL,                          -- 总负债
+    equity        REAL,                          -- 股东权益合计(净资产;商誉红旗分母)
+    debt_ratio    REAL,                          -- 资产负债率(小数;存贷双高代理第二腿)
+    source        TEXT,
+    PRIMARY KEY (symbol, report_period)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_balance_symbol ON stock_balance(symbol);
+CREATE TABLE IF NOT EXISTS pool_membership (     -- 候选个股池(V8 高业绩池): 池成员留档·每次渲染追记
+    asof    TEXT NOT NULL,                       -- 快照日 YYYY-MM-DD(状态机当前切面的存档)
+    code    TEXT NOT NULL,
+    period  TEXT,                                -- 报告期
+    ring    TEXT,                                -- forecast/express/actual(入场环)
+    entered TEXT,                                -- 入场日(该环公告日)
+    rank    INTEGER,                             -- 池内名次(PEG/PB 分位合并轨)
+    score   REAL,                                -- PEG 或 PB 分位(排序键原值)
+    PRIMARY KEY (asof, code)
+);
+CREATE INDEX IF NOT EXISTS idx_pool_membership_code ON pool_membership(code);
 """
 
 
@@ -469,6 +503,15 @@ class Store:
             _ensure_column(c, "china_tsf", "rmb_loans", "REAL")    # v2:社融分项(旧库迁移)
             _ensure_column(c, "china_tsf", "corp_bond", "REAL")
             _ensure_column(c, "china_tsf", "equity_fin", "REAL")
+            # V8 高业绩池(2026-09): 正式报扩列 + spot 市值/估值列(旧库迁移, NULL=未回填)
+            _ensure_column(c, "stock_report_actual", "eps", "REAL")
+            _ensure_column(c, "stock_report_actual", "bvps", "REAL")
+            _ensure_column(c, "stock_report_actual", "np_abs", "REAL")
+            _ensure_column(c, "stock_report_actual", "rev_abs", "REAL")
+            _ensure_column(c, "stock_spot", "mktcap", "REAL")
+            _ensure_column(c, "stock_spot", "float_mktcap", "REAL")
+            _ensure_column(c, "stock_spot", "pe_dyn", "REAL")
+            _ensure_column(c, "stock_spot", "pb", "REAL")
 
     # ---- meta ----
     def get_meta(self, key: str, default=None):
@@ -1081,7 +1124,8 @@ class Store:
 
     # ---- 业绩三环链 (E3, docs/EXECUTION_PLAN-ETF业绩预期.md §5) ----
     def _upsert_perf_table(self, table: str, rows: list, source: str = "") -> int:
-        """rows: (symbol, report_period, announce_date, np_yoy, rev_yoy). 幂等 (symbol, report_period)."""
+        """rows: (symbol, report_period, announce_date, np_yoy, rev_yoy[, eps, bvps, np_abs, rev_abs]).
+        幂等 (symbol, report_period)。V8 扩列四元组仅 stock_report_actual 消费(快报腿传 5 元组)。"""
         if not rows:
             return 0
 
@@ -1090,14 +1134,26 @@ class Store:
                 return None
             return str(x)[:10]
 
-        payload = [(str(s), str(rp), _s(a), _num(n), _num(r), source)
-                   for (s, rp, a, n, r) in rows]
+        payload = []
+        for row in rows:
+            s, rp, a, n, r = row[:5]
+            if table == "stock_express":
+                payload.append((str(s), str(rp), _s(a), _num(n), _num(r), source))
+                continue
+            eps, bvps, np_abs, rev_abs = (row[5:9] if len(row) >= 9 else (None, None, None, None))
+            payload.append((str(s), str(rp), _s(a), _num(n), _num(r),
+                            _num(eps), _num(bvps), _num(np_abs), _num(rev_abs), source))
+        extra_cols = "" if table == "stock_express" else ",eps,bvps,np_abs,rev_abs"
+        extra_vals = "" if table == "stock_express" else ",?,?,?,?"
+        extra_upd = "" if table == "stock_express" else (
+            ",eps=excluded.eps,bvps=excluded.bvps,np_abs=excluded.np_abs,rev_abs=excluded.rev_abs")
         with self._conn() as c:
             c.executemany(
-                f"INSERT INTO {table}(symbol,report_period,announce_date,np_yoy,rev_yoy,source) "
-                "VALUES(?,?,?,?,?,?) ON CONFLICT(symbol,report_period) DO UPDATE SET "
+                f"INSERT INTO {table}(symbol,report_period,announce_date,np_yoy,rev_yoy"
+                f"{extra_cols},source) VALUES(?,?,?,?,?{extra_vals},?) "
+                "ON CONFLICT(symbol,report_period) DO UPDATE SET "
                 "announce_date=excluded.announce_date,np_yoy=excluded.np_yoy,"
-                "rev_yoy=excluded.rev_yoy,source=excluded.source",
+                f"rev_yoy=excluded.rev_yoy{extra_upd},source=excluded.source",
                 payload,
             )
         return len(payload)
@@ -1123,6 +1179,127 @@ class Store:
 
     def get_stock_report_period(self, report_period: str) -> pd.DataFrame:
         return self._get_perf_period("stock_report_actual", report_period)
+
+    def get_stock_report_period_full(self, report_period: str) -> pd.DataFrame:
+        """一期全市场帧·含 V8 扩列, indexed by code
+        [np_yoy, rev_yoy, announce_date, eps, bvps, np_abs, rev_abs](高业绩池装配的输入契约;
+        旧期未回填扩列 → NULL/NaN, 调用方按缺数据诚实降级)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT symbol,np_yoy,rev_yoy,announce_date,eps,bvps,np_abs,rev_abs "
+                "FROM stock_report_actual WHERE report_period=?", c, params=(report_period,))
+        if len(df) == 0:
+            return pd.DataFrame(columns=["np_yoy", "rev_yoy", "announce_date",
+                                         "eps", "bvps", "np_abs", "rev_abs"])
+        return df.rename(columns={"symbol": "code"}).set_index("code")
+
+    def stock_report_periods(self, min_rows: int = 100) -> list[str]:
+        """已回填正式报的报告期清单(降序,行数≥min_rows 的期)——高业绩池回放/验证器用。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT report_period, COUNT(*) FROM stock_report_actual "
+                "GROUP BY report_period ORDER BY report_period DESC").fetchall()
+        return [r[0] for r in rows if r[1] and r[1] >= min_rows]
+
+    def stock_report_rows_for(self, symbol: str) -> pd.DataFrame:
+        """单股全部报告期正式报行, indexed by report_period [announce_date, np_yoy, rev_yoy,
+        eps, bvps, np_abs, rev_abs]——高业绩池逐股装配(TTM 原料/bvps 阶梯/PB 分位轨)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT report_period,announce_date,np_yoy,rev_yoy,eps,bvps,np_abs,rev_abs "
+                "FROM stock_report_actual WHERE symbol=?", c, params=(symbol,))
+        if len(df) == 0:
+            return pd.DataFrame(columns=["announce_date", "np_yoy", "rev_yoy",
+                                         "eps", "bvps", "np_abs", "rev_abs"])
+        return df.set_index("report_period").sort_index()
+
+    def stock_np_abs_all(self) -> pd.DataFrame:
+        """全库 np_abs 长表 [symbol, report_period, np_abs, eps, announce_date]
+        (V8 扩列已回填的行)——验证器回放的 TTM+股本反推(np_abs/eps)原料 bulk 读取。"""
+        with self._conn() as c:
+            return pd.read_sql_query(
+                "SELECT symbol,report_period,np_abs,eps,announce_date FROM stock_report_actual "
+                "WHERE np_abs IS NOT NULL AND announce_date IS NOT NULL", c)
+
+    # ---- 高业绩池数据腿 (V8 pool · stock_balance / pool_membership · 2026-09) ----
+    def upsert_stock_balance(self, rows: list, source: str = "") -> int:
+        """rows: (symbol, report_period, announce_date, cash, receivables, inventory,
+        total_assets, total_liab, equity, debt_ratio)。幂等 (symbol, report_period)。"""
+        if not rows:
+            return 0
+
+        def _s(x):
+            if x is None or x == "" or (isinstance(x, float) and pd.isna(x)):
+                return None
+            return str(x)[:10]
+
+        payload = [(str(s), str(rp), _s(a), _num(c), _num(rv), _num(iv),
+                    _num(ta), _num(tl), _num(eq), _num(dr), source)
+                   for (s, rp, a, c, rv, iv, ta, tl, eq, dr) in rows]
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO stock_balance(symbol,report_period,announce_date,cash,receivables,"
+                "inventory,total_assets,total_liab,equity,debt_ratio,source) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(symbol,report_period) DO UPDATE SET "
+                "announce_date=excluded.announce_date,cash=excluded.cash,"
+                "receivables=excluded.receivables,inventory=excluded.inventory,"
+                "total_assets=excluded.total_assets,total_liab=excluded.total_liab,"
+                "equity=excluded.equity,debt_ratio=excluded.debt_ratio,source=excluded.source",
+                payload,
+            )
+        return len(payload)
+
+    def get_stock_balance_period(self, report_period: str) -> pd.DataFrame:
+        """一期全市场资产负债帧, indexed by code [cash, receivables, inventory, total_assets,
+        total_liab, equity, debt_ratio, announce_date]。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT symbol,cash,receivables,inventory,total_assets,total_liab,equity,"
+                "debt_ratio,announce_date FROM stock_balance WHERE report_period=?",
+                c, params=(report_period,))
+        if len(df) == 0:
+            return pd.DataFrame(columns=["cash", "receivables", "inventory", "total_assets",
+                                         "total_liab", "equity", "debt_ratio", "announce_date"])
+        return df.rename(columns={"symbol": "code"}).set_index("code")
+
+    def stock_balance_periods(self, min_rows: int = 100) -> list[str]:
+        """已回填的报告期清单(降序,行数≥min_rows 的期)——回填/展示用。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT report_period, COUNT(*) FROM stock_balance "
+                "GROUP BY report_period ORDER BY report_period DESC").fetchall()
+        return [r[0] for r in rows if r[1] and r[1] >= min_rows]
+
+    def insert_pool_membership(self, asof: str, rows: list) -> int:
+        """池成员留档(rows: (code, period, ring, entered, rank, score))。append-only 追记,
+        同日重渲染先清后插(幂等)。环比 diff / 历史回放读这里。"""
+        if not rows:
+            return 0
+        payload = [(asof, str(c), p, r, e, rk, sc) for (c, p, r, e, rk, sc) in rows]
+        with self._conn() as c:
+            c.execute("DELETE FROM pool_membership WHERE asof=?", (asof,))
+            c.executemany(
+                "INSERT OR REPLACE INTO pool_membership(asof,code,period,ring,entered,rank,score) "
+                "VALUES(?,?,?,?,?,?,?)", payload)
+        return len(payload)
+
+    def latest_pool_snapshots(self, n: int = 10) -> list[dict]:
+        """最近 n 个池快照日 [{asof, n_members, period}]降序——历史回放节 + 环比 diff 的锚。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT asof, COUNT(*) as n, MAX(period) FROM pool_membership "
+                "GROUP BY asof ORDER BY asof DESC LIMIT ?", (n,)).fetchall()
+        return [{"asof": r[0], "n": r[1], "period": r[2]} for r in rows]
+
+    def pool_membership_asof(self, asof: str) -> pd.DataFrame:
+        """某快照日池成员帧 indexed by code [period, ring, entered, rank, score]。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT code,period,ring,entered,rank,score FROM pool_membership WHERE asof=?",
+                c, params=(asof,))
+        if len(df) == 0:
+            return pd.DataFrame(columns=["period", "ring", "entered", "rank", "score"])
+        return df.set_index("code")
 
     def get_stock_forecast_period(self, report_period: str) -> pd.DataFrame:
         """一期全市场业绩预告帧, indexed by code [yoy, type, announce_date]（链聚合输入契约）."""
@@ -2129,34 +2306,42 @@ class Store:
     # ---- candidate-pool screening (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
     def upsert_stock_spot(self, df: pd.DataFrame, date: str, source: str = "em_spot") -> int:
         """全市场现货快照 upsert keyed by (code, date) — same-day rerun overwrites(幂等)。
-        df indexed by code with [name, close]。名称 = ST/退 过滤与展示名的唯一来源。"""
+        df indexed by code with [name, close, mktcap, float_mktcap, pe_dyn, pb]。
+        名称 = ST/退 过滤与展示名的唯一来源; 市值/估值列 = V8 高业绩池当前口径(缺列安全降级 NULL)。"""
         if df is None or len(df) == 0:
             return 0
         rows = [
             (str(code), date,
              str(r.get("name", "")) if pd.notna(r.get("name")) else "",
-             _num(r.get("close")), source)
+             _num(r.get("close")), _num(r.get("mktcap")), _num(r.get("float_mktcap")),
+             _num(r.get("pe_dyn")), _num(r.get("pb")), source)
             for code, r in df.iterrows()
         ]
         with self._conn() as c:
             c.executemany(
-                "INSERT INTO stock_spot(code,date,name,close,source) VALUES(?,?,?,?,?) "
+                "INSERT INTO stock_spot(code,date,name,close,mktcap,float_mktcap,pe_dyn,pb,source) "
+                "VALUES(?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(code,date) DO UPDATE SET "
-                "name=excluded.name,close=excluded.close,source=excluded.source",
+                "name=excluded.name,close=excluded.close,mktcap=excluded.mktcap,"
+                "float_mktcap=excluded.float_mktcap,pe_dyn=excluded.pe_dyn,pb=excluded.pb,"
+                "source=excluded.source",
                 rows,
             )
         return len(rows)
 
     def latest_stock_spot(self) -> pd.DataFrame:
-        """最新快照日整帧 indexed by code [name, close]（空表 → 空帧）。"""
+        """最新快照日整帧 indexed by code [name, close, mktcap, float_mktcap, pe_dyn, pb]
+        （空表 → 空帧; V8 扩列前旧快照的新列读出 NaN, 调用方诚实降级）。"""
+        cols = ["name", "close", "mktcap", "float_mktcap", "pe_dyn", "pb"]
         with self._conn() as c:
             row = c.execute("SELECT MAX(date) FROM stock_spot").fetchone()
             if not row or not row[0]:
-                return pd.DataFrame(columns=["name", "close"])
+                return pd.DataFrame(columns=cols)
             df = pd.read_sql_query(
-                "SELECT code,name,close FROM stock_spot WHERE date=?", c, params=(row[0],))
+                "SELECT code,name,close,mktcap,float_mktcap,pe_dyn,pb FROM stock_spot "
+                "WHERE date=?", c, params=(row[0],))
         if len(df) == 0:
-            return pd.DataFrame(columns=["name", "close"])
+            return pd.DataFrame(columns=cols)
         return df.set_index("code")
 
     def prune_stock_spot(self, keep_days: int = 90) -> int:

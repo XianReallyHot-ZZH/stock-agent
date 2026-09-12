@@ -423,7 +423,8 @@ class DataManager:
     def _update_perf_panel(self, fetch_fn, table_tag: str, periods: Optional[list[str]],
                            floor: int, results_tag: str) -> dict:
         """共用: 逐期全市场拉取→入库(幂等)。期行数 < floor 跳过不写库(快报中期稀疏属常态,
-        但 <10/500 视为端点半死)。Returns {period: rows_written}."""
+        但 <10/500 视为端点半死)。V8: report 腿带扩列(eps/bvps/np_abs/rev_abs)。Returns
+        {period: rows_written}."""
         periods = periods or _recent_report_periods(8)
         results: dict[str, int] = {p: 0 for p in periods}
         for i, period in enumerate(periods):
@@ -438,11 +439,18 @@ class DataManager:
                 log.info("%s %s: %d rows < %d (稀疏期常态, skip write)", results_tag, period, len(df), floor)
                 continue
             d = (df if df.index.name else df.rename_axis("code")).reset_index()
-            rows = list(zip(d["code"], [period] * len(d), d.get("announce_date"),
-                            d.get("np_yoy"), d.get("rev_yoy")))
-            results[period] = (self.store.upsert_stock_express(rows, source="em_yjkb")
-                               if table_tag == "express"
-                               else self.store.upsert_stock_report_actual(rows, source="em_yjbb"))
+
+            def _col(name):
+                return d[name] if name in d.columns else [None] * len(d)
+            if table_tag == "report":
+                rows = list(zip(d["code"], [period] * len(d), _col("announce_date"),
+                                _col("np_yoy"), _col("rev_yoy"), _col("eps"),
+                                _col("bvps"), _col("np_abs"), _col("rev_abs")))
+                results[period] = self.store.upsert_stock_report_actual(rows, source="em_yjbb")
+            else:
+                rows = list(zip(d["code"], [period] * len(d), _col("announce_date"),
+                                _col("np_yoy"), _col("rev_yoy")))
+                results[period] = self.store.upsert_stock_express(rows, source="em_yjkb")
             log.info("%s %s: %d rows", results_tag, period, results[period])
         if any(results.values()):
             self.store.set_meta(f"last_{table_tag}_update", fetcher.today_str())
@@ -454,8 +462,40 @@ class DataManager:
         return self._update_perf_panel(fetcher.fetch_stock_express, "express", periods, 10, "stock_express")
 
     def update_stock_report_actual(self, periods: Optional[list[str]] = None) -> dict:
-        """定期报告实际值(stock_yjbb_em)全市场 → stock_report_actual。季度全量(数千行)。"""
+        """定期报告实际值(stock_yjbb_em)全市场 → stock_report_actual(含 V8 扩列
+        eps/bvps/np_abs/rev_abs——TTM/PE 自算与 PB 分位轨原料)。季度全量(数千行)。"""
         return self._update_perf_panel(fetcher.fetch_stock_report_actual, "report", periods, 500, "stock_report")
+
+    def update_stock_balance(self, periods: Optional[list[str]] = None) -> dict:
+        """全市场资产负债表汇总(stock_zcfz_em)→ stock_balance(V8 高业绩池风险筛腿)。
+        按报告期整表(每期一次调用~4s), 披露未落完的期行数自然稀少(随 --fix 季度节奏重拉幂等)。
+        Returns {period: rows}。"""
+        periods = periods or _recent_report_periods(8)
+        results: dict[str, int] = {p: 0 for p in periods}
+        for i, period in enumerate(periods):
+            if i:
+                time.sleep(0.5)
+            try:
+                df = fetcher.fetch_stock_balance(period)
+            except Exception as e:  # noqa: BLE001
+                log.warning("stock_balance %s failed: %s", period, str(e)[:100])
+                continue
+            if len(df) < 100:
+                log.info("stock_balance %s: %d rows < 100 (期未披露完, skip)", period, len(df))
+                continue
+            d = df.rename_axis("code").reset_index()
+
+            def _col(name):
+                return d[name] if name in d.columns else [None] * len(d)
+            rows = list(zip(d["code"], [period] * len(d), _col("announce_date"),
+                            _col("cash"), _col("receivables"), _col("inventory"),
+                            _col("total_assets"), _col("total_liab"), _col("equity"),
+                            _col("debt_ratio")))
+            results[period] = self.store.upsert_stock_balance(rows, source="em_zcfz")
+            log.info("stock_balance %s: %d rows", period, results[period])
+        if any(results.values()):
+            self.store.set_meta("last_stock_balance_update", fetcher.today_str())
+        return results
 
     def update_consensus(self, min_rows: int = 1000) -> int:
         """Whole-market analyst-consensus weekly snapshot (E0, 周度节奏).
@@ -1095,26 +1135,21 @@ class DataManager:
 
     # ---- Candidate-pool feeds (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
     def update_stock_spot(self) -> int:
-        """全市场现货快照(日更·单调用)→ stock_spot。universe 的 ST/退 过滤 + 展示名唯一来源。
-        主源 push2/clist 被拦时退 consensus 整表名称列兜底(datacenter 端点族,稳定;
-        close=NaN 可接受——仅调试字段)。两路全败返回 0(调用方退最后快照)。"""
-        df, source = None, ""
+        """全市场现货快照(日更·单调用)→ stock_spot。universe 的 ST/退 过滤 + 展示名唯一来源
+        + V8 市值/估值列。push2 被拦时**不再静默降级**名称兜底(全市场宇宙需要市值列,
+        名称-only 兜底撑不住;2026-09-12 用户批准)——fetcher 内重试 3 次后仍败返回 0,
+        调用方保最后快照并显式报错。"""
         try:
             df = fetcher.fetch_stock_spot()
-            source = "em_spot"
         except Exception as e:  # noqa: BLE001
-            log.warning("stock_spot failed (%s), fallback to consensus names", str(e)[:100])
-            try:
-                df = fetcher.fetch_stock_spot_from_consensus()
-                source = "em_profit_forecast_names"
-            except Exception as e2:  # noqa: BLE001
-                log.warning("stock_spot fallback failed: %s", str(e2)[:120])
-                return 0
+            log.error("stock_spot FAILED after retries: %s — 保留最后快照, universe 退旧日期",
+                      str(e)[:150])
+            return 0
         today = fetcher.today_str()
-        n = self.store.upsert_stock_spot(df, date=today, source=source)
+        n = self.store.upsert_stock_spot(df, date=today, source="em_spot")
         self.store.set_meta("last_stock_spot_update", today)
         pruned = self.store.prune_stock_spot(keep_days=90)
-        log.info("stock_spot %s: %d names (src=%s, pruned %d old rows)", today, n, source, pruned)
+        log.info("stock_spot %s: %d names (pruned %d old rows)", today, n, pruned)
         return n
 
     def update_industry_members(self, sleep: float = 0.3) -> int:

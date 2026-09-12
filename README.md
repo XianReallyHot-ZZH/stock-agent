@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Tests](https://img.shields.io/badge/tests-1000%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-1027%20passing-brightgreen.svg)
 ![Data](https://img.shields.io/badge/data-AkShare-orange.svg)
 ![Status](https://img.shields.io/badge/status-shadow%20only-lightgrey.svg)
 
@@ -44,9 +44,9 @@
 - **宏观框架看板**：沿 JZ 因果链（利率→曲线→美元→金属→能源→权益）做纯数据跟踪与分析；🥇**黄金阶段定位器**（价格结构+微观紧缺+利率美元驱动→阶段+驱动三栏+置信度+操作建议）；🔬黄金微观紧缺（COMEX 库存/CFTC 投机+商业持仓/央行购金/实际利率/期限溢价）；📰经济日历（美国高重要性事件·数据真伪 surprise+催化剂·对黄金影响）。
 - **国内宏观看板**：中国本土宏观观测层（与宏观框架=海外宏观对称）——①货币信用（M2/M1 同比+剪刀差+社融脉冲+2月动量拐点状态机，原指数择时⑪已并入此处）②利率与流动性（Shibor/FDR007 政策目标利率/LPR/中债期限结构+OMO 净投放月度近似）③政策日历（下次时点+倒计时）④社融可观测成分（政府债=国债+地方债月内累计 nowcast+社融分项，观测非预测）⑤会议→M2 转向历史回放（实证：四锚点会后 3 月上行概率全 42-44%，「会后放水」叙事无统计支持）⑥通胀（CPI/PPI+上下游剪刀差）⑦实体（PMI 荣枯线+社零/工业增加值）；温度计非开关、先行代理未过实证前一律观察项，永不喂引擎。
 - **仓位管理看板**：估值档 × 预案表对照器——沪深300 PE+PB 10 年滚动分位四档逐日回放（2005 起，与指数看板 ④ 同口径）+ 档位统计（历史占比/前向 1y·3y 收益中位/年化波动）+ 切换事件台账 + 环境注记（恐贪/地量/关键位）；预案表 = `params.yaml position_plan` 用户自定义的档位→权益仓位%区间，看板只对照「现在在哪格」，温度计非开关·不喂引擎。
-- **候选个股池看板**：研报覆盖池（~2300 只·consensus∩非ST）的**筛选漏斗**——六张策略表：①偏离超卖复合分（自身百分位触发+护栏+企稳，防飞刀）②业绩预期猛×深跌（周期=商品驱动+g确认 / 成长=三腿；披露窗口A全类型+B仅周期）③一致预期修正动量（个股版 E4）④PEAD 预告超预期（point-in-time 双腿无前视）⑤业绩变脸监测（跳档/趋势破位/连亏/拐头，陈老师方法论系统化）⑥戴维斯双击候选（stage-2 按需腿）；raw+分红运行时前复权防除息假极值；配 event-study 验证器（结论含无 edge 也注入读图说明）。⏸ **数据更新已暂停**（2026-08-29，等用户指令重启；旧 HTML 冻结在 08-27 仍可看，恢复时 `dashboard_data_check.py --fix --pool` 补数据再重渲染）。
+- **候选个股池看板**：**高业绩池（陈氏季度池 V8，2026-09 重写，六表退役）**——全市场非 ST 宇宙，逐股状态机：每只股票在自己的披露日（预告/快报/正式报三环）用当时可得数据过「营收+扣非双高增长」地板（point-in-time 无前视），过门入池/下次披露不过门出池（「增速不行了下季度自然被淘汰」）；两轨估值（非周期 PEG≤1 自算 PE_ttm / 周期 PB 自身历史分位≤30%——周期底 PE 爆表不被误杀）+ 风险红黄旗（商誉/存贷双高代理硬剔；应收/并购代理/扭亏复审交人工，③节内嵌复审 SOP 教学+docs/stock_pool/MANUAL_REVIEW.md 详版）+ Top-N；行业构成涌现簇信号（商品关联周期 ≥50% 高亮）+ 环比 diff 新进/淘汰 + 池成员留档回放；配状态机回放验证器（vs 七宽基+消融三臂，结论含无 edge 也注入读图说明，「8 年 70% 跑赢所有宽基」已登记 CLAIMS_LEDGER Claim 003 可证伪）。
 - **自律度对账**：记录目标持仓 vs 实际执行，量化自己的纪律。
-- **纯函数 + 配置驱动 + 全测试覆盖**（1000 个 pytest），回测与实盘共用同一引擎函数。
+- **纯函数 + 配置驱动 + 全测试覆盖**（1027 个 pytest），回测与实盘共用同一引擎函数。
 
 ---
 
@@ -115,7 +115,7 @@ python scripts/backfill_scale.py --start 2021-01-01   # ETF 份额历史（~10 �
 python scripts/fix_splits.py                          # 修拆分（运行一次）
 
 # 八套看板所需（首次较久，之后增量；仓位管理看板零新增回填，直接用 backfill_index 的沪深300 PE/PB）
-# （候选个股池冷启动较重 ~2-3h，见下文第 7 节；国内宏观一键如下）
+# （候选个股池冷启动较重 ~2-4h，见下文第 7 节；国内宏观一键如下）
 python scripts/backfill_china_macro.py               # 国内宏观:Shibor/FDR007/LPR/中债+央行表+国债/地方债+通胀/实体
 python scripts/setup_research_dashboard.py --skip-pe  # ETF 研究看板一键（价格+份额+净值+业绩预期底座+渲染；--skip-pe 省PE ~30min）
 python scripts/backfill_index.py                      # 7 宽基日线(含上证综指·中证1000) + 沪深300 PE/PB + 全市场 PB + 两市成交额 + 上交所融资融券(⑨恐惧贪婪)
@@ -134,7 +134,7 @@ python scripts/backfill_economic_calendar.py           # 经济日历(美国高�
 ### 验证安装
 
 ```bash
-python -m pytest tests/ -q          # 1000 个测试全过即环境 OK
+python -m pytest tests/ -q          # 1027 个测试全过即环境 OK
 ```
 
 ---
@@ -194,7 +194,7 @@ python scripts/stock_report.py --push-alerts  # 生成 + 推送个股提醒（A1
 ```bash
 python scripts/macro_framework_report.py          # 生成 data/macro_framework.html（纯数据·无LLM·深浅色可切）
 # 只刷宏观一个看板（~3 分钟）：详见 .claude/skills/macro-dashboard/SKILL.md
-# 或全刷八看板（候选池暂停中现刷七个）：/dashboards（详见 .claude/skills/dashboards/SKILL.md）
+# 或全刷八看板：/dashboards（详见 .claude/skills/dashboards/SKILL.md）
 ```
 
 ### 6. 仓位管理看板（第五看板 · 只读对照）
@@ -205,15 +205,19 @@ python scripts/macro_framework_report.py          # 生成 data/macro_framework.
 python scripts/position_report.py               # 生成 data/position.html（数据腿=backfill_index.py 的 index_pe/pb，零新增回填）
 ```
 
-### 7. 候选个股池看板（第六看板 · 只读筛选漏斗）
+### 7. 候选个股池看板（第六看板 · 高业绩池 V8 · 只读筛选旁路）
 
-研报覆盖池（~2300 只）六策略筛选：①偏离超卖（自身百分位+护栏+企稳）②猛×深跌（分类型+披露窗口A/B）③修正动量 ④PEAD ⑤变脸监测 ⑥双击候选；raw+分红运行时前复权。冷启动一次性 ~2-3.5h（可断点续跑）。⏸ **数据更新已暂停（2026-08-29，等用户指令重启；旧 HTML 冻结在 08-27 仍可看）**——暂停期 `dashboard_data_check --fix` 默认跳过池腿并打印提示，恢复时跑 `--fix --pool` 一次性补齐落后增量再重渲染。
+陈氏季度池（重远投资观方法论提炼，存档 docs/stock_pool/MANUAL_REVIEW.md）：全市场非 ST 宇宙，
+三环地板（预告单腿→快报双轴→正式扣非双轴，幸存者 sina 精筛腿）+ 两轨估值（PEG / PB 分位）+
+风险红黄旗 + Top-N≈100；逐股状态机进出、行业涌现簇、环比 diff、池留档回放。冷启动一次性
+~2-4h（spot→行业→正式报扩列16期→资产负债16期→日线→分红→幸存者精筛；可断点续跑）；
+日度增量由 `dashboard_data_check --fix` 自动带（--no-pool 可跳）。
 
 ```bash
-python scripts/backfill_stock_pool.py --all     # 冷启动：spot→行业→日线→分红（重跑=续跑）
-python scripts/stock_pool_report.py             # 生成 data/stock_pool.html（--no-stage2 跳过候选腿）
-python scripts/validate_deviation_extreme.py    # 策略1 实证（三臂 vs 基线，结论注入看板）
-python scripts/validate_pead.py                 # PEAD 实证（两臂 vs 基线，结论注入看板）
+python scripts/backfill_stock_pool.py --all     # 冷启动：spot→行业→正式报扩列16期→资产负债16期→日线→分红→幸存者sina精筛（重跑=续跑）
+python scripts/stock_pool_report.py             # 生成 data/stock_pool.html（--no-sina 跳过精筛腿）
+python scripts/validate_high_earnings_pool.py  # 验证器：回放 vs 七宽基 + 消融三臂 → study HTML + 结论写 meta
+# （旧六表验证器 validate_deviation_extreme / validate_pead 已随 V8 退役，留盘存档勿运行）
 ```
 
 ### 8. 国内宏观看板（第七看板 · 只读观测 · 与宏观框架=海外宏观对称）
@@ -265,7 +269,7 @@ python scripts/validate_commodity_inventory.py  # 库存 event-study（CZCE 三�
 
 ## 📡 数据源
 
-- **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值。
+- **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值；候选个股池另用 业绩报表扩列（eps/每股净资产/净利润绝对值→TTM 自算）+ 资产负债表汇总 zcfz（风险筛，无商誉/借款列——商誉走 sina 逐股精筛腿）+ 全市场现货快照（市值/PE/PB 列）。
 - ETF 份额：SSE `fund_etf_scale_sse` + SZSE `fund_etf_scale_szse`（双源）。
 - 单位净值：`fund_etf_fund_info_em`（真 NAV，天然正确无需复权）。
 - 沪深 300 PE/PB：legulegu（仅沪深300/上证50/中证500，不支持创业板指/科创50）。
@@ -280,7 +284,7 @@ python scripts/validate_commodity_inventory.py  # 库存 event-study（CZCE 三�
 ## 🧪 测试
 
 ```bash
-python -m pytest tests/ -q          # 1000 个
+python -m pytest tests/ -q          # 1027 个
 ```
 
 纯函数优先（信号层无副作用，所有计算在最后一根 K 线评估）；每个新功能必须有 pytest 测试；回测和实盘共用同一引擎函数（`score_universe` / `check_exits` / `decide_target`）。
@@ -301,14 +305,14 @@ stock-agent/
 │   ├── commodity/     大宗商品看板(雷达/品种面板·国际主语/比价/投资标的错配/基差库存)
 │   ├── western_macro/ 宏观框架(因果链+黄金阶段定位器) + 西方预测台账(ADR-0001)
 │   ├── china_macro/   国内宏观(货币信用/利率流动性/政策日历/社融成分/通胀/实体)
-│   ├── pool/          候选个股池(六策略筛选漏斗·复权核心)
+│   ├── pool/          候选个股池(高业绩池·三环地板/两轨估值/红黄旗/状态机)
 │   ├── report/        LLM 客户端 · 晨报生成(零预测)
 │   ├── notify/        Notifier 接口 · 企业微信/飞书/PushPlus
 │   └── scheduler/     jobs(eod/晨报) · 幂等自愈 runner
 ├── scripts/           update_data · run_eod · run_morning_report · run_backtest ·
 │                      sweep_params · walk_forward · backfill_scale · fix_splits ·
 │                      research_report · index_timing_report · stock_report · ...
-├── tests/             单测(1000)
+├── tests/             单测(1027)
 ├── docs/              PRD · 执行计划 · 课程笔记 · Phase 交接
 ├── DESIGN.md          产品设计(16 决策 + 架构 + 路线图 + 回测结论)
 ├── CLAUDE.md          开发规范(命令 + 架构 + 代码风格 + 数据质量)

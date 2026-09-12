@@ -665,9 +665,11 @@ def fetch_stock_express(report_period: str, timeout: float = 60.0) -> pd.DataFra
 def fetch_stock_report_actual(report_period: str, timeout: float = 60.0) -> pd.DataFrame:
     """All A-share 定期报告实际值(业绩报表) for a report period → df indexed by code.
 
-    Columns [np_yoy, rev_yoy, announce_date] — 净利润-同比增长 / 营业总收入-同比增长 /
-    最新公告日期(列名 2026-08-16 实测; 营收口径与快报不同: 总收入 vs 营业收入, 同比比较不受影响).
-    三环链第三环: 正式报=审计后硬数据, 披露窗口滞后 45 天-4 个月. 累计口径(勿做单季拆分, 调研§3.4).
+    Columns [np_yoy, rev_yoy, announce_date, eps, bvps, np_abs, rev_abs] — 净利润-同比增长 /
+    营业总收入-同比增长 / 最新公告日期 / 每股收益 / 每股净资产 / 净利润-净利润(绝对值,累计口径) /
+    营业总收入-营业总收入(绝对值)(列名 2026-09-12 实测扩列; 营收口径与快报不同: 总收入 vs 营业收入,
+    同比比较不受影响). 三环链第三环: 正式报=审计后硬数据, 披露窗口滞后 45 天-4 个月. 累计口径
+    (勿做单季拆分, 调研§3.4). 高业绩池(V8)消费: np_abs/rev_abs→TTM 净利/PE 自算, bvps→PB 分位轨.
     """
     df = _run_with_timeout(ak.stock_yjbb_em, timeout, date=report_period)
     if df is None or len(df) == 0:
@@ -677,6 +679,36 @@ def fetch_stock_report_actual(report_period: str, timeout: float = 60.0) -> pd.D
         "np_yoy": pd.to_numeric(df.get("净利润-同比增长"), errors="coerce"),
         "rev_yoy": pd.to_numeric(df.get("营业总收入-同比增长"), errors="coerce"),
         "announce_date": df.get("最新公告日期", "").astype(str).str.slice(0, 10),
+        "eps": pd.to_numeric(df.get("每股收益"), errors="coerce"),
+        "bvps": pd.to_numeric(df.get("每股净资产"), errors="coerce"),
+        "np_abs": pd.to_numeric(df.get("净利润-净利润"), errors="coerce"),
+        "rev_abs": pd.to_numeric(df.get("营业总收入-营业总收入"), errors="coerce"),
+    })
+    return out.drop_duplicates("code", keep="last").set_index("code")
+
+
+def fetch_stock_balance(report_period: str, timeout: float = 60.0) -> pd.DataFrame:
+    """All A-share 资产负债表汇总(zcfz) for a report period → df indexed by code.
+
+    Columns [cash, receivables, inventory, total_assets, total_liab, equity, debt_ratio,
+    announce_date] — 货币资金/应收账款/存货/总资产/总负债/股东权益合计/资产负债率(%,÷100 归一)/
+    公告日期(列名 2026-09-12 实测 15 列; **无商誉/借款列**——商誉走 sina 逐股精筛腿, 有息负债
+    不可得 → 存贷双高用 货币资金/总资产×资产负债率 代理口径, 见 pool/risk.py)。
+    高业绩池(V8)风险筛腿: 应收占比/存贷双高代理/净资产分母。
+    """
+    df = _run_with_timeout(ak.stock_zcfz_em, timeout, date=report_period)
+    if df is None or len(df) == 0:
+        raise FetchError(f"empty stock_balance {report_period}")
+    out = pd.DataFrame({
+        "code": df["股票代码"].astype(str).str.zfill(6),
+        "cash": pd.to_numeric(df.get("资产-货币资金"), errors="coerce"),
+        "receivables": pd.to_numeric(df.get("资产-应收账款"), errors="coerce"),
+        "inventory": pd.to_numeric(df.get("资产-存货"), errors="coerce"),
+        "total_assets": pd.to_numeric(df.get("资产-总资产"), errors="coerce"),
+        "total_liab": pd.to_numeric(df.get("负债-总负债"), errors="coerce"),
+        "equity": pd.to_numeric(df.get("股东权益合计"), errors="coerce"),
+        "debt_ratio": pd.to_numeric(df.get("资产负债率"), errors="coerce") / 100.0,
+        "announce_date": df.get("公告日期", "").astype(str).str.slice(0, 10),
     })
     return out.drop_duplicates("code", keep="last").set_index("code")
 
@@ -767,17 +799,19 @@ def fetch_index_constituents(index_code: str, timeout: float = 40.0) -> pd.DataF
 
 
 # ---- Candidate-pool screening feeds (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
-def fetch_stock_spot(min_rows: int = 4000, timeout: float = 60.0, retries: int = 2) -> pd.DataFrame:
+def fetch_stock_spot(min_rows: int = 4000, timeout: float = 60.0, retries: int = 3) -> pd.DataFrame:
     """全市场 A 股现货快照(东财 stock_zh_a_spot_em 整表, 一次调用)。
 
-    Returns DataFrame indexed by 6-digit code with [name, close] — 候选池 universe 的
-    ST/退 名称过滤 + 展示名唯一来源。close 仅调试用(筛选一律走 daily_prices 复权序列)。
+    Returns DataFrame indexed by 6-digit code with [name, close, mktcap, float_mktcap,
+    pe_dyn, pb] — 候选池 universe 的 ST/退 名称过滤 + 展示名唯一来源 + 高业绩池(V8)的
+    市值/估值当前口径(总市值/流通市值(元)/市盈率-动态/市净率, akshare 原表本有、2026-09
+    起保留不再丢弃)。close 仅调试用(筛选一律走 daily_prices 复权序列)。
     Thin-guard: 行数 < min_rows 视为端点半死 → FetchError, 空结果绝不落库(consensus 同款教训)。
     """
     last_err = None
     for attempt in range(retries):
         if attempt > 0:
-            time.sleep(1.5 * attempt)
+            time.sleep(2.0 * attempt)
         try:
             df = _run_with_timeout(ak.stock_zh_a_spot_em, timeout)
             n = 0 if df is None else len(df)
@@ -787,6 +821,10 @@ def fetch_stock_spot(min_rows: int = 4000, timeout: float = 60.0, retries: int =
                 "code": df["代码"].astype(str).str.zfill(6),
                 "name": df["名称"].astype(str),
                 "close": pd.to_numeric(df["最新价"], errors="coerce"),
+                "mktcap": pd.to_numeric(df.get("总市值"), errors="coerce"),
+                "float_mktcap": pd.to_numeric(df.get("流通市值"), errors="coerce"),
+                "pe_dyn": pd.to_numeric(df.get("市盈率-动态"), errors="coerce"),
+                "pb": pd.to_numeric(df.get("市净率"), errors="coerce"),
             })
             return out.drop_duplicates("code", keep="last").set_index("code")
         except FetchError as ex:
@@ -797,12 +835,9 @@ def fetch_stock_spot(min_rows: int = 4000, timeout: float = 60.0, retries: int =
 
 
 def fetch_stock_spot_from_consensus(min_rows: int = 1000, timeout: float = 90.0) -> pd.DataFrame:
-    """spot 兜底(纯名称): consensus 盈利预测整表自带「名称」列(stock_profit_forecast_em,
-    datacenter-web 端点族——与 push2 行情族不同源,限流互不影响,实测稳定)。
-
-    push2/clist 被本网拦时(RemoteDisconnected, akshare 已知顽疾)用它保住 universe 的
-    ST 过滤+展示名。close 置 NaN(仅调试字段,筛选一律走 daily_prices)。Thin-guard 同款。
-    """
+    """[已退役·留盘休眠] spot 名称兜底(V8 起不再接线: 全市场宇宙需要市值/PE/PB 列,名称-only
+    兜底撑不住; push2 被拦时 manager 显式报错保最后快照, 不静默降级——2026-09-12 用户批准)。
+    保留函数体供历史参考, 调用方已删。"""
     df = _run_with_timeout(ak.stock_profit_forecast_em, timeout, symbol="")
     n = 0 if df is None else len(df)
     if n < min_rows or "代码" not in df.columns or "名称" not in df.columns:

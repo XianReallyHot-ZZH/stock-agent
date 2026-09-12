@@ -1,352 +1,352 @@
-"""装配层(唯一读 store 的模块): universe → 逐股装配 → 六表快照 dict(render 的契约)。
+"""装配层(唯一读 store 的模块): 全市场宇宙 → 三环地板粗筛 → 幸存者精筛 → 高业绩池快照。
 
-流程(计划 §7): consensus∩spot → derive_universe → join_industry → 逐股(分红前复权序列 →
-偏离/回撤/企稳/嫌疑带 → 当期三环 → 窗口状态 → S1 复合分 / S2 猛分 / 修正动量 / 变脸 / PEAD)
-→ {s1_rows, s2_rows, revision, pead, face_up/down, 元数据}。全部只读,永不喂引擎。
-纯函数姊妹模块见 universe/prices/scoring/fierce/calendar/revision/pead/facechange。
+流程(V8 重写, 2026-09; 旧六表装配已退役): spot 非 ST 宇宙 → 当期三环(逐股活跃环+
+地板判定) → 过地板幸存者(批量粗筛,归母口径) → 逐股懒装配(sina 扣非/商誉精筛腿 +
+PE_ttm/PEG 或 PB 分位两轨估值 + 红黄风险旗) → 两轨各自排名合并 Top-N → 池快照 dict
+(render 的契约)。全部只读,永不喂引擎;纯函数姊妹模块见 universe/gates/valuation/risk/
+sector/calendar/prices。验证器(validate_high_earnings_pool)复用同一套判定原语做回放。
 """
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pandas as pd
 
 from ..config import get_config
-from ..research.timing import deviation_extremes
-from ..tracker import leading
-from ..tracker.stock_diagnose import diagnose_davis, price_reversal, stabilize_factor
 from . import calendar as cal
-from . import facechange as fc
-from . import fierce as fe
-from . import pead as pe
+from . import gates as gt
 from . import prices as pr
-from . import revision as rv
-from . import scoring as sc
+from . import risk as rk
+from . import sector as sec
 from . import universe as uni
+from . import valuation as vl
 
 
 def _nan(v) -> bool:
     return v is None or (isinstance(v, float) and math.isnan(v))
 
 
-# ---------- 全市场面板 → 逐股 dict(一次拉 8 期,比逐股 2800 次调用省) ----------
-def gather_forecasts(store, codes: set[str]) -> dict[str, pd.DataFrame]:
-    """预告面板 → {symbol: df[report_period,yoy,type,announce_date]}(validate 脚本共用)。"""
-    out: dict[str, list] = {}
-    for period, _n in store.forecast_period_counts():
-        frame = store.get_stock_forecast_period(period)
-        for code, row in frame.iterrows():
-            if code in codes:
-                out.setdefault(code, []).append(
-                    {"report_period": period, "yoy": row.get("yoy"),
-                     "type": row.get("type"), "announce_date": row.get("announce_date")})
-    return {c: pd.DataFrame(r) for c, r in out.items() if r}
+def _period_frame(frame: pd.DataFrame, codes: set[str]) -> pd.DataFrame:
+    """期间帧过滤到宇宙 codes(保留全列, index=code)。"""
+    if frame is None or len(frame) == 0:
+        return pd.DataFrame()
+    return frame[[str(c) in codes for c in frame.index]]
 
 
-def gather_actuals(store, codes: set[str]) -> dict[str, pd.DataFrame]:
-    """正式报面板 → {symbol: df(index=report_period [np_yoy, announce_date])}。"""
-    out: dict[str, list] = {}
-    for period, _n in store.forecast_period_counts():
-        try:
-            frame = store.get_stock_report_period(period)
-        except Exception:  # noqa: BLE001 — 缺期跳过
-            continue
-        for code, row in frame.iterrows():
-            if code in codes:
-                out.setdefault(code, []).append(
-                    {"report_period": period, "np_yoy": row.get("np_yoy"),
-                     "announce_date": row.get("announce_date")})
-    merged: dict[str, pd.DataFrame] = {}
-    for c, r in out.items():
-        df = pd.DataFrame(r)
-        merged[c] = df.set_index("report_period").sort_index()
-    return merged
+def _ring_input(fc_row, ex_row, ac_row) -> tuple[dict | None, dict | None, dict | None]:
+    """三环行 → gates 契约 dict(公告日 + 环数据; None=未落地)。"""
+    forecast = express = actual = None
+    if fc_row is not None:
+        forecast = {"announce_date": fc_row.get("announce_date"),
+                    "yoy": fc_row.get("yoy"), "type": fc_row.get("type")}
+    if ex_row is not None:
+        express = {"announce_date": ex_row.get("announce_date"),
+                   "np_yoy": ex_row.get("np_yoy"), "rev_yoy": ex_row.get("rev_yoy")}
+    if ac_row is not None:
+        actual = {"announce_date": ac_row.get("announce_date"),
+                  "np_yoy": ac_row.get("np_yoy"), "rev_yoy": ac_row.get("rev_yoy")}
+    return forecast, express, actual
 
 
-def _ring_dates(fc_df, ex_frame, ac_frame, period: str, code: str) -> dict:
-    """当期三环的公告日(forecast 从逐股面板;express/actual 从当期帧)。None = 未落地。"""
-    f = e = a = None
-    if fc_df is not None and len(fc_df):
-        row = fc_df[fc_df["report_period"] == period]
-        if len(row):
-            f = str(row.iloc[-1].get("announce_date") or "")[:10] or None
-    if ex_frame is not None and code in ex_frame.index:
-        v = ex_frame.loc[code, "announce_date"]
-        e = str(v)[:10] if isinstance(v, str) and v else None
-    if ac_frame is not None and code in ac_frame.index:
-        v = ac_frame.loc[code, "announce_date"]
-        a = str(v)[:10] if isinstance(v, str) and v else None
-    return {"forecast": f, "express": e, "actual": a}
+def _window_periods(now, n: int = 3) -> list[str]:
+    """最近 n 个季末报告期(YYYYMMDD 降序;含尚未开披露的当期——环帧空自然跳过)。"""
+    from datetime import date as _date
+    d = now.date() if hasattr(now, "date") else now
+    out: list[str] = []
+    y = d.year
+    while len(out) < n:
+        for qm, qd in ((12, 31), (9, 30), (6, 30), (3, 31)):
+            if _date(y, qm, qd) <= d:
+                key = f"{y}{qm:02d}{qd:02d}"
+                if key not in out:
+                    out.append(key)
+                    if len(out) >= n:
+                        break
+        y -= 1
+    return out
 
 
-def build_pool_snapshot(store, config=None, asof: str | None = None) -> dict:
-    """装配六表快照(读 store,只读)。asof = "YYYY-MM-DD"(回放/测试)| None=今天。"""
+def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
+                                 persist: bool = True) -> dict:
+    """装配高业绩池快照(读 store,只读)。asof="YYYY-MM-DD"(回放/测试)|None=今天;
+    persist=asof 为今天时默认把池成员追记进 pool_membership(环比 diff/历史回放的底座)。"""
     cfg = config or get_config()
     p = cfg.params.get("stock_pool", {}) or {}
+    hcfg = p.get("high_pool", {}) or {}
     ucfg = p.get("universe", {}) or {}
-    s1cfg = p.get("strategy1", {}) or {}
-    s2cfg = p.get("strategy2", {}) or {}
-    fccfg = p.get("facechange", {}) or {}
-    revcfg = p.get("revision", {}) or {}
-    peadcfg = p.get("pead", {}) or {}
     now = (datetime.strptime(asof, "%Y-%m-%d") if asof else datetime.now())
+    asof_str = now.strftime("%Y-%m-%d")
 
-    # ---- universe + 行业 ----
-    _, cons = store.get_consensus_snapshot(asof=now.strftime("%Y%m%d"))
+    # ---- 宇宙 + 行业 ----
     spot = store.latest_stock_spot()
     uni_df = uni.derive_universe(
-        cons, spot, min_reports=int(ucfg.get("min_reports", 3)),
-        exclude_prefixes=tuple(ucfg.get("exclude_name_prefixes", uni.EXCLUDED_NAME_PREFIXES)))
+        spot, exclude_prefixes=tuple(ucfg.get("exclude_name_prefixes",
+                                              uni.EXCLUDED_NAME_PREFIXES)))
     ind_map = store.industry_map()
-    class_cfg = cfg.industry_class()
-    joined = uni.join_industry(uni_df, ind_map, class_cfg)
+    joined = uni.join_industry(uni_df, ind_map, cfg.industry_class())
     cov = uni.industry_coverage(joined)
-    codes = [str(c) for c in joined.index]
-    codeset = set(codes)
-    # 名称查表(spot join 而来): PEAD/修正动量等按 code 装配的表补 name 用——
-    # 不补则看板股票列退 code 兜底,显示「688308 688308」(2026-08 抓回)
-    uni_names = joined["name"].astype(str).to_dict() if "name" in joined.columns else {}
+    codeset = {str(c) for c in joined.index}
 
-    # ---- 当期三环帧 + 逐股面板 ----
+    # ---- 三环帧: 最近 3 个报告期(跨期取最新落地环——披露间隙期池由上期环撑着,
+    #      这正是状态机语义: Q2 环撑到 Q3 披露落地才换血,无任意批重建时点) ----
     period = cal.current_period(now)
-    ex_frame = store.get_stock_express_period(period)
-    ac_frame = store.get_stock_report_period(period)
-    fc_map = gather_forecasts(store, codeset)
-    ac_map = gather_actuals(store, codeset)
+    win_periods = _window_periods(now, 3)
+    frames = {}
+    for p in win_periods:
+        frames[p] = {
+            "forecast": _period_frame(store.get_stock_forecast_period(p), codeset),
+            "express": _period_frame(store.get_stock_express_period(p), codeset),
+            "actual": _period_frame(store.get_stock_report_period(p), codeset),
+        }
+    bal_frames = {p: store.get_stock_balance_period(p) for p in win_periods}
+    ring_order = {"forecast": 0, "express": 1, "actual": 2}
 
-    # ---- 修正动量(全池一表) ----
-    n_dates = len(store.consensus_snapshot_dates())
-    snap_then_date = (now - timedelta(days=7 * int(revcfg.get("lookback_weeks", 4)))).strftime("%Y%m%d")
-    _, snap_then = store.get_consensus_snapshot(asof=snap_then_date)
-    rev = rv.revision_table(cons, snap_then, dates_available=n_dates, codes=codes, cfg=revcfg)
-    for r in rev["rows"]:                      # 纯函数按 code 出行,名称由装配层补
-        r["name"] = uni_names.get(r["code"], r["code"])
-    rev_by_code = {r["code"]: r for r in rev["rows"]}
+    # ---- 市值过滤(默认关;开=全市场 P80 分位) ----
+    mkt_on = bool(hcfg.get("mktcap_filter_on", False))
+    mkt_cap_pct = None
+    if mkt_on and "mktcap" in joined.columns:
+        caps = pd.to_numeric(joined["mktcap"], errors="coerce").dropna()
+        if len(caps) > 100:
+            mkt_cap_pct = float(caps.quantile(float(hcfg.get("mktcap_filter_pct", 0.80))))
 
-    # ---- 前瞻 g 横截面分位(成长猛 rank 腿) ----
-    g_series = None
-    if "eps_fy1" in joined.columns and "eps_fy2" in joined.columns:
-        e1 = pd.to_numeric(joined["eps_fy1"], errors="coerce")
-        e2 = pd.to_numeric(joined["eps_fy2"], errors="coerce")
-        g = (e2 / e1 - 1.0).where((e1 > 0) & (e2 > 0))
-        g_series = g.rank(pct=True)
-
-    # ---- 商品信号(品种级一次) ----
-    varieties = sorted({v for v in joined.get("commodity_variety", pd.Series(dtype=object))
-                        if isinstance(v, str) and v})
-    com_signals = {v: leading.commodity_signal(store, v, asof=now.strftime("%Y-%m-%d"), config=cfg)
-                   for v in varieties}
-
-    # ---- PEAD 事件(近 periods_back 期,公告日 ≤ now) ----
-    pead_events: list[dict] = []
-    snap_cache: dict[str, pd.DataFrame] = {}
-
-    def _snap(asof_day: str) -> pd.DataFrame:
-        key = asof_day.replace("-", "")
-        if key not in snap_cache:
-            snap_cache[key] = store.get_consensus_snapshot(asof=key)[1]
-        return snap_cache[key]
-
-    periods = [pt for pt, _n in store.forecast_period_counts()][:int(peadcfg.get("periods_back", 8))]
-    recent_cut = (now - timedelta(days=120)).strftime("%Y-%m-%d")
-    for pt in periods:
-        frame = store.get_stock_forecast_period(pt)
-        sub = frame[[c in codeset for c in frame.index]]
-        prior_frame = store.get_stock_report_period(f"{int(pt[:4]) - 1}{pt[4:]}") \
-            if pt[4:] else None
-        for code, row in sub.iterrows():
-            yoy, ann = row.get("yoy"), str(row.get("announce_date") or "")[:10]
-            if pd.isna(yoy) or not ann or ann > now.strftime("%Y-%m-%d") or ann < recent_cut:
-                continue
-            s_now = _snap(ann)
-            s_prior = _snap((datetime.strptime(ann, "%Y-%m-%d") - timedelta(days=365)).strftime("%Y-%m-%d"))
-            eps_now = fy1 = eps_prior = None
-            if code in s_now.index and "eps_fy1" in s_now.columns:
-                eps_now, fy1 = s_now.loc[code, "eps_fy1"], s_now.loc[code, "fy1_year"]
-            if code in s_prior.index and "eps_fy1" in s_prior.columns:
-                eps_prior = s_prior.loc[code, "eps_fy1"]
-            prior_np = None
-            if prior_frame is not None and code in prior_frame.index:
-                prow = prior_frame.loc[code]
-                pann = str(prow.get("announce_date") or "")[:10]
-                v = prow.get("np_yoy")
-                if pann and pann < ann and v is not None and not pd.isna(v):
-                    prior_np = float(v)
-            r = pe.pead_surprise(float(yoy), pt, eps_now=eps_now, eps_prior=eps_prior,
-                                 fy1_year=fy1, prior_actual_yoy=prior_np)
-            if r["valid"]:
-                pead_events.append({"code": str(code),
-                                    "name": uni_names.get(str(code), str(code)),
-                                    "period": pt, "announce_date": ann,
-                                    "type": row.get("type"), "forecast_yoy": float(yoy),
-                                    "surprise_pp": r["surprise_pp"], "expected": r["expected"],
-                                    "leg": r["leg"]})
-    pead_rows = pe.pead_rank(pead_events,
-                             surprise_min_pp=float(peadcfg.get("surprise_min_pp", 10.0)),
-                             top_n=int(peadcfg.get("top_n", 50)))
-
-    # ---- 逐股装配 ----
-    s1_rows: list[dict] = []
-    s2_rows: list[dict] = []
-    face_up: list[dict] = []
-    face_down: list[dict] = []
-    n_price_fresh = 0
-    fresh_cut = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    cliff_lo = float((p.get("prices", {}) or {}).get("cliff_lo", 0.008))
-    cliff_hi = float((p.get("prices", {}) or {}).get("cliff_hi", 0.08))
-    for code in codes:
+    # ---- 第一段: 三环地板粗筛(批量帧, 归母口径;幸存者再走逐股精筛) ----
+    survivors: list[dict] = []
+    n_by_ring = {"forecast": 0, "express": 0, "actual": 0}
+    n_by_period: dict[str, int] = {}
+    for code in joined.index:
         row = joined.loc[code]
-        name = str(row.get("name", code))
-        stype = row.get("type")
+        # 跨期找该股最新落地的环(announce ≤ asof;同日取更后环)
+        landed = []
+        for p in win_periods:
+            fr = frames[p]
+            for ring_name in ("forecast", "express", "actual"):
+                fring = fr[ring_name]
+                if code not in fring.index:
+                    continue
+                r = fring.loc[code]
+                ann = str(r.get("announce_date") or "")[:10]
+                # 闸门: 公告日在报告期末之前 = 上游错标(预告面板每期~30-40行脏),剔除
+                if not ann or ann > asof_str or ann.replace("-", "") < p:
+                    continue
+                landed.append((ann, ring_order[ring_name], p, ring_name, r))
+        if not landed:
+            continue
+        ann, _o, period_used, ring_name, r = max(landed, key=lambda t: (t[0], t[1]))
+        fc_r = r if ring_name == "forecast" else None
+        ex_r = r if ring_name == "express" else None
+        ac_r = r if ring_name == "actual" else None
+        forecast, express, actual = _ring_input(fc_r, ex_r, ac_r)
+        active = gt.resolve_active_ring(forecast, express, actual, asof_str)
+        if active is None:
+            continue
+        floor = gt.ring_floor(active, hcfg)
+        if not floor["passed"]:
+            continue
+        if mkt_cap_pct is not None:
+            cap = row.get("mktcap")
+            if _nan(cap) or float(cap) > mkt_cap_pct:
+                continue
+        n_by_ring[ring_name] += 1
+        n_by_period[period_used] = n_by_period.get(period_used, 0) + 1
+        survivors.append({
+            "code": str(code), "name": str(row.get("name", code)),
+            "industry": row.get("industry", "未映射"), "type": row.get("type"),
+            "commodity_variety": row.get("commodity_variety"),
+            "mktcap": row.get("mktcap"), "spot_close": row.get("close"),
+            "spot_pe_dyn": row.get("pe_dyn"), "spot_pb": row.get("pb"),
+            "ring": ring_name, "announce_date": ann, "period_used": period_used,
+            "np_yoy_bulk": floor["np_yoy"], "rev_yoy": floor["rev_yoy"],
+            "np_axis": floor["np_axis"], "flags": list(floor["flags"]),
+        })
+
+    # ---- 第二段: 幸存者逐股懒装配(精筛+估值+风险) ----
+    rows: list[dict] = []
+    gaps: dict[str, int] = {}
+    sina_needed: list[str] = []
+    for s in survivors:
+        code = s["code"]
+        report_rows = store.stock_report_rows_for(code)
+        # sina 精筛面板(扣非/商誉/净资产——幸存者才有;缺=sina 腿未拉,旗标可消)
+        panel = store.get_stock_financials_panel(code, metrics=["np_deducted", "goodwill"])
+        np_ded = None
+        goodwill_now = None
+        goodwill_series: dict[str, float] = {}
+        if panel is not None and len(panel):
+            if "np_deducted" in panel.columns:
+                np_ded = {str(k): v for k, v in panel["np_deducted"].dropna().items()}
+            if "goodwill" in panel.columns:
+                gw = panel["goodwill"].dropna()
+                goodwill_series = {str(k): v for k, v in gw.items()}
+        else:
+            gaps["sina 未拉"] = gaps.get("sina 未拉", 0) + 1
+            sina_needed.append(code)
+        # 正式环: 扣非复核(有 sina 才精化;无=归母回退+未精筛旗,gates 已带)
+        if s["ring"] == "actual" and np_ded:
+            ded = gt.deducted_yoy(np_ded, s["period_used"])
+            if ded is not None:
+                s["np_yoy_bulk"] = ded
+                s["np_axis"] = "deducted"
+                if "未精筛" in s["flags"]:
+                    s["flags"] = [f for f in s["flags"] if f != "未精筛"]
+        if goodwill_series:
+            # 入场环报告期或更早的最新已披露商誉(阶梯: ≤period_used 的最大报告期)
+            known = [k for k in goodwill_series if k <= s["period_used"]]
+            if known:
+                goodwill_now = goodwill_series[max(known)]
+
+        # ---- 估值两轨 ----
+        stype = s["type"]
+        track = "pb" if stype == "cyclic" else "peg"
+        score = None
+        score_note = ""
         price_df = store.get_series(code)
-        if len(price_df) < 80:
-            continue
-        last_px_date = str(price_df.index[-1])
-        if last_px_date >= fresh_cut:
-            n_price_fresh += 1
-        div = store.get_stock_dividend_series(code)
-        adj, _ = pr.dividend_adjusted_close(price_df["close"].astype(float),
-                                            div if len(div) else None)
-        # 三环 + 窗口
-        rings = _ring_dates(fc_map.get(code), ex_frame, ac_frame, period, code)
-        win = cal.per_stock_window(now, rings["forecast"], rings["express"], rings["actual"],
-                                   stock_type=stype)
-        pr_ = price_reversal(adj)
-        dev = deviation_extremes(adj)
-        suspects = pr.unexplained_cliffs(adj, div if len(div) else None, lo=cliff_lo, hi=cliff_hi)
-        suspect = any(s >= str(adj.index[-6]) for s in suspects)   # 最近 5 根内
-        # 变脸(8 期面板)
-        fcd = fc.facechange(ac_map.get(code), cfg=fccfg) if code in ac_map else \
-            fc.facechange(None)
-        if fcd["valid"]:
-            rec = {"code": code, "name": name, "industry": row.get("industry", "未映射"),
-                   "direction": fcd["direction"], "kinds": fcd["kinds"], "detail": fcd["detail"],
-                   "tail": fcd["tail"]}
-            (face_up if fcd["direction"] == "up" else
-             face_down if fcd["direction"] == "down" else []).append(rec)
-        # S1
-        fc_type = None
-        fcdf = fc_map.get(code)
-        if fcdf is not None and len(fcdf):
-            past = fcdf[fcdf["announce_date"].astype(str).str[:10] <= now.strftime("%Y-%m-%d")]
-            if len(past):
-                fc_type = past.sort_values("report_period").iloc[-1].get("type")
-        rev_row = rev_by_code.get(code)
-        rev_pct = rev_row["rev_pct"] / 100.0 if rev_row else None
-        guards = sc.guardrails(fc_type, rev_pct, fcd.get("direction"), cfg=s1cfg)
-        stab = stabilize_factor(pr_["recent_return"])
-        s1 = sc.oversold_score(dev, stab, guards, cfg=s1cfg)
-        if s1["trigger"]:
-            run_start = sc.oversold_run_start(adj)
-            days_in = None
-            if run_start and run_start in adj.index:
-                days_in = len(adj.loc[run_start:]) - 1
-            s1_rows.append({
-                "code": code, "name": name, "industry": row.get("industry", "未映射"),
-                "type": stype, "dev_pct": dev["pct"], "cur_dev": dev["cur_dev"],
-                "stabilize": stab, "score": s1["score"], "depth": s1["depth"],
-                "guard_pass": s1["guard_pass"], "guard_flags": s1["guard_flags"],
-                "suspect": suspect, "run_start": run_start, "days_in_run": days_in,
-            })
-        # S2
-        dd = fe.deep_drawdown(adj, min_dd=float(s2cfg.get("drawdown_min", 0.40)),
-                              lookback=int(s2cfg.get("drawdown_lookback_days", 250)),
-                              recent=int(s2cfg.get("recent_window", 60)))
-        if dd["deep"]:
-            fierce = None
-            variety = row.get("commodity_variety")
-            if stype == "cyclic":
-                com = com_signals.get(variety) if isinstance(variety, str) else None
-                cg = None
-                if "eps_fy1" in row.index and "eps_fy2" in row.index:
-                    e1, e2 = row.get("eps_fy1"), row.get("eps_fy2")
-                    if not _nan(e1) and not _nan(e2) and float(e1) > 0 and float(e2) > 0:
-                        cg = float(e2) / float(e1) - 1.0
-                fierce = fe.cyclic_fierce(com, dd["recent_return"], cg,
-                                          cfg=(s2cfg.get("cyclic") or {}))
-                legs_txt = f"健康{fierce.get('health') or 0:.1f}×落后{fierce.get('lag_factor') or 0:.2f}"
-            elif stype == "growth":
-                grp = g_series.get(code) if g_series is not None else None
-                rev_up = rev_row["up"] if rev_row else None
-                accel = fe.accel_from_actuals(ac_map.get(code)) if code in ac_map else None
-                fierce = fe.growth_fierce(g_rank_pct=None if _nan(grp) else float(grp),
-                                          revision_up=rev_up, accel_pp=accel,
-                                          cfg=(s2cfg.get("growth") or {}))
-                legs_txt = "/".join(f"{k}={v:.2f}" for k, v in fierce["legs"].items()) or "无腿"
-            if fierce is not None and fe.eligible_s2(True, win["state"], fierce, stype, s2cfg):
-                s2_rows.append({
-                    "code": code, "name": name, "industry": row.get("industry", "未映射"),
-                    "type": stype, "chip": win["chip"], "days_to_formal": win["days_to_formal"],
-                    "drawdown": dd["drawdown"], "recent_return": dd["recent_return"],
-                    "fierce": fierce["fierce"], "legs": legs_txt,
-                    "confirmed": fierce.get("confirmed"),
-                    "variety": variety if isinstance(variety, str) else None,
-                })
+        if track == "peg":
+            ttm = None
+            shares = None
+            if len(report_rows) and report_rows["np_abs"].notna().any():
+                np_abs = {str(k): v for k, v in report_rows["np_abs"].dropna().items()}
+                # TTM 用 ≤asof 已公告的最新期(np_abs 阶梯,point-in-time)
+                known = [rp for rp in np_abs
+                         if str(report_rows.loc[rp, "announce_date"] or "")[:10] <= asof_str]
+                if known:
+                    latest = max(known)
+                    ttm = vl.ttm_net_profit(np_abs, latest)
+                # 股本: spot 市值/现价反推(主) → np_abs/eps 反推(兜底——push2 被拦时
+                # 自洽可用,且与 TTM 同源;两列都是累计口径,比值=总股本)
+                for rp in sorted(known or [], reverse=True):
+                    eps_v = report_rows.loc[rp, "eps"]
+                    if not _nan(eps_v) and float(eps_v) > 0:
+                        shares = float(np_abs[rp]) / float(eps_v)
+                        break
+            shares = vl.implied_shares(s["mktcap"], s["spot_close"]) or shares
+            price_now = None if _nan(s["spot_close"]) else float(s["spot_close"])
+            if price_now is None and price_df is not None and len(price_df):
+                price_now = float(price_df["close"].iloc[-1])   # spot 被拦 → 最后日线
+            pe = vl.pe_ttm(price_now, shares, ttm)
+            if pe is not None and s["np_yoy_bulk"] is not None and s["np_yoy_bulk"] > 0:
+                score = vl.peg(pe, float(s["np_yoy_bulk"]))
+            s.update(pe_ttm=pe, peg=score, shares_implied=shares)
+            if score is None:
+                score_note = "估值缺(TTM/市值/价格腿不齐)" if pe is None else "g≤0"
+        else:
+            if len(report_rows) and report_rows["bvps"].notna().any() \
+                    and price_df is not None and len(price_df) >= 120:
+                bvps_events = [(str(report_rows.loc[rp, "announce_date"] or "")[:10], str(rp),
+                                float(report_rows.loc[rp, "bvps"]))
+                               for rp in report_rows.index
+                               if not _nan(report_rows.loc[rp, "bvps"])
+                               and str(report_rows.loc[rp, "announce_date"] or "")[:10] <= asof_str]
+                raw_close = price_df["close"].astype(float)
+                pb = vl.pb_series(raw_close, bvps_events)
+                pct = vl.pb_percentile(pb)
+                s.update(pb_series_len=len(pb), pb_pct=pct)
+                score = pct
+                if score is None:
+                    score_note = "PB 样本不足"
+            else:
+                s.update(pb_series_len=0, pb_pct=None)
+                score_note = "PB 数据缺(bvps/价格腿)"
 
-    s1_rows.sort(key=lambda r: (-(r["score"] if r["score"] is not None else -1), r["dev_pct"]))
-    s2_rows.sort(key=lambda r: -r["fierce"])
-    face_up.sort(key=lambda r: r["code"])
-    face_down.sort(key=lambda r: r["code"])
-
-    # ---- stage-2: 候选集(每策略 Top-N,S1 排除除权嫌疑)→ davis 表 + 卡摘要(腿齐才出) ----
-    top_n2_stage = int((p.get("stage2", {}) or {}).get("top_n", 30))
-    s1_stage = [r["code"] for r in s1_rows
-                if r.get("score") is not None and not r.get("suspect")][:top_n2_stage]
-    s2_stage = [r["code"] for r in s2_rows][:top_n2_stage]
-    stage2_codes = list(dict.fromkeys(s1_stage + s2_stage))
-    name_map = {str(c): str(joined.loc[c].get("name", c)) for c in stage2_codes if c in joined.index}
-    davis_rows: list[dict] = []
-    stage2_cards: list[dict] = []
-    for code in stage2_codes:
-        if store.last_stock_valuation_date(code, "pe_ttm") is None:
-            continue  # 估值腿未拉(周度刷新后下次出)
-        try:
-            d = diagnose_davis(code, store, cfg)
-        except Exception:  # noqa: BLE001 — 单股腿缺不炸整板
+        # ---- 风险红黄旗(资产负债/营收按入场环的报告期取) ----
+        bal_f = bal_frames.get(s["period_used"])
+        bal = None
+        if bal_f is not None and len(bal_f) and code in bal_f.index:
+            b = bal_f.loc[code]
+            bal = {k: b.get(k) for k in ("cash", "receivables", "total_assets",
+                                         "equity", "debt_ratio")}
+        rev_abs = None
+        if len(report_rows) and s["period_used"] in report_rows.index:
+            rev_abs = report_rows.loc[s["period_used"], "rev_abs"]
+        flags = rk.risk_flags(bal, goodwill_now, goodwill_series, rev_abs, s["period_used"],
+                              extra_yellow=s["flags"], cfg=hcfg)
+        if flags["red"]:
+            gaps[f"红旗剔除({'+'.join(flags['red'])})"] = gaps.get(
+                f"红旗剔除({'+'.join(flags['red'])})", 0) + 1
             continue
-        if not d.get("valid"):
-            continue
-        tag = ("②" if code in s2_stage else "") + ("①" if code in s1_stage else "")
-        label = d.get("label") or "—"
-        notes = []
-        if not _nan(d.get("pe_pct")):
-            notes.append(f"PE分位{d['pe_pct']:.0%}")
-        if not _nan(d.get("profit_yoy_latest")):
-            notes.append(f"年报净利{d['profit_yoy_latest'] * 100:+.0f}%")
-        if d.get("quality_warning"):
-            notes.append("⚠️含金量低(一次性利润)")
-        davis_rows.append({"code": code, "name": name_map.get(code, code),
-                           "label": label, "note": " · ".join(notes)})
-        stage2_cards.append({"code": code, "name": name_map.get(code, code), "tag": tag,
-                             "summary": f"{label} · {' · '.join(notes)}"})
+        for g in flags["data_gaps"]:
+            gaps[g] = gaps.get(g, 0) + 1
 
-    top_n1 = int(s1cfg.get("top_n", 50))
-    top_n2 = int(s2cfg.get("top_n", 50))
+        rows.append({**s, "track": track, "score": score, "score_note": score_note,
+                     "red": flags["red"], "yellow": flags["yellow"],
+                     "metrics": flags["metrics"]})
+
+    # ---- 估值门 → 两轨排名 → 合并 Top-N(无配额;门内才排名,「贵的」不占坑) ----
+    top_n = int(hcfg.get("top_n", 100))
+    peg_max = float(hcfg.get("peg_max", 1.0))
+    pb_pct_max = float(hcfg.get("pb_pct_max", 0.30))
+    peg_rows = [r for r in rows if r["track"] == "peg"
+                and r["score"] is not None and r["score"] <= peg_max]
+    pb_rows = [r for r in rows if r["track"] == "pb"
+               and r["score"] is not None and r["score"] <= pb_pct_max]
+    peg_rows.sort(key=lambda r: r["score"])       # PEG 升序=便宜优先
+    pb_rows.sort(key=lambda r: r["score"])        # PB 分位升序=资产便宜优先
+    for i, r in enumerate(peg_rows):
+        r["track_rank"] = (i + 1) / max(len(peg_rows), 1)
+    for i, r in enumerate(pb_rows):
+        r["track_rank"] = (i + 1) / max(len(pb_rows), 1)
+    pool = sorted(peg_rows + pb_rows, key=lambda r: r["track_rank"])[:top_n]
+    for i, r in enumerate(pool):
+        r["rank"] = i + 1
+
+    # ---- 构成 / 涌现 / 时钟 / diff / 历史 ----
+    comp = sec.composition(pool)
+    emerg = sec.emergent(pool, threshold=0.50)
+    dl = cal.formal_deadline(period)
+    data_period = max(n_by_period, key=lambda k: n_by_period[k]) if n_by_period else period
+    clock = {
+        "period": period, "formal_deadline": dl.isoformat(),
+        "days_to_formal": (dl - now.date()).days,
+        "forecast_open": cal.forecast_open(period).isoformat(),
+        "ring_mix": n_by_ring, "period_mix": n_by_period,
+        "data_period": data_period,
+        "theme_windows": list(hcfg.get("theme_windows", []) or []),
+    }
+    diff = {"entered": [], "exited": []}
+    history = store.latest_pool_snapshots(12)
+    prior = next((h["asof"] for h in history if h["asof"] < asof_str), None)
+    if prior:
+        prev_members = store.pool_membership_asof(prior)
+        prev_codes = set(prev_members.index)
+        cur_codes = {r["code"] for r in pool}
+        names = {str(c): str(joined.loc[c]["name"]) if c in joined.index else c
+                 for c in cur_codes | prev_codes}
+        for c in sorted(cur_codes - prev_codes):
+            diff["entered"].append({"code": c, "name": names.get(c, c)})
+        for c in sorted(prev_codes - cur_codes):
+            diff["exited"].append({"code": c, "name": names.get(c, c)})
+
+    # ---- 池成员留档(live 才写;回放/测试不写) ----
+    if persist and asof is None and pool:
+        store.insert_pool_membership(asof_str, [
+            (r["code"], r["period_used"], r["ring"], r["announce_date"], r["rank"], r["score"])
+            for r in pool])
+        if prior is None and not history:
+            history = store.latest_pool_snapshots(12)
+
     return {
-        "as_of": now.strftime("%Y-%m-%d"),
+        "as_of": asof_str,
         "period": period,
-        "cfg_note": {"trigger_pct": float(s1cfg.get("trigger_pct", 0.05))},
-        "davis_rows": davis_rows,     # stage-2 估值/财务腿就绪的候选才有
-        "stage2_cards": stage2_cards,
-        "stage2_codes": stage2_codes,  # CLI 周度腿刷新用(每策略 Top-N 并集)
+        "clock": clock,
         "universe_stats": cov,
-        "price_freshness": {"fresh": n_price_fresh, "n": len(codes)},
         "spot_date": store.get_meta("last_stock_spot_update", ""),
         "industry_snapshot": store.last_industry_snapshot() or "",
-        "n_snapshots": n_dates,
-        "revision": {"rows": rev["rows"][:int(revcfg.get("top_n", 50))],
-                     "cold_start": rev["cold_start"]},
-        "s1_rows": s1_rows[:top_n1],
-        "s1_total": len(s1_rows),
-        "s2_rows": s2_rows[:top_n2],
-        "s2_total": len(s2_rows),
-        "pead_rows": pead_rows,
-        "face_rows_up": face_up[:int(fccfg.get("top_n", 50))],
-        "face_rows_down": face_down[:int(fccfg.get("top_n", 50))],
-        "conclusions": {
-            "deviation": store.get_meta("deviation_extreme_conclusion"),
-            "pead": store.get_meta("pead_conclusion"),
+        "n_floor_pass": len(survivors),
+        "n_gated_pool": len(pool),
+        "n_track_peg": len(peg_rows), "n_track_pb": len(pb_rows),
+        "rows": pool,
+        "gaps": gaps,
+        "sina_needed": sina_needed,
+        "composition": comp,
+        "emergent": emerg,
+        "diff": diff,
+        "history": history,
+        "conclusion": store.get_meta("high_earnings_pool_conclusion"),
+        "cfg_note": {
+            "floor_np_yoy": float(hcfg.get("floor_np_yoy", 50.0)),
+            "floor_rev_yoy": float(hcfg.get("floor_rev_yoy", 20.0)),
+            "top_n": top_n, "peg_max": float(hcfg.get("peg_max", 1.0)),
+            "pb_pct_max": float(hcfg.get("pb_pct_max", 0.30)),
+            "mktcap_filter_on": mkt_on,
         },
-        "window_note": cal.window_b_period(now, grace_days=int(s2cfg.get("window_b_grace_days", 14))),
     }

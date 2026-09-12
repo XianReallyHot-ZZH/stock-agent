@@ -58,20 +58,17 @@ def _fetch(conn, sql, params=()):
 
 
 def _pool_report(store, conn, ref) -> dict:
-    """候选个股池段(V7 第六看板): universe 规模 / 价格新鲜 x/N / 行业快照 / E4 冷启动。"""
+    """候选个股池段(V8 高业绩池): 全市场宇宙规模 / 价格新鲜 x/N / 行业快照 / 风险腿新鲜度。"""
     info: dict = {"universe": [], "universe_n": 0}
-    _, cons = store.get_consensus_snapshot()
     spot = store.latest_stock_spot()
-    if len(cons) == 0 or len(spot) == 0:
+    if len(spot) == 0:
         print("候选个股池: (未初始化 — python scripts/backfill_stock_pool.py --all 冷启动)")
-        print("  E4 修正动量快照数: 0(个股版同底座,consensus 周度积累)")
         return info
     pcfg = (get_config().params.get("stock_pool", {}) or {})
     ucfg = pcfg.get("universe", {}) or {}
     u = pool_universe.derive_universe(
-        cons, spot, min_reports=int(ucfg.get("min_reports", 3)),
-        exclude_prefixes=tuple(ucfg.get("exclude_name_prefixes",
-                                        pool_universe.EXCLUDED_NAME_PREFIXES)))
+        spot, exclude_prefixes=tuple(ucfg.get("exclude_name_prefixes",
+                                              pool_universe.EXCLUDED_NAME_PREFIXES)))
     codes = [str(c) for c in u.index]
     info["universe"] = codes
     info["universe_n"] = len(codes)
@@ -84,10 +81,13 @@ def _pool_report(store, conn, ref) -> dict:
     ind_n = _fetch(conn, "SELECT COUNT(DISTINCT industry) FROM industry_member")[0]
     cov = pool_universe.industry_coverage(pool_universe.join_industry(
         u, store.industry_map(), get_config().industry_class()))
-    n_snap = len(store.consensus_snapshot_dates())
-    print(f"候选个股池: universe {len(codes)} 只(consensus {len(cons)} ∩ spot 非 ST)"
+    bal_periods = len(store.stock_balance_periods())
+    bal_last = store.get_meta("last_stock_balance_update") or "（无）"
+    npabs_n = _fetch(conn, "SELECT COUNT(*) FROM stock_report_actual WHERE np_abs IS NOT NULL")[0]
+    print(f"候选个股池(V8 高业绩池): universe {len(codes)} 只(全市场非 ST)"
           f" · 价格新鲜 {n_fresh}/{len(codes)} · 行业快照 {ind_last}({ind_n} 板块,"
-          f"映射覆盖 {cov['pct']:.0%}) · E4 快照 {n_snap} 份")
+          f"映射覆盖 {cov['pct']:.0%}) · 资产负债 {bal_periods} 期(至 {bal_last})"
+          f" · 正式报扩列 {npabs_n} 行")
     return info
 
 
@@ -204,9 +204,9 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="Research-dashboard data check (+--fix)")
     ap.add_argument("--fix", action="store_true", help="backfill stale/missing data to current")
-    ap.add_argument("--pool", action="store_true",
-                    help="候选个股池数据腿已暂停(2026-08-29)——传 --pool 恢复第7-9步"
-                         "(spot/行业·分红/日线增量, 重启看板时用)")
+    ap.add_argument("--no-pool", dest="no_pool", action="store_true",
+                    help="跳过候选个股池数据腿(V8 高业绩池 2026-09 重启后默认恢复运行;"
+                         "临时停用时传此 flag)")
     ap.add_argument("--symbols", nargs="*", default=None)
     args = ap.parse_args()
     cfg = get_config()
@@ -377,26 +377,42 @@ def main():
         print(f"  郑商所仓单刷新·周采样(当前 {inv_last or '无'})...")
         dm.update_commodity_inventory()
 
-    # 7-9) candidate-pool legs (V7 第六看板): spot/行业/分红/日线 —— 默认暂停
-    #      (2026-08-29 用户指令: 看板现阶段价值有限待迭代, 数据冻结在 2026-08-27;
-    #       重启时用户会说 → 恢复跑法 `--fix --pool`, 一次性补齐落后增量)。
-    if not args.pool:
-        print("  候选个股池数据更新暂停(2026-08-29,等用户指令重启;看板数据冻结在 08-27) "
-              "— 恢复: dashboard_data_check.py --fix --pool")
+    # 7-9) candidate-pool legs (V8 高业绩池·2026-09 重启): spot/行业/分红/日线/资产负债
+    #      (2026-08-29 暂停已解除——看板重写为高业绩池, 数据更新随本批恢复; --no-pool 可再停)
+    if args.no_pool:
+        print("  候选个股池数据更新跳过(--no-pool)")
     else:
-        # 7) candidate-pool spot (V7 第六看板): daily snapshot — universe 的 ST 过滤 + 展示名来源
+        # 7) candidate-pool spot: daily snapshot — universe 的 ST 过滤 + 展示名 + 市值/估值列
         spot_last = store.get_meta("last_stock_spot_update")
-        if spot_last != datetime.now().strftime("%Y%m%d"):
+        if spot_last != datetime.now().strftime("%Y-%m-%d"):
             print(f"  候选池现货快照(当前 {spot_last or '无'})...")
             n = dm.update_stock_spot()
             print(f"  stock_spot: {n} 只" if n else "  ⚠️ spot 失败(退最后快照,不阻塞)")
 
-        # 8) candidate-pool industry (月更) + dividends (周更;运行时前复权事件源)
+        # 7.5) 正式报扩列补拉: 最新 2 期 np_abs 缺 → 重拉带扩列(TTM/PE 原料)
+        with store._conn() as _c:  # noqa: SLF001 — 维护查询
+            _latest2 = [r[0] for r in _c.execute(
+                "SELECT report_period FROM stock_report_actual GROUP BY report_period "
+                "ORDER BY report_period DESC LIMIT 2")]
+            _n_ext = {r[0]: r[1] for r in _c.execute(
+                "SELECT report_period, COUNT(*) FROM stock_report_actual "
+                "WHERE np_abs IS NOT NULL GROUP BY report_period")}
+        if _latest2 and any(_n_ext.get(p, 0) < 500 for p in _latest2):
+            print(f"  正式报扩列补拉(np_abs 缺, 期 {_latest2})...")
+            dm.update_stock_report_actual(periods=_latest2)
+
+        # 8) industry (月更) + balance (季更·随披露环) + dividends (周更)
         ind_last = store.last_industry_snapshot()
         if ind_last is None or (datetime.now() - datetime.strptime(ind_last, "%Y-%m-%d")).days > INDUSTRY_STALE_DAYS:
             print(f"  候选池行业成分(缺失或>{INDUSTRY_STALE_DAYS}天, 当前 {ind_last or '无'})...")
             n = dm.update_industry_members()
-            print(f"  industry_member: {n} 行" if n else "  ⚠️ industry 失败(策略2 降级,不阻塞)")
+            print(f"  industry_member: {n} 行" if n else "  ⚠️ industry 失败(PB 轨降级,不阻塞)")
+        bal_last = store.get_meta("last_stock_balance_update")
+        if bal_last is None or (datetime.now() - datetime.strptime(bal_last, "%Y-%m-%d")).days > 35:
+            print(f"  资产负债表整表(缺失或>35天, 当前 {bal_last or '无'})...")
+            res = dm.update_stock_balance()
+            print(f"  stock_balance: {sum(res.values())} 行"
+                  if any(res.values()) else "  ⚠️ 资产负债失败(风险旗降级,不阻塞)")
         if info.get("pool_universe") and store.get_meta("pool_prices_ready") == "1":
             div_days = int((get_config().params.get("stock_pool", {}) or {})
                            .get("prices", {}).get("dividend_refresh_days", 7))
@@ -408,7 +424,7 @@ def main():
                 res = dm.update_pool_dividends(info["pool_universe"])
                 print(f"  stock_dividend: +{sum(res.values())} 行")
 
-        # 9) candidate-pool prices (日更·大头 ~45-75min): gate=冷启动已 ready;只补 universe 内落后者。
+        # 9) candidate-pool prices (日更·大头): gate=冷启动已 ready;只补 universe 内落后者。
         #    放最后一步——失败/超时不遮蔽其余修复;增量游标次日自愈。
         if store.get_meta("pool_prices_ready") == "1" and info.get("pool_universe"):
             years = int((get_config().params.get("stock_pool", {}) or {})
