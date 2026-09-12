@@ -799,13 +799,125 @@ def fetch_index_constituents(index_code: str, timeout: float = 40.0) -> pd.DataF
 
 
 # ---- Candidate-pool screening feeds (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
+# push2 原生通道(2026-09-12 实证): push2.eastmoney.com 的 WAF 按 TLS 指纹拦 python-requests
+# (trust_env=False 真直连也 RemoteDisconnected)、放行 curl;系统代理(Clash 系统代理模式)对 python
+# 的 CONNECT 也断。故此族端点不再走 akshare(requests),改原生分页: requests 直连优先 → curl
+# 子进程兜底(curl 直连/走 HTTPS_PROXY 环境变量代理均实测通)。datacenter 族(yjbb/zcfz)与 sina 不受影响。
+_PUSH2_BASE = "https://push2.eastmoney.com/api/qt/clist/get"
+
+
+def _push2_clist(fs: str, fields: str, timeout: float = 25.0, max_pages: int = 60) -> list[dict]:
+    """push2 clist 全量分页(纯拉取层)。Returns rows(list of {field: 值}, fltt=2 数值化);
+    空结果 → FetchError。requests 直连首页探测,失败则全部分页走 curl。"""
+    import json as _json
+    import subprocess as _sp
+    import urllib.parse as _up
+    params0 = {"pn": "1", "pz": "200", "po": "1", "np": "1",
+               "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+               "fltt": "2", "invt": "2", "fid": "f12", "fs": fs, "fields": fields}
+    use_curl = False
+
+    def _fetch(params: dict) -> dict:
+        nonlocal use_curl
+        if not use_curl:
+            try:
+                import requests as _rq
+                s = _rq.Session()
+                s.trust_env = False   # 绕 Windows 系统代理(Clash)——python 的 CONNECT 到它也断
+                r = s.get(_PUSH2_BASE, params=params, timeout=timeout)
+                r.raise_for_status()
+                return r.json().get("data") or {}
+            except Exception:  # noqa: BLE001 — WAF 指纹拦截常态,退 curl
+                use_curl = True
+        q = "&".join(f"{k}={_up.quote(str(v), safe='')}" for k, v in params.items())
+        try:
+            out = _sp.run(
+                ["curl", "-s", "-m", str(int(timeout)), "-H", "User-Agent: Mozilla/5.0",
+                 f"{_PUSH2_BASE}?{q}"], capture_output=True, text=True,
+                timeout=timeout + 15)
+            if out.returncode == 0 and out.stdout.strip().startswith("{"):
+                return _json.loads(out.stdout).get("data") or {}
+        except Exception:  # noqa: BLE001
+            pass
+        return {}
+
+    rows: list[dict] = []
+    for pn in range(1, max_pages + 1):
+        data = _fetch({**params0, "pn": str(pn)})
+        diff = data.get("diff") or []
+        if not diff:
+            break
+        rows.extend(diff)
+        if len(diff) < 200:
+            break
+        time.sleep(0.15)  # 对 push2 客气一点(整表 27 页级)
+    if not rows:
+        raise FetchError(f"push2 clist empty (fs={fs[:40]})")
+    return rows
+
+
+def fetch_stock_spot_via_tencent(codes: list[str], timeout: float = 25.0,
+                                 batch: int = 60) -> pd.DataFrame:
+    """腾讯批量行情(qt.gtimg.cn, 60 码/请求, GBK)——push2 全断时的 spot 兜底数据源。
+
+    与 fetch_stock_spot 同列契约 [name, close, mktcap, float_mktcap, pe_dyn, pb](indexed by
+    code)。PE 用腾讯口径(TTM,非东财动态——仅交叉核对列,不进判定,差异读图说明已注明);
+    市值亿→元。停牌/退市行腾讯返回空串或价格 0 → 自然落 NaN。代码需带市场前缀
+    (sh/sz),本函数按段自推。调用方给「DB 已知代码清单」(report_actual∪daily_prices∪
+    consensus 段过滤)——新 IPO 首份财报/价格落地前不在快照里(诚实边界,读图说明注明)。"""
+    import requests as _rq
+    pre = {"60": "sh", "68": "sh", "00": "sz", "30": "sz"}
+    norm = []
+    for c in codes:
+        s = str(c).zfill(6)
+        if s[:2] in pre:
+            norm.append(f"{pre[s[:2]]}{s}")
+    out_rows = []
+    s = _rq.Session()
+    s.trust_env = False
+    for i in range(0, len(norm), batch):
+        chunk = norm[i:i + batch]
+        try:
+            r = s.get("https://qt.gtimg.cn/q=" + ",".join(chunk), timeout=timeout)
+            r.encoding = "gbk"
+            for line in r.text.splitlines():
+                line = line.strip()
+                if not line.startswith("v_") or '="' not in line:
+                    continue
+                head, payload = line.split('="', 1)
+                code = head[4:]                      # v_sh600519 → 600519
+                f = payload.rstrip('";\r\n ').split("~")
+                if len(f) < 47 or not f[1]:
+                    continue
+                def _f(idx):
+                    try:
+                        return float(f[idx])
+                    except (ValueError, IndexError):
+                        return float("nan")
+                price = _f(3)
+                if price <= 0:
+                    continue                          # 停牌/退市占位行
+                out_rows.append({
+                    "code": code, "name": f[1], "close": price,
+                    "mktcap": _f(45) * 1e8, "float_mktcap": _f(44) * 1e8,
+                    "pe_dyn": _f(39), "pb": _f(46),
+                })
+        except Exception:  # noqa: BLE001 — 单批失败跳过(网络抖动),下一批继续
+            continue
+        time.sleep(0.12)
+    if not out_rows:
+        raise FetchError("tencent spot empty (all batches failed)")
+    df = pd.DataFrame(out_rows).drop_duplicates("code", keep="last").set_index("code")
+    return df
+
+
 def fetch_stock_spot(min_rows: int = 4000, timeout: float = 60.0, retries: int = 3) -> pd.DataFrame:
-    """全市场 A 股现货快照(东财 stock_zh_a_spot_em 整表, 一次调用)。
+    """全市场 A 股现货快照(push2 clist 原生分页, curl 兜底;2026-09-12 起)。
 
     Returns DataFrame indexed by 6-digit code with [name, close, mktcap, float_mktcap,
     pe_dyn, pb] — 候选池 universe 的 ST/退 名称过滤 + 展示名唯一来源 + 高业绩池(V8)的
-    市值/估值当前口径(总市值/流通市值(元)/市盈率-动态/市净率, akshare 原表本有、2026-09
-    起保留不再丢弃)。close 仅调试用(筛选一律走 daily_prices 复权序列)。
+    市值/估值当前口径(总市值/流通市值(元)/市盈率-动态/市净率)。close 仅调试用(筛选一律走
+    daily_prices 复权序列);停牌股最新价='-' → NaN 自然落。
     Thin-guard: 行数 < min_rows 视为端点半死 → FetchError, 空结果绝不落库(consensus 同款教训)。
     """
     last_err = None
@@ -813,18 +925,19 @@ def fetch_stock_spot(min_rows: int = 4000, timeout: float = 60.0, retries: int =
         if attempt > 0:
             time.sleep(2.0 * attempt)
         try:
-            df = _run_with_timeout(ak.stock_zh_a_spot_em, timeout)
-            n = 0 if df is None else len(df)
-            if n < min_rows:
-                raise FetchError(f"spot table too thin ({n} rows < {min_rows})")
+            rows = _push2_clist("m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
+                                "f2,f9,f12,f14,f20,f21,f23", timeout=timeout)
+            if len(rows) < min_rows:
+                raise FetchError(f"spot table too thin ({len(rows)} rows < {min_rows})")
+            df = pd.DataFrame(rows)
             out = pd.DataFrame({
-                "code": df["代码"].astype(str).str.zfill(6),
-                "name": df["名称"].astype(str),
-                "close": pd.to_numeric(df["最新价"], errors="coerce"),
-                "mktcap": pd.to_numeric(df.get("总市值"), errors="coerce"),
-                "float_mktcap": pd.to_numeric(df.get("流通市值"), errors="coerce"),
-                "pe_dyn": pd.to_numeric(df.get("市盈率-动态"), errors="coerce"),
-                "pb": pd.to_numeric(df.get("市净率"), errors="coerce"),
+                "code": df["f12"].astype(str).str.zfill(6),
+                "name": df["f14"].astype(str),
+                "close": pd.to_numeric(df["f2"], errors="coerce"),
+                "mktcap": pd.to_numeric(df["f20"], errors="coerce"),
+                "float_mktcap": pd.to_numeric(df["f21"], errors="coerce"),
+                "pe_dyn": pd.to_numeric(df["f9"], errors="coerce"),
+                "pb": pd.to_numeric(df["f23"], errors="coerce"),
             })
             return out.drop_duplicates("code", keep="last").set_index("code")
         except FetchError as ex:
@@ -850,19 +963,26 @@ def fetch_stock_spot_from_consensus(min_rows: int = 1000, timeout: float = 90.0)
     return out.drop_duplicates("code", keep="last").set_index("code")
 
 
+# 行业名 → 板块代码(BKxxxx)进程内缓存: list 拉一次,cons 逐板块复用(push2 同族原生通道)
+_INDUSTRY_CODES: dict[str, str] = {}
+
+
 def fetch_industry_list(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
-    """东财行业板块名录(stock_board_industry_name_em)。Returns DataFrame [industry]。
+    """东财行业板块名录(push2 clist 原生, m:90 t:2)。Returns DataFrame [industry];
+    同时填 _INDUSTRY_CODES(名→BK代码, fetch_industry_cons 的 fs 参数需要)。
     Thin-guard: < 50 板块视为端点半死 → FetchError。"""
     last_err = None
     for attempt in range(retries):
         if attempt > 0:
             time.sleep(1.5 * attempt)
         try:
-            df = _run_with_timeout(ak.stock_board_industry_name_em, timeout)
-            n = 0 if df is None else len(df)
-            if n < 50:
-                raise FetchError(f"industry list too thin ({n} boards)")
-            return pd.DataFrame({"industry": df["板块名称"].astype(str)})
+            rows = _push2_clist("m:90 t:2 f:!50", "f12,f14", timeout=timeout)
+            if len(rows) < 50:
+                raise FetchError(f"industry list too thin ({len(rows)} boards)")
+            names = [str(r.get("f14")) for r in rows]
+            _INDUSTRY_CODES.clear()
+            _INDUSTRY_CODES.update({str(r.get("f14")): str(r.get("f12")) for r in rows})
+            return pd.DataFrame({"industry": names})
         except FetchError as ex:
             last_err = ex
         except Exception as ex:  # noqa: BLE001
@@ -871,19 +991,26 @@ def fetch_industry_list(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame
 
 
 def fetch_industry_cons(industry: str, timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
-    """单行业板块成分股(stock_board_industry_cons_em, symbol=板块名)。Returns DataFrame
-    [code(6位), name]。空结果按端点异常处理 → FetchError(调用方记日志跳过该板块)。"""
+    """单行业板块成分股(push2 clist 原生, fs=b:BKxxxx;依赖 fetch_industry_list 先跑一次
+    填名字→代码缓存,未命中时现拉一次名录)。Returns DataFrame [code(6位), name]。
+    空结果按端点异常处理 → FetchError(调用方记日志跳过该板块)。"""
     last_err = None
     for attempt in range(retries):
         if attempt > 0:
             time.sleep(1.0 * attempt)
         try:
-            df = _run_with_timeout(ak.stock_board_industry_cons_em, timeout, symbol=industry)
-            if df is None or len(df) == 0:
+            bk = _INDUSTRY_CODES.get(industry)
+            if not bk:
+                fetch_industry_list(timeout=timeout)
+                bk = _INDUSTRY_CODES.get(industry)
+            if not bk:
+                raise FetchError(f"unknown board {industry}")
+            rows = _push2_clist(f"b:{bk} f:!50", "f12,f14", timeout=timeout)
+            if not rows:
                 raise FetchError("empty")
             out = pd.DataFrame({
-                "code": df["代码"].astype(str).str.zfill(6),
-                "name": df["名称"].astype(str) if "名称" in df.columns else "",
+                "code": [str(r.get("f12")).zfill(6) for r in rows],
+                "name": [str(r.get("f14")) for r in rows],
             })
             return out.drop_duplicates("code", keep="last")
         except FetchError as ex:

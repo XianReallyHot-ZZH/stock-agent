@@ -1136,21 +1136,56 @@ class DataManager:
     # ---- Candidate-pool feeds (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
     def update_stock_spot(self) -> int:
         """全市场现货快照(日更·单调用)→ stock_spot。universe 的 ST/退 过滤 + 展示名唯一来源
-        + V8 市值/估值列。push2 被拦时**不再静默降级**名称兜底(全市场宇宙需要市值列,
-        名称-only 兜底撑不住;2026-09-12 用户批准)——fetcher 内重试 3 次后仍败返回 0,
-        调用方保最后快照并显式报错。"""
+        + V8 市值/估值列。双通道: push2 原生(requests 直连→curl 兜底,WAF 指纹拦截环境)→
+        仍败退**腾讯批量行情**(qt.gtimg.cn,非东财主机;代码清单=DB 已知代码并集——
+        report_actual 最新期 ∪ daily_prices ∪ consensus,段过滤;新 IPO 首份数据落地前缺席,
+        诚实边界)。两路全败返回 0(保最后快照,显式报错)。"""
         try:
             df = fetcher.fetch_stock_spot()
+            source = "em_spot"
         except Exception as e:  # noqa: BLE001
-            log.error("stock_spot FAILED after retries: %s — 保留最后快照, universe 退旧日期",
-                      str(e)[:150])
-            return 0
+            log.warning("push2 spot failed (%s) — falling back to tencent quotes",
+                        str(e)[:120])
+            codes = self._known_stock_codes()
+            if not codes:
+                log.error("stock_spot: push2 down 且 DB 无已知代码清单 — 保留最后快照")
+                return 0
+            try:
+                df = fetcher.fetch_stock_spot_via_tencent(codes)
+                source = "tencent_qt"
+            except Exception as e2:  # noqa: BLE001
+                log.error("stock_spot FAILED (push2 + tencent both down: %s) — 保留最后快照",
+                          str(e2)[:120])
+                return 0
         today = fetcher.today_str()
-        n = self.store.upsert_stock_spot(df, date=today, source="em_spot")
+        n = self.store.upsert_stock_spot(df, date=today, source=source)
         self.store.set_meta("last_stock_spot_update", today)
         pruned = self.store.prune_stock_spot(keep_days=90)
-        log.info("stock_spot %s: %d names (pruned %d old rows)", today, n, pruned)
+        log.info("stock_spot %s: %d names (src=%s, pruned %d old rows)", today, n, source, pruned)
         return n
+
+    def _known_stock_codes(self) -> list[str]:
+        """DB 已知 A 股代码并集(段过滤 60/68/00/30)——腾讯兜底的请求清单。
+        来源: 正式报最新期(全市场覆盖最广) ∪ daily_prices 个股 ∪ consensus。"""
+        seg = ("60", "68", "00", "30")
+        codes: set[str] = set()
+        try:
+            with self.store._conn() as c:  # noqa: SLF001 — 只读清单查询
+                latest = c.execute(
+                    "SELECT report_period FROM stock_report_actual GROUP BY report_period "
+                    "ORDER BY report_period DESC LIMIT 1").fetchone()
+                if latest:
+                    rows = c.execute(
+                        "SELECT DISTINCT symbol FROM stock_report_actual WHERE report_period=?",
+                        (latest[0],)).fetchall()
+                    codes.update(str(r[0]) for r in rows)
+                rows2 = c.execute(
+                    "SELECT DISTINCT symbol FROM daily_prices WHERE length(symbol)=6 "
+                    "UNION SELECT DISTINCT code FROM stock_consensus").fetchall()
+                codes.update(str(r[0]) for r in rows2)
+        except Exception:  # noqa: BLE001
+            pass
+        return sorted(c for c in codes if str(c).zfill(6)[:2] in seg)
 
     def update_industry_members(self, sleep: float = 0.3) -> int:
         """东财行业板块成分(~86 板块逐板块拉,月度节奏)→ industry_member(整帧全量替换)。

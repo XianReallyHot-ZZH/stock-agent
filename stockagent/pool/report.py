@@ -147,7 +147,9 @@ def _pool_section(snap: dict) -> str:
            f"{len(rows)} 只(过地板 {snap.get('n_floor_pass', 0)} → 估值/风险门后 Top-{note.get('top_n', 100)})</span></h2>",
            "<div class='hint'>地板=净利同比 ≥{:.0f}% 且营收同比 ≥{:.0f}%(预告环单腿·无营收数据);"
            "非周期轨 PEG=PE_ttm/扣非g ≤{:.1f}(「业绩没出股价已上天」筛掉);周期轨 PB 自身历史分位 ≤{:.0f}%"
-           "(周期底 PE 爆表被误杀,PB 低=资产便宜);红旗硬剔/黄旗带旗入池交人工。入场=该股自身披露日"
+           "(周期底 PE 爆表被误杀,PB 低=资产便宜);每格分数自带轨别标签(PEG 数值/PB分位 %),"
+           "不依赖类型列。类型列「—」=行业成分缺失(月更腿未通,全池暂走 PEG 轨;行业表通了后周期股自动分流 PB 轨)。"
+           "红旗硬剔/黄旗带旗入池交人工。入场=该股自身披露日"
            "(逐股状态机,point-in-time);下一次披露不过地板即出池——「自然被淘汰」,不预测持续性。</div>".format(
                note.get("floor_np_yoy", 50.0), note.get("floor_rev_yoy", 20.0),
                note.get("peg_max", 1.0), (note.get("pb_pct_max", 0.30) or 0) * 100)]
@@ -159,12 +161,14 @@ def _pool_section(snap: dict) -> str:
         m = r.get("metrics") or {}
         score = r.get("score")
         if r.get("track") == "peg":
-            score_html = (f"<td data-v='{score:.3f}'>{score:.2f}</td>"
+            score_html = (f"<td data-v='{score:.3f}'>{score:.2f} "
+                          f"<span class='chip'>PEG</span></td>"
                           f"<td data-v='{r.get('pe_ttm') if r.get('pe_ttm') is not None else -1}'>"
                           f"{_fmt_num(r.get('pe_ttm'), 1)}</td>"
                           f"<td class='dim'>—</td>")
         else:
-            score_html = (f"<td data-v='{score:.3f}'>{score:.0%}</td><td class='dim'>—</td>"
+            score_html = (f"<td data-v='{score:.3f}'>{score:.0%} "
+                          f"<span class='chip'>PB分位</span></td><td class='dim'>—</td>"
                           f"<td data-v='{score:.3f}'>{_fmt_num((r.get('pb_pct')), 0)}</td>")
         np_v = r.get("np_yoy_bulk")
         body.append([

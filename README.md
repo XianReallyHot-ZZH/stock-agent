@@ -269,7 +269,7 @@ python scripts/validate_commodity_inventory.py  # 库存 event-study（CZCE 三�
 
 ## 📡 数据源
 
-- **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值；候选个股池另用 业绩报表扩列（eps/每股净资产/净利润绝对值→TTM 自算）+ 资产负债表汇总 zcfz（风险筛，无商誉/借款列——商誉走 sina 逐股精筛腿）+ 全市场现货快照（市值/PE/PB 列）。
+- **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值；候选个股池另用 业绩报表扩列（eps/每股净资产/净利润绝对值→TTM 自算）+ 资产负债表汇总 zcfz（风险筛，无商誉/借款列——商誉走 sina 逐股精筛腿）+ 全市场现货快照（市值/PE/PB 列；push2 被指纹拦截时双兜底：curl 子进程 → 腾讯 qt.gtimg.cn 批量行情）。
 - ETF 份额：SSE `fund_etf_scale_sse` + SZSE `fund_etf_scale_szse`（双源）。
 - 单位净值：`fund_etf_fund_info_em`（真 NAV，天然正确无需复权）。
 - 沪深 300 PE/PB：legulegu（仅沪深300/上证50/中证500，不支持创业板指/科创50）。
