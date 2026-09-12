@@ -53,6 +53,7 @@ table.sortable th[data-key]{cursor:pointer;user-select:none}
 table.sortable th[data-key]::after{content:" ⇅";font-size:9px;color:var(--faint)}
 table.sortable th[data-key].asc::after{content:" ▲"}
 table.sortable th[data-key].desc::after{content:" ▼"}
+.th-key{background:var(--ovbg);border-bottom:2px solid var(--link)}
 .count{color:var(--muted);font-weight:normal;font-size:12px}
 .chip{font-size:11px;padding:1px 8px;border-radius:9px;background:var(--chipbg);
       color:var(--text2);border:1px solid var(--border);white-space:nowrap}
@@ -76,6 +77,9 @@ function _syncThemeBtn(){var b=document.getElementById('theme-btn');if(b)b.textC
 function toggleTheme(){document.body.classList.toggle('dark');
   try{localStorage.setItem('pool-dark',String(_isDark()))}catch(e){};_syncThemeBtn()}
 (function(){try{if(localStorage.getItem('pool-dark')==='true')document.body.classList.add('dark')}catch(e){};_syncThemeBtn()})();
+// sortable 绑定必须等 DOM 就绪——script 在 <head> 里,解析到这行时 <body> 表格还不存在
+// (V7 潜伏 bug: 绑定静默匹配 0 个元素,点击从未生效,2026-09-13 用户报修)
+document.addEventListener('DOMContentLoaded',function(){
 document.querySelectorAll('table.sortable th[data-key]').forEach(function(th){
   th.addEventListener('click',function(){
     var table=th.closest('table'), body=table.tBodies[0],
@@ -94,9 +98,81 @@ document.querySelectorAll('table.sortable th[data-key]').forEach(function(th){
     rows.forEach(function(r){body.appendChild(r)});
   });
 });
+});
 """
 
 _RING_LABEL = {"forecast": "预告", "express": "快报", "actual": "正式报"}
+_AXIS_LABEL = {"deducted": "扣非", "reported": "归母", "forecast": "预告"}
+_PERIOD_TAIL = {"0331": "一季报", "0630": "中报", "0930": "三季报", "1231": "年报"}
+
+
+def _fmt_period(p) -> str:
+    """20260630 → 「2026 中报」。"""
+    p = str(p or "")
+    return f"{p[:4]}{_PERIOD_TAIL.get(p[4:], '')}" if len(p) == 8 else (p or "—")
+
+
+def _framework_section(snap: dict) -> str:
+    """〇 选股框架——看板顶部的内核思想展示(活漏斗用当前真实数字)。默认展开可收起。"""
+    u = snap.get("universe_stats") or {}
+    note = snap.get("cfg_note") or {}
+    gaps = snap.get("gaps") or {}
+    rows = snap.get("rows") or []
+    red_n = sum(v for k, v in gaps.items() if str(k).startswith("红旗剔除"))
+    gated = int(snap.get("n_track_peg", 0)) + int(snap.get("n_track_pb", 0))
+
+    def _stage(num: str, label: str, sub: str) -> str:
+        return (f"<div style='flex:1;min-width:118px;background:var(--card);"
+                f"border:1px solid var(--border);border-radius:8px;padding:7px 9px;"
+                f"text-align:center'><div style='font-size:16px;font-weight:700'>{_e(num)}</div>"
+                f"<div style='font-size:12px;color:var(--text)'>{_e(label)}</div>"
+                f"<div style='font-size:10.5px;color:var(--muted);margin-top:2px'>{_e(sub)}</div></div>")
+    arrow = ("<div style='color:var(--faint);font-size:15px;align-self:center'>→</div>")
+    funnel = ("<div style='display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 4px'>"
+              + _stage(f"{u.get('n', 0)}", "全市场非 ST", "spot 快照宇宙")
+              + arrow
+              + _stage(f"{snap.get('n_floor_pass', 0)}", "过三环地板",
+                       f"净利≥{note.get('floor_np_yoy', 50):.0f}% ∧ 营收≥{note.get('floor_rev_yoy', 20):.0f}%")
+              + arrow
+              + _stage(f"−{red_n}", "红旗硬剔", "商誉/存贷双高")
+              + arrow
+              + _stage(f"{gated}", "过估值门",
+                       f"PEG≤{note.get('peg_max', 1.0):.1f} / PB分位≤{note.get('pb_pct_max', 0.30):.0%}")
+              + arrow
+              + _stage(f"{len(rows)}", "高业绩池", f"两轨合并 Top-{note.get('top_n', 100)}")
+              + "</div>")
+
+    principles = [
+        ("季度循环", "每季三环(预告→快报→正式报)滚动重筛,每环落地即重判——「每个季度的正式报、预报、"
+         "快报,都会根据最新的业绩做调整组合」"),
+        ("不预测持续性", "「增速不行了下季度自然被淘汰,不必关心业绩是否能持续——保持组合由高业绩构成」;"
+         "池是流动状态,④节环比 diff 就是换血的可视化"),
+        ("估值门", "「业绩还没出来股价已经上天的」用 PEG 筛掉——增长必须没被充分定价"),
+        ("周期股看 PB", "周期底利润崩、PE 爆表——用资产价格(PB 自身历史分位)看便宜,不用利润"),
+        ("行业暴露涌现", "不自上而下预判行业——先筛高业绩,再看哪类占过半(②节涌现簇);陈老师 7 月"
+         "由此发现商品周期占半数"),
+        ("中小市值弹性", "「一般中小市值的弹性更好,涨幅大,少量资金推动就能涨不少」——市值列常驻"
+         "可排序;过滤默认关(开=P80 分位),是否常开由验证器 mktcap_on 消融臂数据裁决"),
+        ("决策哲学", "「决策交易的唯一因素是业绩预期和估值,大盘是什么阶段只是辅助」——本看板因此"
+         "不择时,只给候选"),
+    ]
+    pr_html = "".join(
+        f"<li><b>{_e(k)}</b>——{_e(v)}</li>" for k, v in principles)
+
+    return (
+        "<details class='sop' open><summary>🧭 〇 选股框架——本看板的内核思想(点开/收起)</summary><div>"
+        f"{funnel}"
+        "<div style='font-size:12px;color:var(--muted);line-height:1.9;margin-top:4px'>"
+        "漏斗数字=当前渲染实况(随披露窗变动;641→320 之间还含黄旗不剔/数据缺的个体差异)。"
+        "最后一公里是<b>人工排除</b>——模型缩小范围,③节逐旗复审是方法论自带的最后一步,看板不冒充人工。</div>"
+        f"<ul style='margin:10px 0 4px;padding-left:18px;font-size:13px;line-height:1.9;"
+        f"color:var(--text2)'>{pr_html}</ul>"
+        "<div style='font-size:12.5px;background:var(--ovbg);border-left:3px solid var(--link);"
+        "border-radius:6px;padding:8px 12px;line-height:1.9'>"
+        "<b>使用动线</b>:① 总览(池+黄旗) → <b>③ 人工复审(逐旗排除——你的活)</b> → ② 行业构成"
+        "(涌现簇) → ④ 披露时钟(什么时候换血) → ⑤ 历史回放(验证器结论兜底)。"
+        "方法论全文与逐条 SOP 详见 docs/stock_pool/MANUAL_REVIEW.md。"
+        "</div></div></details>")
 
 
 def _e(v) -> str:
@@ -124,17 +200,22 @@ def _fmt_mktcap(v) -> str:
 
 
 def _anchor_nav() -> str:
-    items = [("pool", "① 池总览"), ("sector", "② 行业构成"), ("risk", "③ 风险与人工复审"),
-             ("clock", "④ 披露时钟·diff"), ("history", "⑤ 历史回放"), ("guide", "⑥ 读图说明")]
+    items = [("fw", "〇 选股框架"), ("pool", "① 池总览"), ("sector", "② 行业构成"),
+             ("risk", "③ 风险与人工复审"), ("clock", "④ 披露时钟·diff"),
+             ("history", "⑤ 历史回放"), ("guide", "⑥ 读图说明")]
     return ("nav class='anchor'>" +
             "".join(f"<a href='#{i}'>{t}</a>" for i, t in items) + "</nav>")
 
 
-def _table(headers: list[tuple[str, str]], rows: list[list[str]],
+def _table(headers: list, rows: list[list[str]],
            table_id: str = "", sortable: bool = True) -> str:
-    """headers = [(key, 显示名)];key='' → 不排序。rows = 已渲染的 td 列表(含 html)。"""
+    """headers = [(key, 显示名) 或 (key, 显示名, 原生属性串)];key='' → 不排序。"""
     cls = "sortable" if sortable else ""
-    ths = "".join(f"<th{' data-key=' + repr(k) if k else ''}>{_e(t)}</th>" for k, t in headers)
+    ths = ""
+    for h in headers:
+        k, t = h[0], h[1]
+        extra = f" {h[2]}" if len(h) > 2 else ""
+        ths += f"<th{' data-key=' + repr(k) if k else ''}{extra}>{_e(t)}</th>"
     trs = "".join("<tr>" + "".join(r) + "</tr>" for r in rows) or \
           f"<tr><td colspan='{len(headers)}' class='dim'>（无条目）</td></tr>"
     return f"<table id='{table_id}' class='{cls}'><thead><tr>{ths}</tr></thead><tbody>{trs}</tbody></table>"
@@ -143,8 +224,18 @@ def _table(headers: list[tuple[str, str]], rows: list[list[str]],
 def _pool_section(snap: dict) -> str:
     rows = snap.get("rows") or []
     note = snap.get("cfg_note") or {}
+    clock = snap.get("clock") or {}
+    phase = clock.get("phase") or {}
+    data_p = clock.get("data_period")
     out = [f"<h2 id='pool'>① 高业绩池 · 当前切面 <span class='count'>"
-           f"{len(rows)} 只(过地板 {snap.get('n_floor_pass', 0)} → 估值/风险门后 Top-{note.get('top_n', 100)})</span></h2>",
+           f"{len(rows)} 只(过地板 {snap.get('n_floor_pass', 0)} → 估值/风险门后 Top-{note.get('top_n', 100)})</span></h2>"]
+    if phase:
+        out.append(
+            f"<div class='banner'>📅 <b>{_e(phase.get('label', ''))}</b>"
+            f" · 池由 <b>{_e(_fmt_period(data_p))}</b> 披露构成 · "
+            f"下个变动: {_e(phase.get('next_label', ''))} {_e(phase.get('next_date', ''))}"
+            f"(<b>{phase.get('days_to_next', 0)}</b> 天)</div>")
+    out.append(
            "<div class='hint'>地板=净利同比 ≥{:.0f}% 且营收同比 ≥{:.0f}%(预告环单腿·无营收数据);"
            "非周期轨 PEG=PE_ttm/扣非g ≤{:.1f}(「业绩没出股价已上天」筛掉);周期轨 PB 自身历史分位 ≤{:.0f}%"
            "(周期底 PE 爆表被误杀,PB 低=资产便宜);每格分数自带轨别标签(PEG 数值/PB分位 %),"
@@ -152,12 +243,14 @@ def _pool_section(snap: dict) -> str:
            "红旗硬剔/黄旗带旗入池交人工。入场=该股自身披露日"
            "(逐股状态机,point-in-time);下一次披露不过地板即出池——「自然被淘汰」,不预测持续性。</div>".format(
                note.get("floor_np_yoy", 50.0), note.get("floor_rev_yoy", 20.0),
-               note.get("peg_max", 1.0), (note.get("pb_pct_max", 0.30) or 0) * 100)]
+               note.get("peg_max", 1.0), (note.get("pb_pct_max", 0.30) or 0) * 100))
     body = []
     for r in rows:
         flags = "".join(f"<span class='chip warn'>{_e(f)}</span> "
                         for f in (r.get("yellow") or []))
         ring = _RING_LABEL.get(r.get("ring"), "—")
+        if r.get("period_used"):
+            ring += f"·{_fmt_period(r['period_used'])}"   # 正式报·2026中报——凭哪份文件办的会员
         m = r.get("metrics") or {}
         score = r.get("score")
         if r.get("track") == "peg":
@@ -171,6 +264,7 @@ def _pool_section(snap: dict) -> str:
                           f"<span class='chip'>PB分位</span></td><td class='dim'>—</td>"
                           f"<td data-v='{score:.3f}'>{_fmt_num((r.get('pb_pct')), 0)}</td>")
         np_v = r.get("np_yoy_bulk")
+        axis = _AXIS_LABEL.get(r.get("np_axis") or "", "")
         body.append([
             f"<td>{_e(r['name'])} <span class='dim'>{r['code']}</span> {flags}</td>",
             f"<td>{_e(r.get('industry') or '未映射')}</td>",
@@ -179,7 +273,7 @@ def _pool_section(snap: dict) -> str:
             f"<td>{_e(r.get('announce_date') or '—')}</td>",
             f"<td data-v='{np_v if np_v is not None else -999}'>"
             f"<span class='{'pos' if (np_v or 0) > 0 else 'neg'}'>{_fmt_num(np_v, 0, '%')}</span>"
-            f" <span class='chip' title='扣非=正式环精筛口径/归母=粗筛回退'>{_e(r.get('np_axis') or '')}</span></td>",
+            f" <span class='chip' title='扣非=正式环精筛口径/归母=粗筛回退'>{_e(axis)}</span></td>",
             f"<td data-v='{r['rev_yoy'] if r.get('rev_yoy') is not None else -999}'>"
             f"{_fmt_num(r.get('rev_yoy'), 0, '%')}</td>",
             score_html,
@@ -189,7 +283,10 @@ def _pool_section(snap: dict) -> str:
     out.append(_table(
         [("name", "股票"), ("industry", "行业"), ("type", "类型"), ("ring", "入场环"),
          ("entered", "入场日"), ("np", "净利yoy"), ("rev", "营收yoy"),
-         ("score", "PEG/PB分位"), ("pe", "PE_ttm"), ("pb", "PB分位"), ("mktcap", "市值")],
+         ("score", "PEG/PB分位",
+          "class='th-key' title='入池排序键:估值门内各轨按此值升序→轨内名次百分位合并取Top-N;"
+          "表行序=合并名次(越上=轨内相对越便宜)'"),
+         ("pe", "PE_ttm"), ("pb", "PB分位"), ("mktcap", "市值")],
         body))
     return "".join(out)
 
@@ -352,6 +449,10 @@ def render(snapshot: dict) -> str:
     """渲染 data/stock_pool.html(snapshot=screen.build_high_earnings_snapshot 契约)。纯字符串拼装。"""
     u = snapshot.get("universe_stats") or {}
     note = snapshot.get("cfg_note") or {}
+    med = snapshot.get("mktcap_median")
+    med_html = (f"<div class='stat' title='池内成员总市值中位数(排队取正中,抗极端值)——"
+                f"陈述体型结构,不代表筛选倾向'>池内市值中位 <b>{float(med) / 1e8:.0f}亿</b></div>") \
+        if med is not None else ""
     stats = (
         f"<div class='statline'>"
         f"<div class='stat'>宇宙 <b>{u.get('n', 0)}</b> 只(全市场非ST)</div>"
@@ -359,8 +460,16 @@ def render(snapshot: dict) -> str:
         f"<div class='stat'>池 <b>{snapshot.get('n_gated_pool', 0)}</b>"
         f"<span class='dim'>(PEG轨 {snapshot.get('n_track_peg', 0)}/PB轨 {snapshot.get('n_track_pb', 0)}"
         f" · Top-{note.get('top_n', 100)})</span></div>"
-        f"<div class='stat'>报告期 <b>{_e(snapshot.get('period', ''))}</b></div>"
-        f"<div class='stat'>行业映射 <b>{u.get('pct', 0):.0%}</b></div>"
+        f"<div class='stat' title='正在进行的财报季——下一波业绩数字的来源。"
+        f"此期财报从预告窗开始陆续公布,每公布一家池子重判一家(过门留/不过出),"
+        f"截止日全部收官、换血完成;披露间隙期池子冻结(手里的是上一季已收官的数字,"
+        f"见①节📅横幅的数据期)'>报告期 <b>{_e(snapshot.get('period', ''))}</b></div>"
+        f"{med_html}"
+        f"<div class='stat' title='宇宙中被分到周期/成长/价值三类的比例"
+        f"(东财板块×stock_industry.yaml);0%=行业成分表未拉成(push2 拦,--fix 自动重试)'"
+        f">行业映射 <b>{u.get('pct', 0):.0%}</b>"
+        f"<span class='dim'>(周期{u.get('n_cyclic', 0)}/成长{u.get('n_growth', 0)}"
+        f"/价值{u.get('n_value', 0)})</span></div>"
         f"<div class='stat'>spot <b>{_e(snapshot.get('spot_date') or '无')}</b></div>"
         f"</div>")
 
@@ -371,6 +480,7 @@ def render(snapshot: dict) -> str:
         f" 陈氏季度池 V8</span>"
         f"<button id='theme-btn' onclick='toggleTheme()'>🌙</button></header>"
         f"{stats}{_anchor_nav()}"
+        f"<div id='fw'>{_framework_section(snapshot)}</div>"
         + _pool_section(snapshot)
         + _sector_section(snapshot)
         + _risk_section(snapshot)

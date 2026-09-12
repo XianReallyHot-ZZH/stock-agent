@@ -133,6 +133,14 @@ def gate_at_event(ev: dict, cfg: dict, price_getter: Callable[[str], pd.Series],
     out["valuation_pass"] = peg is not None and peg <= float(cfg.get("peg_max", 1.0))
     if peg is None:
         out["valuation_note"] = "TTM/市值缺"
+    # mktcap_on 臂(Q14 承诺的消融): 全门 + 市值 ≤ 阈值(全市场分位,由脚本从 spot 算好
+    # 传 cfg["mktcap_threshold"];阈值=当前分位近似——回放期股本恒定假设的一部分)
+    if arm == "mktcap_on" and out["valuation_pass"]:
+        thr = _num(cfg.get("mktcap_threshold"))
+        cap = shares_ev * price_at if shares_ev else None
+        if thr is None or cap is None or cap > thr:
+            out["valuation_pass"] = False
+            out["valuation_note"] = "市值超P80"
     return out
 
 

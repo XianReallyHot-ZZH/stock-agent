@@ -114,6 +114,8 @@ def test_full_pipeline_assembles():
     assert snap["composition"]["n_total"] == 2
     assert snap["emergent"] is not None and abs(snap["emergent"]["share"] - 0.5) < 1e-9
     assert snap["emergent"]["industries"] == ["能源金属"]
+    # 市值中位: 002460(3.2e10) 与 300750(8e11) 排队取中 = 4.16e11
+    assert abs(snap["mktcap_median"] - (3.2e10 + 8e11) / 2) < 1e6
     # diff 结构在(无历史档案 → 空列表)
     assert snap["diff"] == {"entered": [], "exited": []}
     assert snap["history"] == []

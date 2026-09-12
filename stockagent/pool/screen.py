@@ -289,6 +289,15 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
     for i, r in enumerate(pool):
         r["rank"] = i + 1
 
+    # ---- 池内市值中位(状态行卡片——体型结构一眼可见;中位抗极端值,陈述事实不倾斜) ----
+    caps = sorted(float(r["mktcap"]) for r in pool
+                  if r.get("mktcap") is not None and not _nan(r.get("mktcap")))
+    if not caps:
+        mkt_median = None
+    else:
+        m = len(caps) // 2
+        mkt_median = caps[m] if len(caps) % 2 else (caps[m - 1] + caps[m]) / 2.0
+
     # ---- 构成 / 涌现 / 时钟 / diff / 历史 ----
     comp = sec.composition(pool)
     emerg = sec.emergent(pool, threshold=0.50)
@@ -300,6 +309,7 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
         "forecast_open": cal.forecast_open(period).isoformat(),
         "ring_mix": n_by_ring, "period_mix": n_by_period,
         "data_period": data_period,
+        "phase": cal.pool_phase(now),
         "theme_windows": list(hcfg.get("theme_windows", []) or []),
     }
     diff = {"entered": [], "exited": []}
@@ -328,6 +338,7 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
         "as_of": asof_str,
         "period": period,
         "clock": clock,
+        "mktcap_median": mkt_median,
         "universe_stats": cov,
         "spot_date": store.get_meta("last_stock_spot_update", ""),
         "industry_snapshot": store.last_industry_snapshot() or "",

@@ -33,6 +33,37 @@ def formal_deadline(period: str) -> date:
     return date(y + 1, m, d) if tail == "1231" else date(y, m, d)
 
 
+# 预告窗宽度(开窗→截止,天): 1231→31 / 0331→16 / 0630→15 / 0930→15(池阶段判定用)
+_FORECAST_SPANS = {"1231": 31, "0331": 16, "0630": 15, "0930": 15}
+
+
+def pool_phase(now) -> dict:
+    """高业绩池的披露阶段(纯)——①池总览开头横幅用,回答「这池子是什么时候构成的、
+    下次什么时候变」。管道期 P=current_period(截止未过的最老一期),今天相对 P 的
+    预告开窗 fo / 窗宽 span / 正式报截止 dl 的位置:
+      gap             披露间隙(静默期): d < fo——成员基本冻结,只有估值漂移;下事件=预告开窗
+      forecast_window 预告窗(换血中): fo ≤ d ≤ fo+span;下事件=窗收尾
+      report_season   正式报季(滚动重判): 窗后 ~ dl;下事件=正式报截止(池切换完成)
+    Returns {phase, label, next_label, next_date(ISO), days_to_next, period}。"""
+    d = now.date() if isinstance(now, datetime) else now
+    period = current_period(d)
+    tail = period[4:]
+    fo = forecast_open(period)
+    dl = formal_deadline(period)
+    fe = fo + timedelta(days=_FORECAST_SPANS[tail])
+    if d < fo:
+        return {"phase": "gap", "label": "披露间隙·静默期(成员基本冻结,仅估值漂移)",
+                "next_label": "预告开窗(换血启动)", "next_date": fo.isoformat(),
+                "days_to_next": (fo - d).days, "period": period}
+    if d <= fe:
+        return {"phase": "forecast_window", "label": "预告窗·换血中(高增长预告落地即入池)",
+                "next_label": "预告窗收尾", "next_date": fe.isoformat(),
+                "days_to_next": (fe - d).days, "period": period}
+    return {"phase": "report_season", "label": "正式报季·滚动重判(逐家落地逐家重判+扣非精筛)",
+            "next_label": "正式报截止(池切换完成)", "next_date": dl.isoformat(),
+            "days_to_next": (dl - d).days, "period": period}
+
+
 def current_period(now) -> str:
     """当前披露周期(纯): 正式报截止 ≥ 今天的最**早**报告期(管道仍在飞行的最老一期)——
     窗口A/B 的锚定期。e.g. 8月中 → 20260630(截止8/31); 6月初 → 20260630(Q1 已收窗);

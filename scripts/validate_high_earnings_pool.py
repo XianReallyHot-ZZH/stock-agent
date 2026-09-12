@@ -29,8 +29,9 @@ from stockagent.pool import valuation as vl
 from stockagent.pool.report import _e  # 简单转义复用(fat renderer 同款)
 
 ROOT = Path(__file__).resolve().parent.parent
-ARMS = ["full", "no_valuation", "no_risk"]
-ARM_LABELS = {"full": "全门", "no_valuation": "去估值门", "no_risk": "去风险旗"}
+ARMS = ["full", "no_valuation", "no_risk", "mktcap_on"]
+ARM_LABELS = {"full": "全门", "no_valuation": "去估值门", "no_risk": "去风险旗",
+              "mktcap_on": "全门+市值P80"}
 
 
 def _load_frames(store: Store, periods: list[str]) -> dict[str, dict[str, pd.DataFrame]]:
@@ -128,7 +129,7 @@ def _conclusion(agg_by_arm: dict, n_win: int) -> str:
         parts.append(f"高业绩池回放 {n_win} 窗: 跑赢全部宽基的窗口占比 {wr:.0%}")
     if med is not None:
         parts.append(f"池收益中位 {med:+.1%}")
-    for arm in ("no_valuation", "no_risk"):
+    for arm in ("no_valuation", "no_risk", "mktcap_on"):
         a = agg_by_arm.get(arm) or {}
         w = a.get("win_rate_all")
         if w is not None:
@@ -237,10 +238,20 @@ def main():
     wins = _windows(periods, events)
     print(f"窗口: {len(wins)} 个")
 
+    # mktcap_on 臂阈值: 全市场 spot 总市值 P80(当前分位近似,回放共用)
+    spot_df = store.latest_stock_spot()
+    mkt_thr = None
+    if len(spot_df) and "mktcap" in spot_df.columns:
+        caps = pd.to_numeric(spot_df["mktcap"], errors="coerce").dropna()
+        if len(caps) > 1000:
+            mkt_thr = float(caps.quantile(float(hcfg.get("mktcap_filter_pct", 0.80))))
+            print(f"市值门阈值: P80 = {mkt_thr / 1e8:.0f} 亿")
+
     agg_by_arm: dict = {}
     windows_by_arm: dict = {}
     for arm in ARMS:
-        intervals = study.replay_membership(events, hcfg, price_getter, shares,
+        cfg_arm = {**hcfg, "mktcap_threshold": mkt_thr} if arm == "mktcap_on" else hcfg
+        intervals = study.replay_membership(events, cfg_arm, price_getter, shares,
                                             np_abs, balance, arm=arm, report_eps=report_eps)
         prices = _frames_prices(price_getter, intervals)
         wins_ret = []
@@ -262,6 +273,7 @@ def main():
         "历史 universe 无逐期 ST 名单(名称漂移不可回放),只做代码段过滤——轻微偏差",
         "窗口=报告期首个环事件日→下期首个环事件日(滚动覆盖);入/出=事件次日开盘(T+1)",
         "成员区间收益等权平均(非逐日再平衡组合);指数=窗口 close 简单收益",
+        "市值P80 臂=全门+总市值≤当前全市场 P80(阈值取当前 spot 分位,回放共用——股本恒定近似的一部分)",
         "8 期 × 3 环 ≈ 20 窗,对「70% 场合跑赢所有指数」是小样本检验——观察口径,温度计非开关",
     ]
     out_html = ROOT / "data" / "high_earnings_pool_study.html"

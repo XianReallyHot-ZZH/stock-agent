@@ -98,3 +98,39 @@ def test_announce_today_counts_landed():
     """公告日=今天 → 落地(闭区间,当日盘后看板可见)。"""
     r = per_stock_window(datetime(2026, 8, 16), "2026-08-16", None, None)
     assert r["state"] == "windowA"
+
+
+# ---------- pool_phase(V8 ①节变动日历横幅) ----------
+from datetime import date as _date  # noqa: E402
+
+from stockagent.pool.calendar import pool_phase  # noqa: E402
+
+
+def test_pool_phase_gap_september_silence():
+    """9 月中 = Q3 预告未开窗 → 静默期;下事件=10-01 预告开窗。"""
+    ph = pool_phase(_date(2026, 9, 12))
+    assert ph["phase"] == "gap"
+    assert ph["next_date"] == "2026-10-01"
+    assert ph["days_to_next"] == 19
+    assert "静默期" in ph["label"]
+
+
+def test_pool_phase_forecast_window_october():
+    ph = pool_phase(_date(2026, 10, 5))
+    assert ph["phase"] == "forecast_window"
+    assert "换血中" in ph["label"]
+    assert ph["days_to_next"] >= 0
+
+
+def test_pool_phase_report_season_late_october():
+    ph = pool_phase(_date(2026, 10, 25))
+    assert ph["phase"] == "report_season"
+    assert ph["next_date"] == "2026-10-31"
+    assert ph["days_to_next"] == 6
+
+
+def test_pool_phase_gap_after_deadline_november():
+    """11 月中 = Q3 已收、年报管道(截止次年 4-30)但预告 1-01 才开 → 静默。"""
+    ph = pool_phase(_date(2026, 11, 15))
+    assert ph["phase"] == "gap"
+    assert ph["next_date"] == "2027-01-01"
