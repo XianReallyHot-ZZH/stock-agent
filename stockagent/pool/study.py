@@ -247,6 +247,66 @@ def _median(xs: list[float]):
     return s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2.0
 
 
+
+def daily_pool_returns(events, decide, px: dict, calendar: list, top_n: int = 100):
+    """Top-N 组合逐日模拟(纯核心, V8.1 2026-09-13: 散户容量+逐日市值口径)。
+
+    events: 升序事件流;decide(ev)->(passed, score) 过门与排序分(升序取前 top_n, None→排尾);
+    px: {code: (adj_open Series, adj_close Series)}(分红前复权,index=日期);
+    calendar: 交易日升序(指数日历)。
+    纪律: 事件生效=事件日后首个交易日;新进当日 open→close 计收益(次日开盘买入近似),
+    延续成员 close→close,当日被移出的以 open/close_prev 实现卖出(次日开盘卖出近似);
+    等权日内再平衡(当日收益=参与成员均值);停牌/缺价成员当日剔除;零成本(注记声明)。
+    排序分冻结于披露时点(两次披露之间 top-N 不随价格重排——与实盘每日重排的差异有注记)。
+    Returns (daily_rets: Series, members_by_day: {date: tuple(top codes)})。"""
+    from bisect import bisect_right
+    effective: dict[str, list[dict]] = {}
+    for ev in events:
+        i = bisect_right(calendar, ev["date"])
+        if i < len(calendar):
+            effective.setdefault(calendar[i], []).append(ev)
+
+    members: dict[str, float] = {}
+    prev_day_set: set = set()
+    out_dates: list[str] = []
+    out_rets: list[float] = []
+    members_by_day: dict[str, tuple] = {}
+    for k, d in enumerate(calendar):
+        removed_today: set = set()
+        for ev in effective.get(d, []):
+            passed, score = decide(ev)
+            if passed:
+                members[ev["code"]] = score if score is not None else float("inf")
+            else:
+                members.pop(ev["code"], None)
+                removed_today.add(ev["code"])
+        top = sorted(members.items(), key=lambda kv: kv[1])[:top_n]
+        top_codes = tuple(c for c, _ in top)
+        members_by_day[d] = top_codes
+        prev = calendar[k - 1] if k else None
+        if prev is not None and top_codes:
+            rets = []
+            for code in top_codes:
+                pc = px.get(code)
+                if pc is None:
+                    continue
+                adj_o, adj_c = pc
+                if code not in prev_day_set:
+                    if d in adj_o.index and d in adj_c.index:
+                        rets.append(float(adj_c[d]) / float(adj_o[d]) - 1.0)
+                elif d in adj_c.index and prev in adj_c.index:
+                    rets.append(float(adj_c[d]) / float(adj_c[prev]) - 1.0)
+            for code in removed_today:
+                if code in prev_day_set:
+                    pc = px.get(code)
+                    if pc and d in pc[0].index and prev in pc[1].index:
+                        rets.append(float(pc[0][d]) / float(pc[1][prev]) - 1.0)
+            if rets:
+                out_dates.append(d)
+                out_rets.append(sum(rets) / len(rets))
+        prev_day_set = set(top_codes)
+    return pd.Series(out_rets, index=out_dates), members_by_day
+
 def aggregate(windows: list[dict]) -> dict:
     """聚合指标(纯): {n_windows, win_rate_all, per_index: {sym: {beat_rate, median_excess}},
     median_pool}——win = 当窗口池收益 > 该指数收益(严格)。池收益缺(无成员)的窗口剔除计数并

@@ -258,3 +258,64 @@ def test_aggregate_win_rates():
     assert abs(agg["per_index"]["a"]["beat_rate"] - 0.5) < 1e-9
     assert abs(agg["per_index"]["b"]["beat_rate"] - 1.0) < 1e-9
     assert abs(agg["median_pool"] - 0.06) < 1e-9
+
+
+# ---------- V8.1 daily_pool_returns(Top-100 逐日组合模拟) ----------
+from stockagent.pool.study import daily_pool_returns  # noqa: E402
+
+
+def _mk_px(dates, closes, opens=None):
+    opens = opens or closes
+    import pandas as _pd
+    return (_pd.Series(opens, index=dates), _pd.Series(closes, index=dates))
+
+
+def test_daily_sim_two_stocks_compounding():
+    """A 恒定成员 + B 中途事件淘汰: 验证 T+1 生效、开盘进出、复利算术。"""
+    cal = [f"2026-01-{d:02d}" for d in range(2, 12)]  # 10 个「交易日」
+    # A: 全程在场, 收盘 10→11→12…, 开盘=前收
+    a_close = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0]
+    a_open = [10.0] + a_close[:-1]
+    # B: 1-06 事件淘汰(生效日 1-07): 1-07 开盘卖出
+    b_close = [5.0, 5.0, 5.0, 5.0, 5.0, 6.0, 6.0, 6.0, 6.0, 6.0]
+    b_open = b_close[:]
+    px = {"A": _mk_px(cal, a_close, a_open), "B": _mk_px(cal, b_close, b_open)}
+    events = [
+        {"code": "A", "date": "2026-01-02", "period": "p", "ring": "forecast",
+         "np_yoy": 80.0, "rev_yoy": 30.0, "type": "预增"},
+        {"code": "B", "date": "2026-01-02", "period": "p", "ring": "forecast",
+         "np_yoy": 80.0, "rev_yoy": 30.0, "type": "预增"},
+        {"code": "B", "date": "2026-01-06", "period": "p", "ring": "express",
+         "np_yoy": 10.0, "rev_yoy": 5.0, "type": None},   # 不过地板 → 淘汰
+    ]
+    daily, mbd = daily_pool_returns(events, lambda ev: (
+        (ev["np_yoy"] or 0) >= 50 and (ev["rev_yoy"] or 0) >= 20, -ev["np_yoy"]),
+        px, cal, top_n=100)
+    # 1-02(事件日)无收益(成员当日才生效);1-03 起 A、B 双成员:
+    # 1-03: (11/10 + 5/5)/2 - 1 = 5%; 1-05/1-06 同为 A 10%/2=5%
+    assert "2026-01-02" not in daily.index
+    d3 = daily["2026-01-03"]
+    assert abs(d3 - 0.05) < 1e-12
+    # 1-07: B 淘汰生效——A 延续 close/close(15/14) + B 以当日开盘卖出(6/5, 跳空被捕获)
+    d7 = daily["2026-01-07"]
+    exp7 = ((a_close[5] / a_close[4] - 1) + (b_open[5] / b_close[4] - 1)) / 2
+    assert abs(d7 - exp7) < 1e-12 and abs(exp7 - 0.13571428571428568) < 1e-9
+    # 1-08 起只剩 A
+    d8 = daily["2026-01-08"]
+    assert abs(d8 - (a_close[6] / a_close[5] - 1)) < 1e-12
+    # 成员留痕: 1-03 双成员, 1-08 单成员
+    assert set(mbd["2026-01-03"]) == {"A", "B"} and set(mbd["2026-01-08"]) == {"A"}
+
+
+def test_daily_sim_topn_cap_and_rank():
+    """3 只过门取 Top-2: 排序分升序(PEG 低者优先), 第 3 名不进组合。"""
+    cal = [f"2026-02-{d:02d}" for d in (2, 3, 4)]
+    # 开盘=前收(新进日 open 买 → close 卖)
+    px = {c: _mk_px(cal, [10.0, 11.0, 12.0], [10.0, 10.0, 11.0]) for c in "ABC"}
+    events = [{"code": c, "date": "2026-02-02", "period": "p", "ring": "forecast",
+               "np_yoy": 60.0, "rev_yoy": 30.0, "type": "预增"} for c in "ABC"]
+    daily, mbd = daily_pool_returns(events, lambda ev: (True, {"A": 0.3, "B": 0.5, "C": 0.8}[ev["code"]]),
+                                    px, cal, top_n=2)
+    assert set(mbd["2026-02-03"]) == {"A", "B"}      # C 分数最高(PEG 0.8)被截
+    # 全成员日收益同为 11/10-1=10%
+    assert abs(daily["2026-02-03"] - 0.10) < 1e-12

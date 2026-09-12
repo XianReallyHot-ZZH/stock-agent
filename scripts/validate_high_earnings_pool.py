@@ -107,18 +107,6 @@ def _windows(periods: list[str], events: list[dict]) -> list[dict]:
     return wins
 
 
-def _frames_prices(price_getter, intervals: list[dict]) -> dict[str, pd.DataFrame]:
-    """区间成员价格帧 dict(price_getter 缓存直读,window_returns 的输入契约)。"""
-    out: dict[str, pd.DataFrame] = {}
-    for iv in intervals:
-        c = iv["code"]
-        if c not in out:
-            df = price_getter(c)
-            if df is not None:
-                out[c] = df
-    return out
-
-
 def _conclusion(agg_by_arm: dict, n_win: int) -> str:
     full = agg_by_arm.get("full") or {}
     wr, med = full.get("win_rate_all"), full.get("median_pool")
@@ -193,7 +181,7 @@ h2{{font-size:16px}} li{{font-size:13px;line-height:1.8;color:#52514e}}</style><
 
 
 def main():
-    ap = argparse.ArgumentParser(description="高业绩池验证器(V8·回放+消融)")
+    ap = argparse.ArgumentParser(description="高业绩池验证器(V8.1·Top-100 逐日组合模拟)")
     ap.add_argument("--periods", type=int, default=8, help="回放最近 N 个报告期(默认 8)")
     ap.add_argument("--no-meta", action="store_true", help="不写 meta(调试)")
     args = ap.parse_args()
@@ -213,15 +201,15 @@ def main():
     print(f"三环事件: {len(events)} 条(首 {events[0]['date']} 末 {events[-1]['date']})")
 
     shares = _shares_map(store)
-    np_abs: dict[str, dict[str, float]] = {}
-    report_eps: dict[tuple[str, str], float] = {}
+    np_abs = {}
+    report_eps = {}
     for _, r in store.stock_np_abs_all().iterrows():
         code_p = str(r["symbol"])
         np_abs.setdefault(code_p, {})[str(r["report_period"])] = float(r["np_abs"])
         eps_v = r.get("eps")
         if eps_v is not None and not (isinstance(eps_v, float) and eps_v != eps_v):
             report_eps[(code_p, str(r["report_period"]))] = float(eps_v)
-    balance: dict[tuple[str, str], dict] = {}
+    balance = {}
     for p in periods:
         bf = store.get_stock_balance_period(p)
         for code, r in (bf.iterrows() if len(bf) else []):
@@ -229,16 +217,14 @@ def main():
                                        ("cash", "receivables", "total_assets",
                                         "total_liab", "equity", "debt_ratio")}
     idx_dfs = _index_dfs(store)
-    n_share = sum(v is not None for v in shares.values())
-    print(f"指数基准 {len(idx_dfs)} 个 · 股本反推 {n_share} 只 · np_abs {len(np_abs)} 只"
-          f" · 资产负债 {len(balance)} 行")
+    print(f"指数基准 {len(idx_dfs)} 个 · 股本反推 {sum(v is not None for v in shares.values())} 只"
+          f" · np_abs {len(np_abs)} 只 · 资产负债 {len(balance)} 行")
 
     hcfg = (cfg.params.get("stock_pool", {}) or {}).get("high_pool", {}) or {}
     price_getter, price_stats = _price_cache(store)
     wins = _windows(periods, events)
     print(f"窗口: {len(wins)} 个")
 
-    # mktcap_on 臂阈值: 全市场 spot 总市值 P80(当前分位近似,回放共用)
     spot_df = store.latest_stock_spot()
     mkt_thr = None
     if len(spot_df) and "mktcap" in spot_df.columns:
@@ -247,34 +233,90 @@ def main():
             mkt_thr = float(caps.quantile(float(hcfg.get("mktcap_filter_pct", 0.80))))
             print(f"市值门阈值: P80 = {mkt_thr / 1e8:.0f} 亿")
 
-    agg_by_arm: dict = {}
-    windows_by_arm: dict = {}
+    from stockagent.pool import prices as pr
+    bench300 = store.get_index_daily_series("000300")
+    calendar = [str(d) for d in bench300.index]
+    adjpx = {}
+
+    def _px(code):
+        if code in adjpx:
+            return adjpx[code]
+        df = price_getter(code)
+        if df is None or not len(df):
+            adjpx[code] = None
+            return None
+        div = store.get_stock_dividend_series(code)
+        d = div if len(div) else None
+        adj_c, _ = pr.dividend_adjusted_close(df["close"].astype(float), d)
+        adj_o = pr.dividend_adjusted_open(df["open"].astype(float), df["close"].astype(float), d)
+        adjpx[code] = (adj_o, adj_c)
+        return adjpx[code]
+
+    def make_decide(arm, cfg_arm):
+        def decide(ev):
+            g = study.gate_at_event(ev, cfg_arm, price_getter, shares, np_abs, balance,
+                                    arm=arm, report_eps=report_eps)
+            passed = g["passed"] and g["valuation_pass"] and not g["risk_red"]
+            score = g.get("peg")
+            if score is None:
+                score = -(ev.get("np_yoy") or 0.0)
+            return passed, score
+        return decide
+
+    wide_codes = set()
     for arm in ARMS:
         cfg_arm = {**hcfg, "mktcap_threshold": mkt_thr} if arm == "mktcap_on" else hcfg
-        intervals = study.replay_membership(events, cfg_arm, price_getter, shares,
-                                            np_abs, balance, arm=arm, report_eps=report_eps)
-        prices = _frames_prices(price_getter, intervals)
+        for iv in study.replay_membership(events, cfg_arm, price_getter, shares,
+                                          np_abs, balance, arm=arm, report_eps=report_eps):
+            wide_codes.add(iv["code"])
+    for c in sorted(wide_codes):
+        _px(c)
+    print(f"复权价就绪: {len(wide_codes)} 只 · 日历 {calendar[0]}→{calendar[-1]}({len(calendar)} 日)")
+
+    top_n = int(hcfg.get("top_n", 100))
+    agg_by_arm = {}
+    windows_by_arm = {}
+    for arm in ARMS:
+        cfg_arm = {**hcfg, "mktcap_threshold": mkt_thr} if arm == "mktcap_on" else hcfg
+        daily, members_by_day = study.daily_pool_returns(
+            events, make_decide(arm, cfg_arm), adjpx, calendar, top_n=top_n)
+        import math as _m
         wins_ret = []
         for w in wins:
-            r = study.window_returns(intervals, prices, idx_dfs, w["start"], w["end"])
-            wins_ret.append({**r, "period": w["period"], "start": w["start"], "end": w["end"]})
+            wdays = [d for d in calendar if w["start"] < d <= w["end"]]
+            pool_cum = None
+            dr = daily[[d for d in daily.index if w["start"] < d <= w["end"]]]
+            if len(dr):
+                pool_cum = float(_m.prod(1.0 + dr.values) - 1.0)
+            uniq = set()
+            for d in wdays:
+                uniq.update(members_by_day.get(d, ()))
+            idx_ret = {}
+            for sym, s in idx_dfs.items():
+                idx = s.index.astype(str)
+                sub = s[(idx > w["start"]) & (idx <= w["end"])]
+                if len(sub) >= 2:
+                    idx_ret[sym] = float(sub.iloc[-1] / sub.iloc[0]) - 1.0
+            wins_ret.append({"pool": pool_cum, "indices": idx_ret, "n_members": len(uniq),
+                             "period": w["period"], "start": w["start"], "end": w["end"]})
         windows_by_arm[arm] = wins_ret
         agg_by_arm[arm] = study.aggregate(wins_ret)
         a = agg_by_arm[arm]
         wr = "—" if a["win_rate_all"] is None else f"{a['win_rate_all']:.0%}"
         med = "—" if a["median_pool"] is None else f"{a['median_pool']:+.1%}"
-        print(f"[{ARM_LABELS[arm]}] 持仓区间 {len(intervals)} · 窗口 {a['n_windows']} · "
-              f"全胜率 {wr} · 池中位 {med}")
+        print(f"[{ARM_LABELS[arm]}] 窗口 {a['n_windows']} · 全胜率 {wr} · 池中位 {med}")
 
     conclusion = _conclusion(agg_by_arm, agg_by_arm["full"]["n_windows"])
     approx_notes = [
-        "回放统一归母口径(扣非精筛腿是幸存者逐股腿,回放退归母保持全市场一致,不引入双口径)",
-        "股本=现市值/现价反推,回放恒定(股本缓变近似);TTM 用事件日已公告期(np_abs point-in-time)",
-        "历史 universe 无逐期 ST 名单(名称漂移不可回放),只做代码段过滤——轻微偏差",
-        "窗口=报告期首个环事件日→下期首个环事件日(滚动覆盖);入/出=事件次日开盘(T+1)",
-        "成员区间收益等权平均(非逐日再平衡组合);指数=窗口 close 简单收益",
-        "市值P80 臂=全门+总市值≤当前全市场 P80(阈值取当前 spot 分位,回放共用——股本恒定近似的一部分)",
-        "8 期 × 3 环 ≈ 20 窗,对「70% 场合跑赢所有指数」是小样本检验——观察口径,温度计非开关",
+        "V8.1 口径(2026-09-13 用户指令): Top-100 容量 + 逐日组合模拟——任意时刻持仓=当前过门"
+        "股票按 PEG 升序前 100(排序分冻结于披露时点,与实盘每日重排有差异),事件次日开盘进出"
+        "(分红前复权价),等权日内再平衡,停牌当日剔除",
+        "零成本假设: 无佣金/滑点/冲击成本(乐观向,读超额打折)",
+        "回放统一归母口径(扣非精筛腿是幸存者逐股腿,回放退归母保持全市场一致)",
+        "股本=现市值/现价反推→np_abs/eps 反推兜底(股本缓变);历史 universe 无逐期 ST 名单(代码段过滤)",
+        "窗口=报告期首个环事件日→下期首个环事件日(滚动覆盖);指数=窗口 close 简单收益",
+        "市值P80 臂=全门+总市值≤当前全市场 P80(阈值当前 spot 分位,回放共用)",
+        f"小样本 n={len(wins)},对「70% 场合跑赢所有指数」是小样本检验——观察口径,温度计非开关",
     ]
     out_html = ROOT / "data" / "high_earnings_pool_study.html"
     out_html.parent.mkdir(parents=True, exist_ok=True)

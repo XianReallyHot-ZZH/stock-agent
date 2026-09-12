@@ -148,3 +148,34 @@ def test_mktcap_filter_default_off_in_cfg_note():
     """市值过滤默认关(cfg_note 透传,消融臂裁决后再决定常开)。"""
     snap = build_high_earnings_snapshot(_store_seeded(), asof=_ASOF, persist=False)
     assert snap["cfg_note"]["mktcap_filter_on"] is False
+
+
+def test_history_forward_settlement():
+    """⑤节后视 30 日结算: 满窗快照自动算池等权 vs 沪深300 同窗;未满窗 → None 留白。"""
+    st = _store_seeded()
+    # 沪深300 指数日历(400 日 4000→4400,均匀 +10%/全程)
+    dates = _bdate(400, _ASOF)
+    idx_df = pd.DataFrame({"open": np.linspace(4000, 4400, 400),
+                           "high": np.linspace(4000, 4400, 400),
+                           "low": np.linspace(4000, 4400, 400),
+                           "close": np.linspace(4000, 4400, 400),
+                           "volume": 1.0}, index=dates)
+    st.upsert_index_daily("000300", idx_df, source="test")
+    # 两个月前的旧快照(成员=002460/300750,价格腿已覆盖其后 30+ 交易日)
+    st.insert_pool_membership("2026-06-15", [
+        ("002460", "20260630", "actual", "2026-08-20", 1, 0.2),
+        ("300750", "20260630", "actual", "2026-08-24", 2, 0.97)])
+    snap = build_high_earnings_snapshot(st, asof=_ASOF, persist=False)
+    hist = {h["asof"]: h for h in snap["history"]}
+    old = hist["2026-06-15"]
+    # 满窗: 三列都算出,excess=ret-bench
+    assert old["ret30"] is not None and old["bench30"] is not None
+    assert abs(old["excess30"] - (old["ret30"] - old["bench30"])) < 1e-9
+    # bench30 独立复核: 快照日后首个交易日起 30 交易日的指数闭区间收益
+    bdates = [d for d in dates if d > "2026-06-15"]
+    d0, d1 = bdates[0], bdates[29]
+    closes = idx_df["close"]
+    expect_b = float(closes[d1]) / float(closes[d0]) - 1.0
+    assert abs(old["bench30"] - expect_b) < 1e-9
+    # 基准上涨 → bench30 > 0
+    assert old["bench30"] > 0

@@ -415,17 +415,36 @@ def _history_section(snap: dict) -> str:
     concl = snap.get("conclusion")
     body = []
     for h in hist[:12]:
+        r30 = h.get("ret30")
+        b30 = h.get("bench30")
+        ex = h.get("excess30")
+
+        def _pct(v):
+            return "—" if v is None else f"{v * 100:+.1f}%"
+
+        ex_html = ("<span class='dim'>未满窗</span>" if ex is None else
+                   f"<span class='{'pos' if ex > 0 else 'neg'}'>{ex * 100:+.1f}pp</span>")
         body.append([
             f"<td>{_e(h['asof'])}</td>",
             f"<td data-v='{h['n']}'>{h['n']}</td>",
-            f"<td>{_e(h.get('period') or '—')}</td>",
+            f"<td>{_e(_fmt_period(h.get('period')))}</td>",
+            f"<td data-v='{r30 if r30 is not None else -999}'>{_pct(r30)}</td>",
+            f"<td data-v='{b30 if b30 is not None else -999}'>{_pct(b30)}</td>",
+            f"<td data-v='{ex if ex is not None else -999}'>{ex_html}</td>",
         ])
-    out = ["<h2 id='history'>⑤ 历史池回放 <span class='count'>留档 {len(hist)} 份快照</span></h2>",
-           "<div class='hint'>池成员逐次渲染留档(pool_membership 表);深回放与业绩对齐归验证器"
+    out = [f"<h2 id='history'>⑤ 历史池回放 <span class='count'>留档 {len(hist)} 份快照"
+           f"· 后视 30 日结算</span></h2>",
+           "<div class='hint'>每份快照满 30 交易日后自动补算「当时那批池子后来 30 天等权收益 "
+           "vs 沪深300 同窗」——留档的意义=事后可验证: 说出时点固化记录、成绩后算不可篡改"
+           "(与 CLAIMS_LEDGER 同一纪律)。口径: 成员收益=分红前复权价(除权修正);沪深300 为价格指数(不含股息,超额对池略偏宽 ~0.2pp/窗)。<br>深回放(逐窗口 vs 七宽基 + 消融臂)见 "
+           "<a href='high_earnings_pool_study.html'>📊 验证器深度报告</a>"
+           "(每季正式报截止后跑 <code>python scripts/validate_high_earnings_pool.py</code> 刷新)"
            "——<b>实证结论</b>: " +
            (_e(concl) if concl else
             "未运行 python scripts/validate_high_earnings_pool.py —— 结论注入占位") + "</div>",
-           _table([("asof", "快照日"), ("n", "池规模"), ("period", "报告期")], body)]
+           _table([("asof", "快照日"), ("n", "池规模"), ("period", "报告期"),
+                   ("ret30", "池·后30日"), ("bench30", "沪深300同窗"), ("excess", "超额")],
+                  body, sortable=False)]
     return "".join(out)
 
 

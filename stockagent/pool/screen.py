@@ -67,6 +67,54 @@ def _window_periods(now, n: int = 3) -> list[str]:
     return out
 
 
+
+def _forward_settle(store, hist: list[dict]) -> list[dict]:
+    """给满 30 交易日的留档快照补算后视 30 日成绩(池等权 vs 沪深300 同窗)——留档的用途落地:
+    说出时点固化,成绩后算不可篡改。窗口=快照日后首个交易日起 30 个交易日(沪深300 日历);
+    未满窗/成员价格缺 → None(「未满窗」诚实留白)。价格缓存跨快照复用。"""
+    if not hist:
+        return hist
+    bench = store.get_index_daily_series("000300")
+    if bench is None or len(bench) < 40:
+        for h in hist:
+            h.update(ret30=None, bench30=None, excess30=None)
+        return hist
+    bdates = [str(d) for d in bench.index]
+    bclose = bench["close"].astype(float)
+    adj_cache: dict[str, pd.Series] = {}   # 分红前复权 close(除权缺口修正;窗口内收益不失真)
+    for h in hist:
+        asof = h["asof"]
+        idx0 = next((i for i, d in enumerate(bdates) if d > asof), None)
+        if idx0 is None or idx0 + 29 >= len(bdates):
+            h.update(ret30=None, bench30=None, excess30=None)
+            continue
+        d0, d1 = bdates[idx0], bdates[idx0 + 29]
+        members = store.pool_membership_asof(asof)
+        rets = []
+        for code in members.index:
+            if code not in adj_cache:
+                df = store.get_series(code)
+                if df is not None and len(df):
+                    div = store.get_stock_dividend_series(code)
+                    series, _ = pr.dividend_adjusted_close(
+                        df["close"].astype(float), div if len(div) else None)
+                    adj_cache[code] = series
+                else:
+                    adj_cache[code] = pd.Series(dtype=float)
+            s = adj_cache[code]
+            if not len(s):
+                continue
+            idx = s.index.astype(str)
+            sub = s[(idx >= d0) & (idx <= d1)]
+            if len(sub) >= 2:
+                rets.append(float(sub.iloc[-1]) / float(sub.iloc[0]) - 1.0)
+        bsub = bclose[(bclose.index.astype(str) >= d0) & (bclose.index.astype(str) <= d1)]
+        bret = float(bsub.iloc[-1]) / float(bsub.iloc[0]) - 1.0 if len(bsub) >= 2 else None
+        ret30 = float(sum(rets) / len(rets)) if rets else None
+        h.update(ret30=ret30, bench30=bret,
+                 excess30=(ret30 - bret) if (ret30 is not None and bret is not None) else None)
+    return hist
+
 def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
                                  persist: bool = True) -> dict:
     """装配高业绩池快照(读 store,只读)。asof="YYYY-MM-DD"(回放/测试)|None=今天;
@@ -333,6 +381,7 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
             for r in pool])
         if prior is None and not history:
             history = store.latest_pool_snapshots(12)
+    history = _forward_settle(store, history)
 
     return {
         "as_of": asof_str,
