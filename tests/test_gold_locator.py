@@ -65,6 +65,9 @@ def test_drv_cb(tmp_path):
     st = Store(tmp_path / "t.sqlite"); _seed_micro(st, cb_buying=True)
     d = gl.drv_cb(st)
     assert d and d["flag"] == "利好" and d["raw"] > 0
+    # 换算系数钉死: 种子月增 8 万oz → 8*0.3110 吨(曾写成 0.0311 差10倍)
+    assert abs(d["raw"] - 8 * 0.3110) < 1e-9
+    assert d["value"] == "+2.5吨/月"
 
 
 def test_drv_spec_and_commercial(tmp_path):

@@ -52,7 +52,7 @@ def drv_cb(store):
     if cb is None or cb.empty or len(cb) < 2:
         return None
     v = cb["value"].astype(float)
-    delta_t = (float(v.iloc[-1]) - float(v.iloc[-2])) * 0.0311   # 万oz → 吨
+    delta_t = (float(v.iloc[-1]) - float(v.iloc[-2])) * 0.3110   # 万oz → 吨(1万oz=0.311吨)
     return {"label": "央行购金(中国)", "value": f"{delta_t:+.1f}吨/月",
             "dir": "↑" if delta_t > 0 else ("↓" if delta_t < 0 else "→"),
             "flag": "利好" if delta_t > 0 else ("逆风" if delta_t < 0 else "中性"), "raw": delta_t}

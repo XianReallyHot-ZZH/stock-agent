@@ -320,7 +320,7 @@ def _gold_micro_block(store, c: dict, first=None) -> str:
         cur = float(val.iloc[-1])
         prev = float(val.iloc[-2]) if len(val) > 1 else cur
         delta = cur - prev                              # 万盎司/月(实物净购金)
-        chips.append(chip("央行(中国)黄金", f"{cur:.0f}万oz", f"近月净购 {delta:+.0f}万oz(≈{delta*0.0311:+.1f}吨)", c["accent"]))
+        chips.append(chip("央行(中国)黄金", f"{cur:.0f}万oz", f"近月净购 {delta:+.0f}万oz(≈{delta*0.3110:+.1f}吨)", c["accent"]))
     chips.append('</div>')
     parts = [f'<div class="chart"><div class="chart-t">🔬 黄金微观紧缺 '
              f'<span class="muted">(L2库存/L3紧缺/L4投机泡沫 · JZ 框架微观证据 · GOFO/全球ETF无源待补)</span></div>',
