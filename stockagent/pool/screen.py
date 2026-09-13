@@ -233,12 +233,14 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
         bf_row = (bal_full[s["period_used"]].loc[code]
                   if len(bal_full[s["period_used"]]) and code in bal_full[s["period_used"]].index
                   else None)
-        # 扣非源: tushare fina_indicator 批量(优先,全市场覆盖) → sina 逐股回退
+        # 扣非源: tushare fina_indicator 批量(优先) ∪ sina 逐股(期级合并补缺——
+        # tushare 本期 profit_dedt 偶有 NaN 源缺,2026-09-13 实测;两源期并集,sina 只补缺期)
         np_ded = store.profit_dedt_map(code) or None
-        sina_panel = None
-        if np_ded is None:
-            # sina 精筛面板(幸存者才有;缺=腿未拉,旗标可消)
-            sina_panel = store.get_stock_financials_panel(code, metrics=["np_deducted", "goodwill"])
+        sina_panel = store.get_stock_financials_panel(code, metrics=["np_deducted", "goodwill"])
+        if sina_panel is not None and len(sina_panel) and "np_deducted" in sina_panel.columns:
+            sina_ded = {str(k): v for k, v in sina_panel["np_deducted"].dropna().items()}
+            if sina_ded:
+                np_ded = {**sina_ded, **(np_ded or {})}
         goodwill_series: dict[str, float] = {}
         if sina_panel is not None and len(sina_panel):
             if "np_deducted" in sina_panel.columns and not np_ded:
