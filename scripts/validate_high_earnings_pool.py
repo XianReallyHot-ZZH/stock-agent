@@ -132,7 +132,8 @@ def _conclusion(agg_by_arm: dict, n_win: int) -> str:
 
 def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
                  approx_notes: list[str], took_s: float,
-                 concentration: dict | None = None) -> str:
+                 concentration: dict | None = None,
+                 concentration_wins: dict | None = None) -> str:
     idx_syms = study.INDEX_BASELINES
     rows_html = []
     for w in windows_by_arm.get("full") or []:
@@ -178,6 +179,36 @@ def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
             + "<div class='hint'>门判定/进出纪律与 Top-100 主口径完全相同,仅容量不同"
               "(排序分=PEG 升序);零成本;n=37 小样本。Top-5 意味着单股 20% 敞口——"
               "集中度放大的是波动与路径依赖,读数时与仓位纪律(仓位看板⑥)对表。</div>")
+    if concentration_wins:
+        sizes = [s for s in (100, 25, 20, 15, 10, 5) if s in concentration_wins]
+        base = concentration_wins[sizes[0]] if sizes else []
+        rows_m = []
+        for i, w0 in enumerate(base):
+            sh = (w0["indices"] or {}).get("000001")
+            cells = [f"<td>{_e(w0['period'])}</td>",
+                     f"<td>{_e(w0['start'])}→{_e(w0['end'])}</td>"]
+            for s in sizes:
+                wr = concentration_wins[s][i]
+                v = wr.get("pool")
+                if v is None:
+                    cells.append("<td class='dim'>—</td>")
+                    continue
+                beat = sh is not None and v > sh
+                cls = "pos" if v > 0 else ("neg" if v < 0 else "")
+                mark = "✓" if beat else "✗"
+                mcls = "ok" if beat else "crit"
+                cells.append(f"<td><span class='{cls}'>{v * 100:+.1f}%</span>"
+                             f"<span class='{mcls}'>{mark}</span></td>")
+            sh_txt = "—" if sh is None else f"{sh * 100:+.1f}%"
+            cells.append(f"<td>{sh_txt}</td>")
+            rows_m.append("<tr>" + "".join(cells) + "</tr>")
+        head_m = "".join(f"<th>Top-{s}</th>" for s in sizes)
+        conc_html += ("<details class='conc-detail'><summary>📋 集中度扫描 · 逐期明细"
+                      "(点开/收起)</summary><table style='font-size:12px'>"
+                      "<tr><th>报告期</th><th>窗口</th>" + head_m + "<th>上证综指</th></tr>"
+                      + "".join(rows_m) + "</table>"
+                      "<div class='hint'>✓/✗=该容量当期是否跑赢上证综指(仅单基准 eyeball 用,"
+                      "七基准全胜口径见主表);Top-5 单格波动巨大(单股 20% 敞口),读单格谨慎。</div></details>")
     idx_head = "".join(f"<th>{_e(study.INDEX_LABELS.get(s, s))}</th>" for s in idx_syms)
     notes_html = "".join(f"<li>{_e(n)}</li>" for n in approx_notes)
     missing_n = len(price_stats.get("missing") or ())
@@ -187,7 +218,7 @@ def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
 table{{border-collapse:collapse;font-size:13px;margin:14px 0;background:#fff}}
 th,td{{border:1px solid #e1e0d9;padding:6px 10px;text-align:right}}
 th:first-child,td:first-child{{text-align:left}} th{{background:#f3f2ee}}
-.ok{{color:#0ca30c}} .crit{{color:#d03b3b}} .hint{{color:#898781;font-size:12px;line-height:1.8}}
+.ok{{color:#0ca30c}} .crit{{color:#d03b3b}} details.conc-detail{{margin:6px 0}} details.conc-detail summary{{cursor:pointer;font-weight:600;color:#52514e}} .hint{{color:#898781;font-size:12px;line-height:1.8}}
 h2{{font-size:16px}} li{{font-size:13px;line-height:1.8;color:#52514e}}</style></head><body>
 <h2>高业绩池 · 状态机回放验证</h2>
 <table><tr><th>臂</th><th>窗口数</th><th>跑赢全部宽基</th><th>池收益中位</th></tr>{''.join(arm_rows)}</table>
@@ -350,14 +381,17 @@ def main():
                 sub = s[(idx > w["start"]) & (idx <= w["end"])]
                 if len(sub) >= 2:
                     idx_ret[sym] = float(sub.iloc[-1] / sub.iloc[0]) - 1.0
-            out.append({"pool": pool_cum, "indices": idx_ret})
+            out.append({"pool": pool_cum, "indices": idx_ret,
+                        "period": w["period"], "start": w["start"], "end": w["end"]})
         return out
 
     concentration = {}
+    concentration_wins = {}
     for size in (100, 25, 20, 15, 10, 5):
         daily_c, _mbd = study.daily_pool_returns(events, decide_memo, adjpx, calendar,
                                                  top_n=size)
-        concentration[size] = study.aggregate(_window_cums(daily_c))
+        concentration_wins[size] = _window_cums(daily_c)
+        concentration[size] = study.aggregate(concentration_wins[size])
         a = concentration[size]
         wr = "—" if a["win_rate_all"] is None else f"{a['win_rate_all']:.0%}"
         med = "—" if a["median_pool"] is None else f"{a['median_pool']:+.1%}"
@@ -379,7 +413,8 @@ def main():
     out_html.parent.mkdir(parents=True, exist_ok=True)
     out_html.write_text(_html_report(agg_by_arm, windows_by_arm, price_stats,
                                      approx_notes, time.time() - t0,
-                                     concentration=concentration), encoding="utf-8")
+                                     concentration=concentration,
+                                     concentration_wins=concentration_wins), encoding="utf-8")
     print(f"-> {out_html}")
 
     if not args.no_meta:
