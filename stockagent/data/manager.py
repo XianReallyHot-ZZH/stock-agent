@@ -990,27 +990,48 @@ class DataManager:
 
     def update_stock_valuation(self, symbols: Optional[list[str]] = None,
                                indicators: Optional[list[str]] = None) -> dict:
-        """个股估值(百度金矿,5 指标)→ stock_valuation 表。百度 period='全部' 每次返回 IPO 起全历史
-        (稀疏半月级),全量 upsert 幂等覆盖——无增量游标(数据小、全量返回,与日线不同)。
-        Returns {symbol: {indicator: rows_added}}。"""
+        """个股估值 → stock_valuation 表。主源=tushare daily_basic(2026-09-13 迁移1.1: 单股一次
+        调用产 8 指标日频全史,北交所首次可得);无 token/失败降级百度金矿(稀疏半月级,逐指标)。
+        显式传 indicators 时 tushare 缺的指标(如 pcf)由 baidu 补。全量 upsert 幂等——无增量游标
+        (数据小、全量返回)。Returns {symbol: {indicator: rows_added}}。"""
+        from . import tushare_client as tc
         syms = symbols or self.STOCK_WATCHLIST
-        inds = indicators or list(fetcher.STOCK_VALUATION_INDICATORS)
+        ts_ok = tc.has_token()
         results: dict[str, dict] = {}
         for i, sym in enumerate(syms):
             per: dict[str, int] = {}
-            for j, ind in enumerate(inds):
+            if ts_ok:
+                try:
+                    frames = fetcher.fetch_valuation_tushare(sym)
+                    if indicators:
+                        frames = {k: v for k, v in frames.items() if k in indicators}
+                    for ind, df in frames.items():
+                        per[ind] = self.store.upsert_stock_valuation(
+                            sym, ind, df, source="tushare_daily_basic")
+                    log.info("stock_valuation %s: tushare %d 指标 ×max %s 行 (至 %s)",
+                             sym, len(per),
+                             max((len(v) for v in frames.values()), default=0),
+                             max((v.index[-1] for v in frames.values()), default="?"))
+                except Exception as e:  # noqa: BLE001
+                    log.warning("stock_valuation %s tushare 失败 → baidu 降级: %s",
+                                sym, str(e)[:100])
+            # baidu 补位: 显式要的没拿全,或 tushare 不可用时的全量旧路径
+            if indicators:
+                todo = [i for i in indicators if i not in per]
+            else:
+                todo = [] if per else list(fetcher.STOCK_VALUATION_INDICATORS)
+            for j, ind in enumerate(todo):
                 if j > 0:
                     time.sleep(0.3)  # be gentle to baidu
                 try:
                     df = fetcher.fetch_stock_valuation(sym, ind)
                 except Exception as e:  # noqa: BLE001
                     log.warning("stock_valuation %s %s failed: %s", sym, ind, str(e)[:100])
-                    per[ind] = 0
                     continue
                 n = self.store.upsert_stock_valuation(sym, ind, df, source="baidu")
+                per[ind] = n
                 log.info("stock_valuation %s %s: +%d rows (to %s)",
                          sym, ind, n, df.index[-1] if len(df) else "?")
-                per[ind] = n
             results[sym] = per
             if i < len(syms) - 1:
                 time.sleep(0.4)

@@ -1666,6 +1666,50 @@ def fetch_stock_valuation(
     raise FetchError(f"{symbol} {indicator}: valuation failed ({last_err})")
 
 
+# ---- 个股估值 tushare 主源 (2026-09-13 迁移 1.1 · ADR-0002) ----
+# baidu 稀疏半月级/无股息率/PCF 抛 NoneType → daily_basic 日频全史替代。
+# 口径: total_mv/circ_mv tushare=万元 → ×1e-4 转亿元,对齐 baidu 历史存量单位
+# (2026-09-13 对账实测: 茅台 15940.54/中石油 20571.56 = 亿);pcf 无消费方(grep 验证)不迁;
+# 白送 ps_ttm/dv_ratio(股息率)/turnover_rate/circ_mv;北交所(4/8 开头)估值首次可得。
+TS_VALUATION_MAP = {
+    "pe_ttm": ("pe_ttm", 1.0),
+    "pe_static": ("pe", 1.0),
+    "pb": ("pb", 1.0),
+    "ps_ttm": ("ps_ttm", 1.0),
+    "dv_ratio": ("dv_ratio", 1.0),
+    "turnover_rate": ("turnover_rate", 1.0),
+    "market_cap": ("total_mv", 1e-4),
+    "circ_mv": ("circ_mv", 1e-4),
+}
+
+
+def fetch_valuation_tushare(code: str) -> dict[str, pd.DataFrame]:
+    """个股估值全史(tushare daily_basic 按 ts_code 单次调用)→ {indicator: DataFrame[value]}
+    indexed by date(str)。单股 ≤6000 行覆盖 IPO 起全史、日频;6xx/9xx→.SH,0xx/3xx→.SZ,
+    4xx/8xx→.BJ。失败抛 TushareError/FetchError 由调用方(manager)降级 baidu。"""
+    from . import tushare_client as tc
+    ts_code = (f"{code}.SH" if code.startswith(("6", "9"))
+               else f"{code}.BJ" if code.startswith(("4", "8"))
+               else f"{code}.SZ")
+    fields = "trade_date," + ",".join(src for src, _ in TS_VALUATION_MAP.values())
+    df = tc.query("daily_basic", ts_code=ts_code, fields=fields)
+    if df is None or len(df) == 0:
+        raise FetchError(f"{code}: daily_basic empty")
+    df = df.sort_values("trade_date")
+    dates = pd.to_datetime(df["trade_date"], format="%Y%m%d").dt.strftime("%Y-%m-%d")
+    out: dict[str, pd.DataFrame] = {}
+    for ind, (src, mult) in TS_VALUATION_MAP.items():
+        s = pd.to_numeric(df[src], errors="coerce") * mult
+        frame = pd.DataFrame({"value": s.to_numpy()}, index=dates.to_numpy())
+        frame = frame.dropna()
+        frame = frame[~frame.index.duplicated(keep="last")].sort_index()
+        if len(frame):
+            out[ind] = frame
+    if not out:
+        raise FetchError(f"{code}: daily_basic 全指标 NaN")
+    return out
+
+
 # stock_financial_abstract(常用指标) 的 17 项→EN 键映射。实测(2026-07-22)指标名跨股稳定
 # (茅台/招行完全一致)。营收/利润为原始元单位(显示时 ÷1e8 转亿);ROE/毛利率等为百分数原值。
 STOCK_FINANCIAL_METRICS = {
