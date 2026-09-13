@@ -77,7 +77,7 @@ rotation_pool:
   - {symbol: "512200", name: "房地产ETF",   sector: "房地产",   csrc_industry: "房地产业",                          group: "房地产", style: "cyclic", style_alt: [], index_code: "931775", index_expect: "房地产"}
   - {symbol: "516110", name: "汽车ETF",     sector: "汽车",     csrc_industry: "汽车制造业",                        group: "汽车", style: "cyclic", style_alt: [], index_code: "931008", index_expect: "汽车"}
   # 成长宽基/风格（宽基无单一证监会行业，不走估值因子）
-  - {symbol: "159915", name: "创业板ETF",   sector: "创业板",   group: "成长宽基", style: "growth", style_alt: []}  # 创业板指399006=国证系,无免费成分接口→E1 降级待人工
+  - {symbol: "159915", name: "创业板ETF",   sector: "创业板",   group: "成长宽基", style: "growth", style_alt: [], index_code: "399006"}  # 创业板指399006=国证系:csindex 不覆盖,2026-09-13 迁移1.10 起由 tushare index_weight 兜底(权重和哨兵替代名称哨兵);成分名称列为空(接口无名称)
   - {symbol: "588000", name: "科创50ETF",   sector: "科创",     group: "成长宽基", style: "growth", style_alt: [], index_code: "000688", index_expect: "科创50"}
   # 港股科技 / 纳指 QDII（美股与港股资金面不同，各自独立；cninfo无A股行业PE，不走估值因子）
   - {symbol: "513180", name: "恒生科技ETF", sector: "恒生科技", group: "港股科技", style: "growth", style_alt: []}  # 恒生系指数无免费成分源

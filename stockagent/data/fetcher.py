@@ -838,6 +838,38 @@ def fetch_index_constituents(index_code: str, timeout: float = 40.0) -> pd.DataF
     return out
 
 
+def fetch_index_constituents_tushare(index_code: str, lookback_days: int = 45) -> pd.DataFrame:
+    """指数成分+官方权重(tushare `index_weight`,中证+国证系,2026-09-13 迁移1.10)。
+    定位: **国证系主源**(399006 等 csindex 不覆盖——159915 码表缺口的补齐)+ csindex
+    失败 fallback;中证系日常仍走 csindex(有成分名称+名称哨兵,index_weight 无名称列)。
+    返回同形 [code,name,weight,snapshot_date](name 恒空串——store 保留存量名称);
+    取 lookback 窗内最新 trade_date 快照;**权重和 90-110% 哨兵**防串台(index_weight
+    无指数名称列,靠此替代名称哨兵)。空指数返回空表(调用方 skip)。"""
+    from datetime import date as _date, timedelta as _td
+    from . import tushare_client as tc
+    empty = pd.DataFrame(columns=["code", "name", "weight", "snapshot_date"])
+    ts_code = (f"{index_code}.SZ" if str(index_code).startswith("399")
+               else f"{index_code}.SH")
+    start = (_date.today() - _td(days=lookback_days)).strftime("%Y%m%d")
+    df = tc.query("index_weight", index_code=ts_code, start_date=start,
+                  fields="ts_code,con_code,weight,trade_date")
+    if df is None or len(df) == 0:
+        return empty
+    latest = str(df["trade_date"].max())
+    df = df[df["trade_date"].astype(str) == latest]
+    w = pd.to_numeric(df["weight"], errors="coerce").fillna(0.0)
+    if not (90.0 <= float(w.sum()) <= 110.0):
+        raise FetchError(f"index_weight {index_code} 权重和 {float(w.sum()):.1f}% "
+                         "越界(疑串台/残缺) — 拒写")
+    snap = (f"{latest[:4]}-{latest[4:6]}-{latest[6:]}" if len(latest) == 8 else latest)
+    return pd.DataFrame({
+        "code": df["con_code"].astype(str).str.split(".").str[0].str.zfill(6),
+        "name": "",
+        "weight": w,
+        "snapshot_date": snap,
+    })
+
+
 # ---- Candidate-pool screening feeds (V7 pool · 第六看板 候选个股池 · 只读旁路 ADR-0001) ----
 # push2 原生通道(2026-09-12 实证): push2.eastmoney.com 的 WAF 按 TLS 指纹拦 python-requests
 # (trust_env=False 真直连也 RemoteDisconnected)、放行 curl;系统代理(Clash 系统代理模式)对 python

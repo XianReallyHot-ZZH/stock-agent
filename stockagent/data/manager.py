@@ -492,10 +492,13 @@ class DataManager:
     def update_constituents(self, symbols: Optional[list[str]] = None) -> int:
         """Refresh index constituents+official weights for pool ETFs (E1 B 路线, 月度节奏).
 
-        index_code/index_expect 来自 etf_pool.yaml(调研§5码表). 空结果/名称哨兵不符 →
-        warn + 跳过不写库(防猜错代码与端点串台). QDII/无免费成分源标的(index_code 缺省)
-        自然跳过. Returns number of indices refreshed.
+        index_code/index_expect 来自 etf_pool.yaml(调研§5码表). 主源 csindex(有成分名称+
+        名称哨兵);空结果(csindex 不覆盖的国证系,如 399006)→ tushare index_weight 兜底
+        (2026-09-13 迁移1.10——159915 码表缺口首次补齐;无名称列,store 保留旧名,
+        权重和哨兵替代名称哨兵)。哨兵不符 → warn + 跳过不写库(防串台). QDII/无源标的
+        (index_code 缺省)自然跳过. Returns number of indices refreshed.
         """
+        from . import tushare_client as tc
         meta = self.config.symbol_meta()
         symbols = symbols or self.config.rotation_symbols()
         n_ok = 0
@@ -508,18 +511,26 @@ class DataManager:
             if i:
                 time.sleep(0.3)  # be gentle to csindex
             df = fetcher.fetch_index_constituents(str(idx))
+            src = "csindex"
+            if not len(df) and tc.has_token():
+                try:
+                    df = fetcher.fetch_index_constituents_tushare(str(idx))
+                    src = "ts_index_weight"
+                except Exception as e:  # noqa: BLE001
+                    log.warning("constituents tushare %s(%s) failed: %s", sym, idx, str(e)[:80])
+                    df = pd.DataFrame()
             if not len(df):
                 log.warning("constituents %s(%s) empty — skipped (no write)", sym, idx)
                 continue
             iname = str(df.attrs.get("index_name", ""))
-            if expect and expect not in iname:
+            if src == "csindex" and expect and expect not in iname:
                 log.warning("constituents %s(%s) sentinel mismatch: got '%s' expect '%s' — skipped",
                             sym, idx, iname, expect)
                 continue
             self.store.upsert_constituents(str(idx), df)
             n_ok += 1
-            log.info("constituents %s %s(%s): %d names, snapshot %s",
-                     sym, iname, idx, len(df), df["snapshot_date"].iloc[0])
+            log.info("constituents[%s] %s %s(%s): %d names, snapshot %s",
+                     src, sym, iname or "(国证/无名称)", idx, len(df), df["snapshot_date"].iloc[0])
         log.info("constituents refresh: %d indices ok", n_ok)
         return n_ok
 

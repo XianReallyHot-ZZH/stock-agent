@@ -105,8 +105,12 @@ def test_manager_sentinel_match_writes(monkeypatch):
 
 
 def test_manager_empty_constituents_no_write(monkeypatch):
+    """csindex 空 且 tushare 兜底不可用 → 不写库。(2026-09-13 迁移1.10 起 csindex 空会先
+    试 index_weight——token 经 stockagent.config 导入泄漏进 pytest 进程,须显式关掉。)"""
+    from stockagent.data import tushare_client as tc
     st = _store()
     dm = mgr.DataManager(store=st)
+    monkeypatch.setattr(tc, "has_token", lambda: False)
     monkeypatch.setattr(mgr.fetcher, "fetch_index_constituents",
                         lambda idx: pd.DataFrame(columns=["code", "name", "weight", "snapshot_date"]))
     assert dm.update_constituents(symbols=["512800"]) == 0
@@ -150,11 +154,13 @@ def test_update_etf_earnings_uses_constituents_route(monkeypatch):
 
 
 def test_pool_yaml_has_index_codes():
-    """码表落地: 30 只有 index_code, 哨兵关键词齐(调研§5)."""
+    """码表落地: 31 只有 index_code(2026-09-13 迁移1.10: 159915 补 399006 国证系,经
+    tushare index_weight 兜底), 哨兵关键词齐(调研§5)."""
     meta = get_config().symbol_meta()
     with_code = [s for s, m in meta.items() if m.get("index_code")]
-    assert len(with_code) == 30                           # 29 + 159326(931994 华夏官网确认)
+    assert len(with_code) == 31                           # 29 + 159326(931994) + 159915(399006)
     assert meta["512800"]["index_expect"] == "银行"
     assert meta["159326"]["index_code"] == "931994"
-    for s in ("513060", "513180", "513050", "159941", "512480", "159915"):
-        assert not meta.get(s, {}).get("index_code")      # QDII×4 + CES + 国证 → 降级
+    assert meta["159915"]["index_code"] == "399006"       # 国证系,tushare 兜底(无名称哨兵)
+    for s in ("513060", "513180", "513050", "159941", "512480"):
+        assert not meta.get(s, {}).get("index_code")      # QDII×4 + CES → 降级

@@ -1134,7 +1134,8 @@ class Store:
     def upsert_constituents(self, index_code: str, df: pd.DataFrame) -> int:
         """Official constituents+weights snapshot upsert, keyed by (index_code, code) —
         monthly refresh cadence, same-snapshot rerun overwrites. df columns:
-        [code, name, weight, snapshot_date]."""
+        [code, name, weight, snapshot_date]。name 为空串时保留存量(tushare index_weight
+        无名称列,2026-09-13 迁移1.10)。"""
         if df is None or len(df) == 0:
             return 0
         rows = [
@@ -1146,7 +1147,8 @@ class Store:
             c.executemany(
                 "INSERT INTO index_constituents(index_code,code,name,weight,snapshot_date) "
                 "VALUES(?,?,?,?,?) ON CONFLICT(index_code,code) DO UPDATE SET "
-                "name=excluded.name,weight=excluded.weight,snapshot_date=excluded.snapshot_date",
+                "name=CASE WHEN excluded.name='' THEN index_constituents.name ELSE excluded.name END,"
+                "weight=excluded.weight,snapshot_date=excluded.snapshot_date",
                 rows,
             )
         return len(rows)
