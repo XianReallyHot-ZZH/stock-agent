@@ -108,7 +108,8 @@ PYTHONIOENCODING=utf-8 python scripts/china_macro_report.py --no-open   # 国内
 PYTHONIOENCODING=utf-8 python scripts/position_report.py        # 仓位管理（估值档×预案对照；数据腿=backfill_index.py 已回填的 index_pe/pb，无新回填；预案表在 config/params.yaml position_plan）
 # 候选个股池(高业绩池 V8 六节；sina 精筛腿 7 天节流自动带, --no-sina 跳过)
 PYTHONIOENCODING=utf-8 python scripts/stock_pool_report.py
-# 验证器(回放 vs 七宽基+消融三臂, 结论活注入看板;每季正式报截止后跑一次加窗复核 Claim 003):
+# 验证器 V8.1(Top-100 逐日模拟 vs 七宽基+消融四臂+集中度/小市值扫描, 38 期 2017 起, 结论活注入看板;
+#   Claim 003 已终审证伪 32%;每季正式报截止后跑一次加窗复核):
 # python scripts/validate_high_earnings_pool.py
 ```
 要推送信号提醒：指数/个股看板加 `--push-alerts`（触发时推微信/飞书）；研究看板的 `--push-alerts` 已退役（仅可视化），传了也是 no-op；候选池 v1 无推送（看板 only）。

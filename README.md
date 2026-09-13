@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Tests](https://img.shields.io/badge/tests-1027%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-1034%20passing-brightgreen.svg)
 ![Data](https://img.shields.io/badge/data-AkShare-orange.svg)
 ![Status](https://img.shields.io/badge/status-shadow%20only-lightgrey.svg)
 
@@ -44,9 +44,9 @@
 - **宏观框架看板**：沿 JZ 因果链（利率→曲线→美元→金属→能源→权益）做纯数据跟踪与分析；🥇**黄金阶段定位器**（价格结构+微观紧缺+利率美元驱动→阶段+驱动三栏+置信度+操作建议）；🔬黄金微观紧缺（COMEX 库存/CFTC 投机+商业持仓/央行购金/实际利率/期限溢价）；📰经济日历（美国高重要性事件·数据真伪 surprise+催化剂·对黄金影响）。
 - **国内宏观看板**：中国本土宏观观测层（与宏观框架=海外宏观对称）——①货币信用（M2/M1 同比+剪刀差+社融脉冲+2月动量拐点状态机，原指数择时⑪已并入此处）②利率与流动性（Shibor/FDR007 政策目标利率/LPR/中债期限结构+OMO 净投放月度近似）③政策日历（下次时点+倒计时）④社融可观测成分（政府债=国债+地方债月内累计 nowcast+社融分项，观测非预测）⑤会议→M2 转向历史回放（实证：四锚点会后 3 月上行概率全 42-44%，「会后放水」叙事无统计支持）⑥通胀（CPI/PPI+上下游剪刀差）⑦实体（PMI 荣枯线+社零/工业增加值）；温度计非开关、先行代理未过实证前一律观察项，永不喂引擎。
 - **仓位管理看板**：估值档 × 预案表对照器——沪深300 PE+PB 10 年滚动分位四档逐日回放（2005 起，与指数看板 ④ 同口径）+ 档位统计（历史占比/前向 1y·3y 收益中位/年化波动）+ 切换事件台账 + 环境注记（恐贪/地量/关键位）；预案表 = `params.yaml position_plan` 用户自定义的档位→权益仓位%区间，看板只对照「现在在哪格」，温度计非开关·不喂引擎。
-- **候选个股池看板**：**高业绩池（陈氏季度池 V8，2026-09 重写，六表退役）**——全市场非 ST 宇宙，逐股状态机：每只股票在自己的披露日（预告/快报/正式报三环）用当时可得数据过「营收+扣非双高增长」地板（point-in-time 无前视），过门入池/下次披露不过门出池（「增速不行了下季度自然被淘汰」）；两轨估值（非周期 PEG≤1 自算 PE_ttm / 周期 PB 自身历史分位≤30%——周期底 PE 爆表不被误杀）+ 风险红黄旗（商誉/存贷双高代理硬剔；应收/并购代理/扭亏复审交人工，③节内嵌复审 SOP 教学+docs/stock_pool/MANUAL_REVIEW.md 详版）+ Top-N；行业构成涌现簇信号（商品关联周期 ≥50% 高亮）+ 环比 diff 新进/淘汰 + 池成员留档回放；配状态机回放验证器（vs 七宽基+消融三臂，结论含无 edge 也注入读图说明，「8 年 70% 跑赢所有宽基」已登记 CLAIMS_LEDGER Claim 003 可证伪）。
+- **候选个股池看板**：**高业绩池（陈氏季度池 V8，2026-09 重写，六表退役）**——全市场非 ST 宇宙，逐股状态机：每只股票在自己的披露日（预告/快报/正式报三环）用当时可得数据过「营收+扣非双高增长」地板（point-in-time 无前视），过门入池/下次披露不过门出池（「增速不行了下季度自然被淘汰」）；两轨估值（非周期 PEG≤1 自算 PE_ttm / 周期 PB 自身历史分位≤30%——周期底 PE 爆表不被误杀）+ 风险红黄旗（商誉/存贷双高代理硬剔；应收/并购代理/扭亏复审交人工，③节内嵌复审 SOP 教学+docs/stock_pool/MANUAL_REVIEW.md 详版）+ Top-N；行业构成涌现簇信号（商品关联周期 ≥50% 高亮）+ 环比 diff 新进/淘汰 + 池成员留档回放；配 Top-100 逐日组合模拟验证器（vs 七宽基 + 消融四臂 + 集中度扫描 + 小市值精选，38 期 9.5 年——Claim 003「8 年 70% 跑赢所有宽基」**已终审证伪**（32%/池中位 −1.2%，结论含无 edge 也照实注入读图说明）；⑤节留档快照满 30 交易日自动结算后视 30 日成绩 vs 沪深300）。
 - **自律度对账**：记录目标持仓 vs 实际执行，量化自己的纪律。
-- **纯函数 + 配置驱动 + 全测试覆盖**（1027 个 pytest），回测与实盘共用同一引擎函数。
+- **纯函数 + 配置驱动 + 全测试覆盖**（1034 个 pytest），回测与实盘共用同一引擎函数。
 
 ---
 
@@ -134,7 +134,7 @@ python scripts/backfill_economic_calendar.py           # 经济日历(美国高�
 ### 验证安装
 
 ```bash
-python -m pytest tests/ -q          # 1027 个测试全过即环境 OK
+python -m pytest tests/ -q          # 1034 个测试全过即环境 OK
 ```
 
 ---
@@ -216,7 +216,7 @@ python scripts/position_report.py               # 生成 data/position.html（�
 ```bash
 python scripts/backfill_stock_pool.py --all     # 冷启动：spot→行业→正式报扩列16期→资产负债16期→日线→分红→幸存者sina精筛（重跑=续跑）
 python scripts/stock_pool_report.py             # 生成 data/stock_pool.html（--no-sina 跳过精筛腿）
-python scripts/validate_high_earnings_pool.py  # 验证器：回放 vs 七宽基 + 消融三臂 → study HTML + 结论写 meta
+python scripts/validate_high_earnings_pool.py  # 验证器 V8.1：Top-100 逐日模拟 vs 七宽基 + 消融四臂 + 集中度/小市值扫描（38 期 2017 起）→ study HTML + 结论写 meta
 # （旧六表验证器 validate_deviation_extreme / validate_pead 已随 V8 退役，留盘存档勿运行）
 ```
 
@@ -269,7 +269,7 @@ python scripts/validate_commodity_inventory.py  # 库存 event-study（CZCE 三�
 
 ## 📡 数据源
 
-- **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值；候选个股池另用 业绩报表扩列（eps/每股净资产/净利润绝对值→TTM 自算）+ 资产负债表汇总 zcfz（风险筛，无商誉/借款列——商誉走 sina 逐股精筛腿）+ 全市场现货快照（市值/PE/PB 列；push2 被指纹拦截时双兜底：curl 子进程 → 腾讯 qt.gtimg.cn 批量行情）。
+- **AkShare**（eastmoney → sina → baostock 三源容错）：日线、财报、分红、业绩预告、估值；候选个股池另用 业绩报表扩列（eps/每股净资产/净利润绝对值→TTM 自算，2015 起全史）+ 资产负债表汇总 zcfz（风险筛，无商誉/借款列——商誉走 sina 逐股精筛腿）+ 全市场现货快照（市值/PE/PB 列；push2 被指纹拦截时双兜底：curl 子进程 → 腾讯 qt.gtimg.cn 批量行情）+ 历期过地板者 11 年日线（4869 只，纯面板判定防幸存者偏差）。
 - ETF 份额：SSE `fund_etf_scale_sse` + SZSE `fund_etf_scale_szse`（双源）。
 - 单位净值：`fund_etf_fund_info_em`（真 NAV，天然正确无需复权）。
 - 沪深 300 PE/PB：legulegu（仅沪深300/上证50/中证500，不支持创业板指/科创50）。
@@ -284,7 +284,7 @@ python scripts/validate_commodity_inventory.py  # 库存 event-study（CZCE 三�
 ## 🧪 测试
 
 ```bash
-python -m pytest tests/ -q          # 1027 个
+python -m pytest tests/ -q          # 1034 个
 ```
 
 纯函数优先（信号层无副作用，所有计算在最后一根 K 线评估）；每个新功能必须有 pytest 测试；回测和实盘共用同一引擎函数（`score_universe` / `check_exits` / `decide_target`）。
@@ -312,7 +312,7 @@ stock-agent/
 ├── scripts/           update_data · run_eod · run_morning_report · run_backtest ·
 │                      sweep_params · walk_forward · backfill_scale · fix_splits ·
 │                      research_report · index_timing_report · stock_report · ...
-├── tests/             单测(1027)
+├── tests/             单测(1034)
 ├── docs/              PRD · 执行计划 · 课程笔记 · Phase 交接
 ├── DESIGN.md          产品设计(16 决策 + 架构 + 路线图 + 回测结论)
 ├── CLAUDE.md          开发规范(命令 + 架构 + 代码风格 + 数据质量)
