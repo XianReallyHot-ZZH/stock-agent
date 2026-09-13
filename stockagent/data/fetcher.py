@@ -2789,8 +2789,7 @@ def fetch_money_supply_tushare() -> list[dict]:
 
 def fetch_tsf_inc_tushare() -> list[dict]:
     """社融增量(tushare `sf_month`,2002 起)——仅 tsf_inc(分项无)。
-    定位=应急 fallback(金十列更全仍主源);upsert 走 keep_null 保分项。
-    (stk_endval=社融存量为批次 2 升级点,2026-09-13 记录未启用。)"""
+    定位=应急 fallback(金十列更全仍主源);upsert 走 keep_null 保分项。"""
     from . import tushare_client as tc
     df = tc.query("sf_month")
     if df is None or len(df) == 0:
@@ -2805,6 +2804,29 @@ def fetch_tsf_inc_tushare() -> list[dict]:
                     "rmb_loans": None, "corp_bond": None, "equity_fin": None})
     if not out:
         raise FetchError("sf_month rows empty")
+    return out
+
+
+def fetch_tsf_stock_tushare() -> list[dict]:
+    """社融存量余额(tushare `sf_month.stk_endval`,2002-12 起·早年仅年末值)→ ts_stock。
+    常规月调腿(批次 2.5):金十无存量列,此为唯一供给;单位=**万亿元**(源原生,
+    202412=408.34 与官方分毫不差),与同表 tsf_inc(亿)不同——图注/tile 标注。
+    keep_null: 仅动 ts_stock 列,不碰金十分项。"""
+    from . import tushare_client as tc
+    df = tc.query("sf_month")
+    if df is None or len(df) == 0:
+        raise FetchError("sf_month empty")
+    out = []
+    for _, r in df.iterrows():
+        m = str(r.get("month") or "")
+        v = _ts_f(r.get("stk_endval"))
+        if len(m) != 6 or not m.isdigit() or v is None:
+            continue
+        out.append({"month": f"{m[:4]}-{m[4:]}-01", "ts_stock": v,
+                    "tsf_inc": None, "rmb_loans": None, "corp_bond": None,
+                    "equity_fin": None})
+    if not out:
+        raise FetchError("sf_month stk_endval rows empty")
     return out
 
 

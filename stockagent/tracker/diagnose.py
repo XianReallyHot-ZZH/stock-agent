@@ -295,7 +295,8 @@ def diagnose_fear_greed(store, index_sym: str = "000001") -> dict:
 
 
 def diagnose_money_conditions(store) -> dict:
-    """货币条件(只读诊断旁路): M2/M1 同比 + M1−M2 剪刀差 + 社融脉冲 + episode 状态机。
+    """货币条件(只读诊断旁路): M2/M1 同比 + M1−M2 剪刀差 + 社融存量同比(真口径·批次2.5,
+    缺列回退增量TTM/M2 脉冲代理) + episode 状态机。
     「M2 定大盘」主流叙事的观测层落地——温度计非开关,永不喂引擎;消费方=国内宏观看板①
     (china_macro.framework),实证结论由 validate_m2_timing 写 meta、其 ① 活注入读图说明。"""
     from . import money_conditions as mcm
@@ -307,6 +308,8 @@ def diagnose_money_conditions(store) -> dict:
     tsf = store.get_china_tsf_series()
     pulse = (mcm.tsf_pulse_series(tsf["tsf_inc"], df["m2_amt"])
              if len(tsf) and "tsf_inc" in tsf.columns else pd.Series(dtype=float))
+    stock_yoy = (mcm.tsf_stock_yoy_series(tsf["ts_stock"])
+                 if len(tsf) and "ts_stock" in tsf.columns else pd.Series(dtype=float))
     state = mcm.episode_state(m2)
 
     def _last(s: pd.Series) -> float:
@@ -323,6 +326,7 @@ def diagnose_money_conditions(store) -> dict:
         "m1_series": m1.dropna(),
         "scissor_series": sc,
         "pulse_series": pulse,
+        "stock_yoy_series": stock_yoy,       # 批次2.5 真口径(看板优先用它,代理为回退)
         "events": mcm.m2_episode_events(m2),
         "state": state,
         "state_label": mcm.state_label(state),

@@ -851,8 +851,9 @@ class DataManager:
         """Fetch + store 中国货币条件月度数据(国内宏观看板①)。
         货币腿: 金十主源——tushare cn_m 对账判死不迁(2026-09-13: m1=旧口径,2024起新口径门
         FAIL,差 43万亿;fallback 翻口径比缺数据更糟)。社融: 金十主源(分项列更全)+tushare
-        sf_month 应急 fallback(仅增量列,修订差≤0.2%无关观测用途,keep_null 保分项)。
-        两源独立容错;全量 upsert 幂等。Returns {money: rows, tsf: rows}。"""
+        sf_month 应急 fallback(仅增量列,修订差≤0.2%无关观测用途,keep_null 保分项);
+        存量列 ts_stock(万亿)由 sf_month 常规月调供给(批次2.5,金十无此列)。
+        各腿独立容错;全量 upsert 幂等。Returns {money: rows, tsf: rows, ts_stock?: rows}。"""
         out = {"money": 0, "tsf": 0}
         try:
             rows = fetcher.fetch_china_money_supply()
@@ -876,6 +877,17 @@ class DataManager:
                      rows[0]["month"] if rows else "?")
         except Exception as e:  # noqa: BLE001
             log.warning("china_tsf failed: %s", str(e)[:120])
+        # 批次2.5(2026-09-13): tushare sf_month 存量列(ts_stock,万亿)常规月调——金十无此列,
+        # 此为唯一供给;keep_null 只动 ts_stock 不碰金十分项。失败仅缺存量,增量腿不受影响。
+        try:
+            from . import tushare_client as tc
+            if tc.has_token():
+                rows = fetcher.fetch_tsf_stock_tushare()
+                out["ts_stock"] = self.store.upsert_china_tsf(rows)
+                log.info("china_tsf ts_stock: +%d rows (to %s)", out["ts_stock"],
+                         rows[0]["month"] if rows else "?")
+        except Exception as e:  # noqa: BLE001
+            log.warning("china_tsf ts_stock failed: %s", str(e)[:120])
         return out
 
     def update_china_rates(self) -> dict:

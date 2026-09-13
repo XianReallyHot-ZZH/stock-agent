@@ -1,7 +1,8 @@
 """国内宏观看板渲染(第七看板 data/china_macro.html · 只读旁路 · 永不喂引擎)。
 
 七 section:
-① 货币信用 —— M2/M1/社融完整观测(M2/M1 同比+剪刀差+社融脉冲+episode 状态机+事件标记+实证结论
+① 货币信用 —— M2/M1/社融完整观测(M2/M1 同比+剪刀差+社融存量同比[真口径·批次2.5,缺列回退
+   增量TTM/M2 脉冲代理]+episode 状态机+事件标记+实证结论
    meta 读;原指数择时 ⑪ 已于 2026-08-25 移除,此处为唯一入口)。复用 tracker.diagnose.diagnose_money_conditions 与 tracker.money_conditions 纯函数
    (china_macro→tracker 同向依赖,与 pool→tracker 同礼遇;不反向、不 re-export)。
 ② 利率与流动性 —— Shibor / FDR007(DR 系定盘=央行政策目标利率) / LPR / 中债期限结构(10Y−2Y)
@@ -9,7 +10,8 @@
 ③ 政策日历 —— 硬编码典型时点(政治局 4/7/12 月·中央经济工作会议·货政报告·两会·LPR·金融数据公布)
    → 下次时点+倒计时;只放事实,观点结算归 docs/CLAIMS_LEDGER.md。
 ④ 社融可观测成分(nowcast · 观测非预测) —— 政府债(国债+地方债逐券)月度堆叠+月内累计
-   vs 近12月均值 + 社融分项历史(信贷/企业债/股票,官方口径)做分布对照;信贷黑箱诚实留白。
+   vs 近12月均值 + 社融分项历史(信贷/企业债/股票,官方口径)做分布对照 + 社融存量同比
+   (真口径 sf_month·批次2.5,替代①节旧脉冲代理);信贷黑箱诚实留白。
 ⑤ 会议→M2 转向历史回放 —— 锚点月(3两会/4·7·12政治局+经济工作会议)后 3 个月 M2 同比方向统计,
    「12月定调→来年放水」叙事的历史对照;历史统计非因果非信号。
 ⑥ 通胀 —— CPI/PPI 同比 + PPI−CPI 上下游剪刀差(金十月频,CPI 2008 起/PPI 2006 起)。
@@ -73,13 +75,20 @@ _MONEY_WINDOW_YEARS = 10  # 展示窗口近 N 年(2008-2011 四万亿年代 25%+
 def _money_figure(mcd: dict) -> go.Figure:
     fig = go.Figure()
     m2, m1 = mcd["m2_series"], mcd["m1_series"]
-    sc, pu = mcd["scissor_series"], mcd["pulse_series"]
+    sc = mcd["scissor_series"]
+    # 批次2.5: 社融右轴优先真存量同比(sf_month.stk_endval),存量列缺→回退增量TTM/M2 脉冲代理
+    stock_yoy = mcd.get("stock_yoy_series", pd.Series(dtype=float))
+    if len(stock_yoy):
+        pu, pu_name, pu_hover = stock_yoy, "社融存量同比%(右轴)", "社融存量同比"
+    else:
+        pu, pu_name, pu_hover = mcd["pulse_series"], "社融脉冲%(右轴·代理)", "社融脉冲(代理)"
     # 数据切片到展示窗口(只喂近 N 年 → y 轴 autorange 随窗口数据,不再被窗口外高点拉长)
     ends = [s.index[-1] for s in (m2, m1, sc, pu) if len(s)]
     if ends:
         cut = (pd.to_datetime(max(ends))
                - pd.DateOffset(years=_MONEY_WINDOW_YEARS)).strftime("%Y-%m-01")
-        m2, m1, sc, pu = (s[s.index >= cut] for s in (m2, m1, sc, pu))
+        # 空 Series 的 RangeIndex 与字符串 cut 比较会炸 → len 守卫原样透传
+        m2, m1, sc, pu = (s[s.index >= cut] if len(s) else s for s in (m2, m1, sc, pu))
         events = [e for e in mcd.get("events", []) if str(e["month"]) >= cut]
     else:
         events = list(mcd.get("events", []))
@@ -99,9 +108,9 @@ def _money_figure(mcd: dict) -> go.Figure:
             hovertemplate="%{x|%Y-%m}<br>剪刀差 %{y:.1f}pp<extra></extra>"))
     if len(pu):
         fig.add_trace(go.Scatter(
-            x=pd.to_datetime(pu.index), y=pu.to_numpy(dtype=float), name="社融脉冲%(右轴)",
+            x=pd.to_datetime(pu.index), y=pu.to_numpy(dtype=float), name=pu_name,
             yaxis="y2", line=dict(color=_PAL["good"], width=1.6),
-            hovertemplate="%{x|%Y-%m}<br>社融脉冲 %{y:.1f}%<extra></extra>"))
+            hovertemplate=f"%{{x|%Y-%m}}<br>{pu_hover} %{{y:.1f}}%<extra></extra>"))
     m2_map = {str(m)[:7]: float(v) for m, v in m2.items()}
     for kind, (sym, color, label) in _MONEY_EVENT_STYLE.items():
         ev = [e for e in events if e["kind"] == kind]
@@ -124,7 +133,8 @@ def _money_figure(mcd: dict) -> go.Figure:
         font=dict(color=_PAL["ink"], family="system-ui, sans-serif"), showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         yaxis=dict(title_text="同比 %", gridcolor=_PAL["grid"], zerolinecolor=_PAL["grid"]),
-        yaxis2=dict(title_text="社融脉冲 %(TTM增量/M2)", overlaying="y", side="right",
+        yaxis2=dict(title_text="社融存量同比 %" if len(stock_yoy) else "社融脉冲 %(TTM增量/M2代理)",
+                    overlaying="y", side="right",
                     gridcolor="rgba(0,0,0,0)", zeroline=False, showgrid=False))
     fig.update_xaxes(gridcolor=_PAL["grid"], type="date", hoverformat="%Y-%m",
                      rangeslider_visible=True,
@@ -149,15 +159,21 @@ def _money_html(mcd: dict, fig_html: str, conclusion: str) -> str:
     m2v, m1v = mcd["m2_yoy"], mcd["m1_yoy"]
     scv = (float(mcd["scissor_series"].iloc[-1]) if len(mcd["scissor_series"])
            and not pd.isna(mcd["scissor_series"].iloc[-1]) else float("nan"))
-    puv = (float(mcd["pulse_series"].iloc[-1]) if len(mcd["pulse_series"])
-           and not pd.isna(mcd["pulse_series"].iloc[-1]) else float("nan"))
     tsf_sub = f"截至 {mcd['tsf_last'][:7]}" if mcd.get("tsf_last") else "(缺社融数据)"
+    stock_yoy = mcd.get("stock_yoy_series", pd.Series(dtype=float))
+    if len(stock_yoy) and not pd.isna(stock_yoy.iloc[-1]):
+        puv = float(stock_yoy.iloc[-1])
+        pu_label, pu_sub = "社融存量同比", tsf_sub + " · 真口径 sf_month"
+    else:
+        puv = (float(mcd["pulse_series"].iloc[-1]) if len(mcd["pulse_series"])
+               and not pd.isna(mcd["pulse_series"].iloc[-1]) else float("nan"))
+        pu_label, pu_sub = "社融脉冲", tsf_sub + " · 增量TTM/M2 代理(存量列缺)"
     tiles = (
         "<div class='tiles-row'>"
         + _tile("M2 同比", f"{m2v:.1f}%", month_disp + " · 全社会的钱的增速", _PAL["series_1"])
         + _tile("M1 同比", f"{m1v:.1f}%", "现金+活期=随时能花的活钱(新口径)", _PAL["warning"])
         + _tile("剪刀差 M1−M2", f"{scv:+.1f}pp", "活钱 vs 总池(负=钱沉淀)", _PAL["ink_sec"])
-        + _tile("社融脉冲", f"{puv:.1f}%", tsf_sub + " · 增量TTM/M2 代理", _PAL["good"])
+        + _tile(pu_label, f"{puv:.1f}%", pu_sub, _PAL["good"])
         + "<div class='tile' style='min-width:220px'><div class='tile-label'>episode 状态机</div>"
           f"<div class='tile-value' style='color:{zc};font-size:18px'>{mcd['state_label']}</div>"
           f"<div class='tile-sub'>{_chip('2月动量口径', zc)} {msl_txt}</div></div></div>")
@@ -171,7 +187,9 @@ def _money_html(mcd: dict, fig_html: str, conclusion: str) -> str:
             f"口径:金十源·月频(次月中旬公布上月,天然滞后 2-6 周);事件标记=2月动量 run 状态机"
             f"(连降{mcm.DOWN_RUN}月=下行确认/大段后反向{mcm.TURN_RUN}月=拐点,与 validate_m2_timing 同规则);"
             "M1 于 2024-01 换新口径(含个人活期)——前后不可比,只展示不进研究;"
-            "社融脉冲=增量TTM/M2 代理(存量同比无免费源);"
+            "社融存量同比=真口径(tushare sf_month.stk_endval,2002-12 起·万亿单位;2002-2014 仅年末值"
+            "[年末对年末同比有效但稀疏]/2015 季度值/2016-01 起月度连续→同比 2017-01 起月度连续;"
+            "存量列缺时回退 增量TTM/M2 脉冲代理);"
             "时序图只画近10年(更早年份 25%+ 的高增速会拉长 y 轴、压平近年形态——"
             "状态机/事件计算仍用 2008 起全量序列,全史事件图见 validate_m2_timing)。<br>"
             + concl_html)
@@ -406,20 +424,36 @@ def _nowcast_html(monthly, tsf, figs: list[str], cur_ym: str) -> str:
         return _tile(label, f"{float(s.iloc[-1]):,.0f}亿",
                      f"{str(s.index[-1])[:7]} 月 · 社融口径", color)
 
+    # 批次2.5: 社融存量(万亿)+真口径同比——①节脉冲代理的升级数据同一原料,此处给社融主题 section 一眼值
+    stock_last, yoy_last = float("nan"), float("nan")
+    if tsf is not None and len(tsf) and "ts_stock" in tsf.columns:
+        stk = pd.to_numeric(tsf["ts_stock"], errors="coerce").dropna()
+        if len(stk):
+            stock_last = float(stk.iloc[-1])
+            yoy = mcm.tsf_stock_yoy_series(stk)
+            if len(yoy) and not pd.isna(yoy.iloc[-1]):
+                yoy_last = float(yoy.iloc[-1])
+    stock_tile = _tile(
+        "社融存量(最新月)", f"{stock_last:.1f}万亿" if stock_last == stock_last else "—",
+        (f"同比 {yoy_last:+.1f}% · 真口径 sf_month({str(stk.index[-1])[:7]})"
+         if yoy_last == yoy_last else "存量同比缺(存量列未灌)"), _PAL["good"])
+
     tiles = ("<div class='tiles-row'>"
              + _tile(f"本月政府债已发行({cur_ym})", cur_txt,
                      f"国债+地方债 · vs 近12月均值 {ratio_txt} · 月内进行时", _PAL["critical"])
              + _tile("上月政府债全月", last_txt, "完整月对照", _PAL["series_1"])
              + _tsf_tile("rmb_loans", "信贷分项(社融口径)", _PAL["series_1"])
              + _tsf_tile("corp_bond", "企业债分项(社融口径)", _PAL["series_2"])
+             + stock_tile
              + "</div>")
     hint = ("<b>社融分子端,只有一部分能提前看见</b>:政府债(国债+地方债逐券明细,发行/缴款**日度**可观测)"
             "是最大的一块可提前观测成分;**信贷(最大头)是月度黑箱**——免费票据利率源缺,永久待补"
             "(见执行规划终审)。分项历史为社融官方口径(滞后 2-3 月),做「信贷/企业债通常多大」的分布对照。<br>"
             "口径三重诚实:①cninfo 逐券口径(含再融资/跨市场),绝对量级未与官方月报交叉校验——本 section 用于"
             "**月度节奏与月内累计的相对观察**;②当前月是进行时(红柱不完整,和完整月比天然偏低);"
-            "③「本月已发行→社融政府债分项」还需净融资(发行−到期)换算,此处只看发行侧。<b>观测非预测,"
-            "永不喂引擎。</b>")
+            "③「本月已发行→社融政府债分项」还需净融资(发行−到期)换算,此处只看发行侧;"
+            "④社融存量 tile=真口径同比(tushare sf_month.stk_endval,万亿单位与增量列亿不同;月度同比 2017-01 起连续,"
+            "更早年=年末对年末的稀疏年度点)。<b>观测非预测,永不喂引擎。</b>")
     out = tiles + f"<div class='hint' style='margin-top:10px'>{hint}</div>"
     out += "".join(f"<div style='margin-top:12px'>{f}</div>" for f in figs if f)
     return out

@@ -151,8 +151,36 @@ def scissor_series(m1_yoy: pd.Series, m2_yoy: pd.Series) -> pd.Series:
 
 def tsf_pulse_series(tsf_inc: pd.Series, m2_amt: pd.Series) -> pd.Series:
     """社融脉冲(%) = 社融增量 12 个月滚动和 ÷ 当期 M2 余额 ×100。
-    代理口径(诚实):存量同比无免费源;TTM 消 1 月强季节;分母 M2 存量归一。源滞后货币约 2-3 月。"""
+    代理口径(诚实):存量同比无免费源;TTM 消 1 月强季节;分母 M2 存量归一。源滞后货币约 2-3 月。
+    (批次2.5 起真存量同比见 tsf_stock_yoy_series;本代理保留为其缺列时的回退。)"""
     inc = pd.to_numeric(tsf_inc, errors="coerce").sort_index()
     amt = pd.to_numeric(m2_amt, errors="coerce")
     ttm = inc.rolling(12, min_periods=12).sum()
     return (ttm / amt.reindex(ttm.index) * 100.0).dropna()
+
+
+def tsf_stock_yoy_series(ts_stock: pd.Series) -> pd.Series:
+    """社融存量同比(%) = 存量余额 ÷ 12 个月前存量 − 1(真口径·批次2.5)。
+    原料 sf_month.stk_endval(2002-12 起:2002-2014 仅年末值/2015 季度值/2016-01 起月度连续)
+    ——按 PeriodIndex 月度重索引后 shift(12):年末对年末恰好相隔 12 月→年度同比有效,
+    非 12 月整倍数间隔的点(如季度值)对不上 12 月前→NaN 不硬算;index 'YYYY-MM-01' 升序。
+    **口径断点规则**(实证 2017-01:155.99→184.14 万亿=+18% 单月跳升,统计范围切换未回溯
+    2016 侧——存量同比 2017 官方约 12%,混口径算出 30%):相邻两月都在且 |MoM|>10% 判断点
+    (社融存量真实单月变动仅 ~0.5-3%,10% 不可能是增量),断点后 12 个月内的同比(分母跨
+    断点)全部丢弃——规则式无手画线,未来再遇口径切换自动免疫。"""
+    s = pd.to_numeric(ts_stock, errors="coerce").dropna()
+    if not len(s):
+        return pd.Series(dtype=float)
+    per = pd.PeriodIndex([str(m)[:7] for m in s.index], freq="M")
+    aligned = pd.Series(s.to_numpy(dtype=float), index=per).groupby(level=0).last()
+    full = aligned.reindex(pd.period_range(per.min(), per.max(), freq="M"))
+    # 断点检测:shift(1) 无 pad(年度稀疏点两侧缺月→NaN 不误触);相邻月都在且 |MoM|>10%
+    mom = full / full.shift(1) - 1.0
+    is_break = (mom.abs() > 0.10).fillna(False)
+    # yoy[t] 的分母 = full[t-12];分母窗口跨断点(t-11..t 任一月为断点)→同比不可比,丢弃
+    poisoned = is_break.rolling(12, min_periods=1).max().astype(bool)
+    yoy = (full / full.shift(12) - 1.0) * 100.0
+    yoy[poisoned] = float("nan")
+    out = pd.Series(yoy.to_numpy(dtype=float),
+                    index=[f"{p.year:04d}-{p.month:02d}-01" for p in yoy.index])
+    return out.dropna()

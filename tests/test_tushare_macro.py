@@ -71,6 +71,31 @@ def test_fetch_cpi_ppi_tushare_maps(monkeypatch):
     assert out["ppi_yoy"] == [{"month": "2026-07-01", "value": 3.5}]
 
 
+def _sf_month_raw() -> pd.DataFrame:
+    return pd.DataFrame({"month": ["202607", "202606", "200212"],
+                         "inc_month": [14017.0, 33671.0, 3109.0],
+                         "inc_cumval": [222481.0, 208464.0, 20113.0],
+                         "stk_endval": [463.27, 462.06, 14.85]})
+
+
+def test_fetch_tsf_stock_tushare_maps(monkeypatch):
+    """批次2.5: 存量腿只取 stk_endval→ts_stock(万亿原样),增量/分项留 None 不他抹。"""
+    monkeypatch.setattr(tc, "query", lambda api, **kw: _sf_month_raw())
+    rows = fetcher.fetch_tsf_stock_tushare()
+    assert rows[0] == {"month": "2026-07-01", "ts_stock": 463.27,
+                       "tsf_inc": None, "rmb_loans": None, "corp_bond": None,
+                       "equity_fin": None}
+    assert len(rows) == 3
+
+
+def test_fetch_tsf_stock_tushare_all_null_raise(monkeypatch):
+    monkeypatch.setattr(tc, "query", lambda api, **kw: pd.DataFrame(
+        {"month": ["202607"], "inc_month": [1.0], "inc_cumval": [1.0],
+         "stk_endval": [None]}))
+    with pytest.raises(fetcher.FetchError):
+        fetcher.fetch_tsf_stock_tushare()
+
+
 # ---------- store keep_null ----------
 
 def _store() -> Store:
@@ -90,6 +115,24 @@ def test_upsert_china_tsf_keep_null_preserves_fenxiang():
     assert abs(float(df.loc["2026-07-01", "tsf_inc"]) - 14017.0) < 1e-6   # 更新
     assert abs(float(df.loc["2026-07-01", "rmb_loans"]) - 8000.0) < 1e-6  # 保留
     assert abs(float(df.loc["2026-07-01", "corp_bond"]) - 2000.0) < 1e-6
+
+
+def test_upsert_china_tsf_stock_leg_mutual_exclusive():
+    """批次2.5: 存量腿(仅 ts_stock)与金十腿(增量+分项)互不覆盖(keep_null 双向)。"""
+    s = _store()
+    s.upsert_china_tsf([{"month": "2026-07-01", "tsf_inc": 14000.0,
+                         "rmb_loans": 8000.0, "corp_bond": 2000.0, "equity_fin": 500.0,
+                         "ts_stock": None}])
+    s.upsert_china_tsf([{"month": "2026-07-01", "tsf_inc": None, "rmb_loans": None,
+                         "corp_bond": None, "equity_fin": None, "ts_stock": 463.27}])
+    # 金十重灌(无 ts_stock 键)不抹存量
+    s.upsert_china_tsf([{"month": "2026-07-01", "tsf_inc": 14017.0,
+                         "rmb_loans": 8100.0, "corp_bond": 2100.0, "equity_fin": 510.0}])
+    df = s.get_china_tsf_series()
+    row = df.loc["2026-07-01"]
+    assert abs(float(row["ts_stock"]) - 463.27) < 1e-6
+    assert abs(float(row["tsf_inc"]) - 14017.0) < 1e-6
+    assert abs(float(row["rmb_loans"]) - 8100.0) < 1e-6
 
 
 def test_upsert_lpr_keep_null_preserves_base():
@@ -197,3 +240,54 @@ def test_j10_fallback_jin10_ok_no_tushare(monkeypatch):
     def ts():
         raise AssertionError("tushare 不应被调用(金十优先)")
     assert dm._j10_fallback(lambda: [{"date": "2026-09-11"}], ts) == [{"date": "2026-09-11"}]
+
+
+def test_update_china_money_tsf_stock_regular_leg(monkeypatch):
+    """批次2.5: 金十增量腿成功时,tushare 存量腿仍常规月调(独立容错,失败不炸整腿)。"""
+    dm, st = _dm()
+    monkeypatch.setattr(tc, "has_token", lambda: True)
+    monkeypatch.setattr(fetcher, "fetch_china_money_supply", lambda: [
+        {"month": "2026-07-01", "m2_amt": 3555077.0, "m2_yoy": 7.7, "m1_amt": 1.0,
+         "m1_yoy": 4.0, "m0_amt": 1.0, "m0_yoy": 11.6}])
+    monkeypatch.setattr(fetcher, "fetch_china_tsf", lambda: [
+        {"month": "2026-07-01", "tsf_inc": 14000.0, "rmb_loans": 8000.0,
+         "corp_bond": 2000.0, "equity_fin": 500.0}])
+    monkeypatch.setattr(fetcher, "fetch_tsf_stock_tushare", lambda: [
+        {"month": "2026-07-01", "ts_stock": 463.27, "tsf_inc": None,
+         "rmb_loans": None, "corp_bond": None, "equity_fin": None}])
+    out = dm.update_china_money()
+    assert out["money"] == 1 and out["tsf"] == 1 and out.get("ts_stock") == 1
+    row = st.get_china_tsf_series().loc["2026-07-01"]
+    assert abs(float(row["ts_stock"]) - 463.27) < 1e-6
+    assert abs(float(row["rmb_loans"]) - 8000.0) < 1e-6   # 金十分项未被抹
+
+
+def test_update_china_money_tsf_stock_failure_nonfatal(monkeypatch):
+    dm, st = _dm()
+    monkeypatch.setattr(tc, "has_token", lambda: True)
+    monkeypatch.setattr(fetcher, "fetch_china_money_supply",
+                        lambda: (_ for _ in ()).throw(fetcher.FetchError("拦")))
+    monkeypatch.setattr(fetcher, "fetch_china_tsf",
+                        lambda: (_ for _ in ()).throw(fetcher.FetchError("拦")))
+
+    def _no_inc():
+        raise AssertionError("增量应急腿不应被触发(金十失败但本测试无 token 路径已 mock)")
+    monkeypatch.setattr(fetcher, "fetch_tsf_inc_tushare", _no_inc)
+    monkeypatch.setattr(fetcher, "fetch_tsf_stock_tushare",
+                        lambda: (_ for _ in ()).throw(fetcher.FetchError("sf_month 限频")))
+    out = dm.update_china_money()   # 不抛:各腿独立容错
+    assert "ts_stock" not in out and out["tsf"] == 0
+
+
+def test_update_china_money_tsf_stock_no_token_skipped(monkeypatch):
+    dm, st = _dm()
+    monkeypatch.setattr(tc, "has_token", lambda: False)
+    monkeypatch.setattr(fetcher, "fetch_china_money_supply",
+                        lambda: (_ for _ in ()).throw(fetcher.FetchError("拦")))
+    monkeypatch.setattr(fetcher, "fetch_china_tsf",
+                        lambda: (_ for _ in ()).throw(fetcher.FetchError("拦")))
+
+    def _no_stock():
+        raise AssertionError("无 token 不应调 tushare")
+    monkeypatch.setattr(fetcher, "fetch_tsf_stock_tushare", _no_stock)
+    dm.update_china_money()   # 无 token: 金十失败直接 warn,不炸

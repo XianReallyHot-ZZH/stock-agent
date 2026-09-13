@@ -112,6 +112,41 @@ def test_money_html_insufficient():
     assert "数据不足" in fw._money_html({"valid": False}, "", "")
 
 
+def _mcd(with_stock: bool) -> dict:
+    idx = pd.period_range("2020-01", periods=30, freq="M").strftime("%Y-%m-01")
+    m2 = pd.Series(8.0, index=idx)
+    later = idx[12:]
+    return {
+        "valid": True, "months": 30, "month_last": idx[-1], "m2_yoy": 8.0,
+        "m1_yoy": 5.0, "m2_series": m2, "m1_series": pd.Series(dtype=float),
+        "scissor_series": pd.Series(dtype=float),
+        "pulse_series": pd.Series(14.0, index=later),
+        "stock_yoy_series": (pd.Series(9.0, index=later) if with_stock
+                             else pd.Series(dtype=float)),
+        "events": [], "state": {"direction": "up", "run": 3,
+                                "months_since_last": 4},
+        "state_label": "连升第3月", "tsf_last": idx[-1],
+    }
+
+
+def test_money_builders_prefer_stock_yoy():
+    """批次2.5: 存量列在→真口径同比(figure trace/tile);缺→回退脉冲代理。"""
+    fig = fw._money_figure(_mcd(True))
+    names = [tr.name for tr in fig.data]
+    assert "社融存量同比%(右轴)" in names
+    html = fw._money_html(_mcd(True), "", "")
+    assert "社融存量同比" in html and "真口径 sf_month" in html
+    assert "增量TTM/M2 代理(存量列缺)" not in html
+
+
+def test_money_builders_fallback_pulse_when_stock_missing():
+    fig = fw._money_figure(_mcd(False))
+    names = [tr.name for tr in fig.data]
+    assert "社融脉冲%(右轴·代理)" in names
+    html = fw._money_html(_mcd(False), "", "")
+    assert "社融脉冲" in html and "增量TTM/M2 代理" in html
+
+
 def test_policy_html_renders():
     ev = policy.policy_calendar(date(2026, 8, 25))
     html = fw._policy_html(ev)
@@ -270,6 +305,21 @@ def test_lgb_figure_and_nowcast_html():
                        index=["2026-04-01"])
     html2 = fw._nowcast_html(stack["total"], tsf, [], "2026-08")
     assert "4,446" in html2 and "社融口径" in html2
+
+
+def test_nowcast_html_stock_tile():
+    """批次2.5: ④节社融存量 tile(万亿+真口径同比);ts_stock 缺→占位不抛。"""
+    monthly = pd.Series({"2026-07": 20000.0})
+    idx = pd.period_range("2024-01", periods=30, freq="M").strftime("%Y-%m-01")
+    stk = pd.Series(250.0 + 0.5 * i for i in range(30 - 13))  # 仅近 17 月,过 12 月门槛
+    tsf = pd.DataFrame({"ts_stock": stk.to_numpy(),
+                        "rmb_loans": [4446.0] * len(stk)}, index=idx[-len(stk):])
+    html = fw._nowcast_html(monthly, tsf, [], "2026-08")
+    assert "社融存量(最新月)" in html and "万亿" in html and "真口径 sf_month" in html
+    # 存量列缺(旧 tsf 形状) → tile 占位,不抛
+    html0 = fw._nowcast_html(monthly, pd.DataFrame({"rmb_loans": [1.0]},
+                                                   index=["2026-04-01"]), [], "2026-08")
+    assert "社融存量(最新月)" in html0 and "—" in html0
 
 
 def test_tsf_comp_figure_traces():

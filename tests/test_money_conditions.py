@@ -121,6 +121,65 @@ def test_tsf_pulse_series_ttm_over_m2():
     assert float((pu - 14.4).abs().max()) < 1e-9     # 1200*12/100000*100
 
 
+# ---------- 社融存量同比(批次2.5 真口径) ----------
+def test_tsf_stock_yoy_series_basic():
+    """月度连续序列:同比 = 值/12月前−1。"""
+    stk = _monthly([100.0] * 12 + [108.0] * 6)       # 13 月起 +8%
+    yoy = mc.tsf_stock_yoy_series(stk)
+    assert yoy.index[0] == "2021-01-01"
+    assert float(yoy.iloc[-1]) == pytest.approx(8.0)
+    assert float(yoy.iloc[0]) == pytest.approx(8.0)
+
+
+def test_tsf_stock_yoy_series_sparse_annual_no_misalign():
+    """早年仅年末值:年末对年末恰好相隔 12 月→年度同比有效;非 12 月整倍数间隔的点(季度值)
+    对不上 12 月前→NaN,不硬算跨行错位。"""
+    idx = ["2002-12-01", "2003-12-01", "2004-12-01", "2004-03-01"]
+    stk = pd.Series([14.85, 18.17, 20.41, 19.0], index=idx)
+    yoy = mc.tsf_stock_yoy_series(stk)
+    assert list(yoy.index) == ["2003-12-01", "2004-12-01"]
+    assert float(yoy.loc["2003-12-01"]) == pytest.approx((18.17 / 14.85 - 1) * 100)
+    assert float(yoy.loc["2004-12-01"]) == pytest.approx((20.41 / 18.17 - 1) * 100)
+
+
+def test_tsf_stock_yoy_series_full_monthly_after_gap():
+    """密集段起点 12 个月后才出同比(与 pulse 的 TTM 前置丢弃同理)。"""
+    stk = _monthly([14.85] + [15.0] * 12)            # 2020-01 + 12 个月 = 13 期
+    yoy = mc.tsf_stock_yoy_series(stk)
+    assert list(yoy.index) == ["2021-01-01"]
+    assert float(yoy.iloc[0]) == pytest.approx((15.0 / 14.85 - 1) * 100)
+
+
+def test_tsf_stock_yoy_series_empty():
+    assert len(mc.tsf_stock_yoy_series(pd.Series(dtype=float))) == 0
+
+
+def test_tsf_stock_yoy_series_scope_break_poisons_12m():
+    """口径断点(单月 |MoM|>10%)后 12 个月同比(分母跨断点)全丢,断点月起满 12 月恢复。
+    复刻 2017-01 实证:155.99→184.14(+18%),2017 全年 yoy 丢弃、2018-01 恢复。"""
+    vals = [100.0] * 24                                  # 2015-01..2016-12 旧口径
+    vals += [118.0] + [119.0] * 11                       # 2017-01 断点 +18%,其后 11 月
+    vals += [120.0] * 12                                 # 2018
+    stk = _monthly(vals, start="2015-01")
+    yoy = mc.tsf_stock_yoy_series(stk)
+    # 2017-01..2017-12 全部丢弃;2016-12(100/89…即旧口径内部)仍有效;2018-01 恢复(118→120 ≈1.7%)
+    assert "2017-01-01" not in yoy.index and "2017-06-01" not in yoy.index
+    assert "2017-12-01" not in yoy.index
+    assert "2018-01-01" in yoy.index
+    assert float(yoy.loc["2018-01-01"]) == pytest.approx((120.0 / 118.0 - 1) * 100)
+    # 断点前正常同比保留(2016 各月 = 100/89.29 系列全为 0%:线性平坦段)
+    assert float(yoy.loc["2016-06-01"]) == pytest.approx(0.0)
+
+
+def test_tsf_stock_yoy_series_no_false_break_on_sparse_annual():
+    """年度稀疏点(仅 12 月有值):shift(1) 两侧缺月→NaN 不误判断点,Dec/Dec 同比保留。"""
+    idx = pd.period_range("2002", periods=6, freq="Y").strftime("%Y-12-01")
+    stk = pd.Series([14.85, 18.17, 20.41, 22.0, 24.0, 26.0], index=idx)
+    yoy = mc.tsf_stock_yoy_series(stk)
+    assert len(yoy) == 5                                  # 次年起每年一个 Dec/Dec 点
+    assert float(yoy.iloc[0]) == pytest.approx((18.17 / 14.85 - 1) * 100)
+
+
 # ---------- 金十解析 ----------
 def _money_df():
     return pd.DataFrame({
@@ -195,3 +254,22 @@ def test_diagnose_money_conditions_valid(tmp_path):
     assert out["state_label"] and "连升" in out["state_label"]
     assert len(out["scissor_series"]) == len(vals)
     assert len(out["pulse_series"]) == 0                     # 无社融数据 → 空序列不抛
+    assert len(out["stock_yoy_series"]) == 0                 # 存量列缺同理(批次2.5 回退代理)
+
+
+def test_diagnose_money_conditions_with_stock(tmp_path):
+    """批次2.5: ts_stock 列在库 → 真口径同比序列出模,脉冲代理并存(看板择优)。"""
+    st = Store(tmp_path / "t.sqlite")
+    months = pd.period_range("2020-01", periods=26, freq="M").strftime("%Y-%m-01")
+    st.upsert_china_money([{"month": m, "m2_amt": 3.0e6, "m2_yoy": 8.0,
+                            "m1_amt": 1.1e6, "m1_yoy": 5.0} for m in months])
+    st.upsert_china_tsf([{"month": m, "tsf_inc": 30000.0 + 100.0 * i,
+                          "ts_stock": 250.0 + 0.5 * i} for i, m in enumerate(months)])
+    out = diagnose_money_conditions(st)
+    assert out["valid"] is True
+    assert len(out["pulse_series"]) > 0
+    assert len(out["stock_yoy_series"]) > 0
+    # 线性存量:每期同比≈0.5/间隔12期前的存量(≈256→yoy≈1.95%上下,只验量级与单调索引)
+    yoy = out["stock_yoy_series"]
+    assert list(yoy.index) == sorted(yoy.index)
+    assert 0.5 < float(yoy.iloc[-1]) < 3.0

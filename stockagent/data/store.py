@@ -325,12 +325,13 @@ CREATE TABLE IF NOT EXISTS china_money_supply ( -- 货币条件: M2/M1/M0 月度
     m0_amt  REAL, m0_yoy REAL,                   -- 流通现金(备查)
     PRIMARY KEY (month)
 );
-CREATE TABLE IF NOT EXISTS china_tsf (           -- 社融增量(月频,金十)——脉冲=增量TTM/M2 的原料;存量同比无免费源
+CREATE TABLE IF NOT EXISTS china_tsf (           -- 社融增量(月频,金十)+存量(tushare sf_month,批次2.5)
     month   TEXT NOT NULL,                       -- YYYY-MM-01(源滞后货币约 2-3 个月)
     tsf_inc REAL,                                -- 当月社融增量(亿元)
     rmb_loans REAL,                              -- 其中:人民币贷款(亿元,信贷分项——黑箱的历史对照)
     corp_bond REAL,                              -- 其中:企业债券(亿元)
     equity_fin REAL,                             -- 其中:非金融企业境内股票融资(亿元)
+    ts_stock REAL,                               -- 社融存量余额(万亿元·批次2.5 tushare sf_month;与 tsf_inc 单位不同)
     PRIMARY KEY (month)
 );
 CREATE TABLE IF NOT EXISTS shibor_daily (          -- 国内宏观(第七看板) · 利率与流动性: Shibor 定价(金十,2015起)
@@ -552,6 +553,7 @@ class Store:
             _ensure_column(c, "china_tsf", "rmb_loans", "REAL")    # v2:社融分项(旧库迁移)
             _ensure_column(c, "china_tsf", "corp_bond", "REAL")
             _ensure_column(c, "china_tsf", "equity_fin", "REAL")
+            _ensure_column(c, "china_tsf", "ts_stock", "REAL")     # 批次2.5:社融存量(万亿,tushare sf_month)
             # V8 高业绩池(2026-09): 正式报扩列 + spot 市值/估值列(旧库迁移, NULL=未回填)
             _ensure_column(c, "stock_report_actual", "eps", "REAL")
             _ensure_column(c, "stock_report_actual", "bvps", "REAL")
@@ -1788,17 +1790,19 @@ class Store:
             return row[0] if row and row[0] else None
 
     def upsert_china_tsf(self, rows: list[dict]) -> int:
-        """rows: {month,tsf_inc,rmb_loans,corp_bond,equity_fin}。幂等(分项 v2 扩列)。
-        keep_null: 分项列仅金十供给,tushare 应急腿(2026-09-13 迁移1.5,仅 tsf_inc)不抹分项存量。"""
+        """rows: {month,tsf_inc,rmb_loans,corp_bond,equity_fin,ts_stock?}。幂等(分项 v2/存量 2.5 扩列)。
+        keep_null: 分项列仅金十供给、ts_stock 仅 tushare 供给(批次2.5)——各源缺列互不抹存量。"""
         return self._upsert_simple("china_tsf",
-                                   ["month", "tsf_inc", "rmb_loans", "corp_bond", "equity_fin"], rows,
+                                   ["month", "tsf_inc", "rmb_loans", "corp_bond",
+                                    "equity_fin", "ts_stock"], rows,
                                    keep_null=True)
 
     def get_china_tsf_series(self) -> pd.DataFrame:
-        """社融增量 DataFrame(month 升序 index=month,
-        cols=tsf_inc/rmb_loans/corp_bond/equity_fin)。"""
+        """社融 DataFrame(month 升序 index=month,
+        cols=tsf_inc/rmb_loans/corp_bond/equity_fin/ts_stock)。"""
         return self._get_simple("china_tsf", "month",
-                                ["tsf_inc", "rmb_loans", "corp_bond", "equity_fin"])
+                                ["tsf_inc", "rmb_loans", "corp_bond", "equity_fin",
+                                 "ts_stock"])
 
     def _upsert_bond_issue(self, table: str, rows: list[dict]) -> int:
         """lgb/tsy 逐券发行明细通用 upsert(rows={code,name,issue_date,plan_amt,actual_amt,pay_date})。幂等。"""

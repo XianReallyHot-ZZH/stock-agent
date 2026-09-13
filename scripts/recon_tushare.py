@@ -6,6 +6,7 @@
 用法:
   python scripts/recon_tushare.py valuation [code ...]   # 1.1 个股估值 baidu vs daily_basic
   python scripts/recon_tushare.py macro                 # 1.2-1.6 金十宏观族 双实拉精确对账
+  python scripts/recon_tushare.py tsf                   # 批次2.5 社融存量 新旧口径并排快照对照
 """
 from __future__ import annotations
 
@@ -425,9 +426,83 @@ def recon_turnover(_args=None) -> Path:
     return out
 
 
+def recon_tsf_stock(_args=None) -> Path:
+    """批次2.5 社融存量: 升级类——旧口径(增量TTM/M2 脉冲代理,DB) vs 新口径(存量同比,
+    sf_month.stk_endval)并排快照对照 + 存量自洽(Δ存量 vs 增量)。"""
+    import sqlite3
+    from stockagent.config import get_config
+    from stockagent.tracker import money_conditions as mcm
+    cfg = get_config()
+    conn = sqlite3.connect(cfg.db_path)
+    tsf = pd.read_sql_query("SELECT month,tsf_inc,ts_stock FROM china_tsf ORDER BY month",
+                            conn).set_index("month")
+    money = pd.read_sql_query("SELECT month,m2_amt FROM china_money_supply ORDER BY month",
+                              conn).set_index("month")
+    conn.close()
+    lines = ["# tushare 批次2.5 社融存量 (升级类: 旧口径存档+新口径并排快照对照,不设 PASS/FAIL)", "",
+             "- 新口径: 存量同比 = sf_month.stk_endval(万亿,2002-12 起·早年仅年末值) 对 12 个月前",
+             "- 旧口径: 脉冲代理 = 增量TTM(12月滚动和)/当期 M2 余额(两者分母口径不同,形态对照非数值对齐)", ""]
+    try:
+        rows = fetcher.fetch_tsf_stock_tushare()
+    except Exception as e:  # noqa: BLE001
+        rows = []
+        lines.append(f"- SKIP — sf_month 拉取失败 {str(e)[:90]}")
+    if rows:
+        ts_new = pd.Series({r["month"]: r["ts_stock"] for r in rows}, dtype=float).sort_index()
+        lines.append(f"- sf_month 覆盖 {len(ts_new)} 月({ts_new.index.min()}..{ts_new.index.max()})"
+                     f" · 最新 {float(ts_new.iloc[-1]):.2f} 万亿")
+        if len(tsf) and "ts_stock" in tsf.columns:
+            db_stk = pd.to_numeric(tsf["ts_stock"], errors="coerce").dropna()
+            both = pd.concat([db_stk.rename("db"), ts_new.rename("ts")], axis=1, join="inner").dropna()
+            if len(both):
+                n_bad = int(((both["db"] - both["ts"]).abs() > 1e-6).sum())
+                lines.append(f"- DB 已灌存量 vs 重拉: 重叠 {len(both)} 月 · 不一致 {n_bad} 格"
+                             f"(max {float((both['db'] - both['ts']).abs().max()):.4g})")
+        # 存量自洽: Δ存量(亿) vs 当月增量(亿)——同源 sf_month,口径调整应小幅
+        d = ts_new.diff().dropna() * 1e4
+        inc_map = pd.to_numeric(tsf["tsf_inc"], errors="coerce") if len(tsf) else pd.Series(dtype=float)
+        both2 = pd.concat([d.rename("dstk"), inc_map.rename("inc")], axis=1, join="inner").dropna()
+        both2 = both2[both2["inc"].abs() > 1]
+        if len(both2):
+            rel = ((both2["dstk"] - both2["inc"]).abs() / both2["inc"].abs())
+            lines.append(f"- 存量自洽(Δ存量 vs 当月增量,DB增量列): {len(both2)} 月 · 相对差中位 "
+                         f"{float(rel.median()):.1%} / p95 {float(rel.quantile(0.95)):.1%}(官方口径调整,预期小幅)")
+        # 新旧口径并排: 存量同比 vs 脉冲代理 形态对照(相关系数+近24月快照)
+        yoy = mcm.tsf_stock_yoy_series(ts_new)
+        n_monthly = len(yoy[yoy.index >= "2018-01-01"])
+        lines.append(f"- 存量同比: {len(yoy)} 点(含早年年末对年末稀疏点) · 月度连续段 {n_monthly} 月"
+                     f" · 最新 {yoy.index[-1]} = {float(yoy.iloc[-1]):.2f}%"
+                     "(口径断点规则:单月 |MoM|>10% 判断点,其后 12 个月同比丢弃——2017-01 +18% 实证)")
+        if len(tsf) and len(money) and "tsf_inc" in tsf.columns:
+            pulse = mcm.tsf_pulse_series(tsf["tsf_inc"], money["m2_amt"])
+            both3 = pd.concat([yoy.rename("yoy"), pulse.rename("pulse")], axis=1, join="inner").dropna()
+            if len(both3) > 24:
+                corr = float(both3["yoy"].corr(both3["pulse"]))
+                lines.append(f"- 形态对照(全重叠): 重叠 {len(both3)} 月 · 相关系数 {corr:.3f}"
+                             "(两口径水平不可比,读相关与拐点)")
+                for since, tag in (("2018-01-01", "月度连续段"), ("2020-01-01", "近年")):
+                    sub = both3[both3.index >= since]
+                    if len(sub) > 12:
+                        lines.append(f"- 形态对照({tag} ≥{since}): n={len(sub)} · 相关系数 "
+                                     f"{float(sub['yoy'].corr(sub['pulse'])):.3f}")
+                tail = both3.tail(24)
+                snap = " · ".join(f"{m[5:7]}月 {a:.1f}/{b:.1f}" for m, a, b in
+                                  zip(tail.index, tail["yoy"], tail["pulse"]))
+                lines.append(f"- 近24月快照(存量同比%/脉冲代理%): {snap}")
+    lines += ["", "> 放行判据(升级类): 无 PASS/FAIL——快照留档。要点:①月度连续段相关 ≥0.9(代理与真口径"
+              "近年形态一致,水平差 ~2pp 为代理已知局限);②存量自洽相对差中位 <10%(官方口径调整小幅);"
+              "③口径断点已按规则丢弃(2017-01)。三点齐即投入看板。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_tsf_stock.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
 SUBS = {"valuation": recon_valuation, "macro": recon_macro, "nav": recon_nav,
         "index": recon_index, "dividend": recon_dividend, "commodity": recon_commodity,
-        "margin": recon_margin, "turnover": recon_turnover}
+        "margin": recon_margin, "turnover": recon_turnover, "tsf": recon_tsf_stock}
 
 
 def main() -> None:
