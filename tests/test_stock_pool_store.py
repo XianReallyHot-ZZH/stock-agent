@@ -101,12 +101,34 @@ def test_spot_success_writes_with_v8_cols(monkeypatch):
     from stockagent.data import fetcher
     from stockagent.data import manager as mgr
 
+    def _boom_ts():
+        raise fetcher.FetchError("tushare: no token in test env")
+
+    monkeypatch.setattr(fetcher, "fetch_stock_spot_tushare", _boom_ts)
     monkeypatch.setattr(fetcher, "fetch_stock_spot", _spot_frame)
     st = _store()
     n = mgr.DataManager(store=st).update_stock_spot()
     assert n == 3
     latest = st.latest_stock_spot()
     assert abs(float(latest.loc["600519", "pb"]) - 8.1) < 1e-9
+
+
+def test_spot_tushare_first_priority(monkeypatch):
+    """数据源优先级原则(2026-09-13): tushare 第一——成功时不再碰 push2/腾讯。"""
+    from stockagent.data import fetcher
+    from stockagent.data import manager as mgr
+
+    def _boom():
+        raise AssertionError("push2 不应被调用(tushare 优先)")
+
+    monkeypatch.setattr(fetcher, "fetch_stock_spot", _boom)
+    monkeypatch.setattr(fetcher, "fetch_stock_spot_tushare", _spot_frame)
+    st = _store()
+    n = mgr.DataManager(store=st).update_stock_spot()
+    assert n == 3
+    with st._conn() as c:  # noqa: SLF001
+        src = c.execute("SELECT DISTINCT source FROM stock_spot").fetchone()[0]
+    assert src == "tushare_daily_basic"
 
 
 # ---------- stock_balance(V8 风险筛腿) ----------

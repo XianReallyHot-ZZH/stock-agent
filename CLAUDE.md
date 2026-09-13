@@ -140,6 +140,14 @@ python scripts/transcribe_video.py --url "<链接>" --no-subtitle --device cpu #
 - 每个新功能必须有 pytest 测试
 - 回测和实盘共用同一引擎函数（score_universe / check_exits / decide_target）
 
+## 数据源优先级原则（2026-09-13 用户定则）
+
+**数据获取首先从 tushare（2000 积分档）获取，获取不到再尝试其他数据源。**
+落地位置：spot 三级联（tushare→push2→腾讯）；个股日线整表腿（`daily` 按交易日单次覆盖全市场 ~17s，残余退逐股 sina）；
+行业=申万（tushare 优先/东财回退）；扣非=fina_indicator∪sina 期级合并；资产负债=balancesheet 精确表优先/zcfz 代理回退。
+token 在 `.env` 的 `TUSHARE_TOKEN`（gitignored，永不入库/打印）；客户端 `stockagent/data/tushare_client.py`（全局节流+限频退避）。
+新增数据腿时默认先探 tushare 有无对应接口，有则为主源、akshare 为兜底。
+
 ## 数据质量注意
 
 - 拆分修正：`fix_splits.py`（检测 >25% 单日跌幅/ >100% 单日涨幅）；份额序列的拆分连续性在计算时处理（`timing.split_adjusted_shares`，份额×unit_nav 反向断崖检测），`fix_share_scale.py`（run-once）修过 fix_splits 前复权只覆盖 25 散点日期导致的错位行（2026-08 已跑；后续日更写原始值，不再需要重跑）

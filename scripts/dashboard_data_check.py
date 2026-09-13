@@ -432,11 +432,18 @@ def main():
             stale_codes = [c for c in info["pool_universe"]
                            if (store.last_date(c) or "") < (target or "9999-12-31")]
             if stale_codes:
-                print(f"  候选池日线日更({len(stale_codes)}/{len(info['pool_universe'])} 只落后,"
-                      f"约 {len(stale_codes) * 1.2 / 60:.0f}-{len(stale_codes) * 2 / 60:.0f}min)...")
-                res = dm.update_stock_daily(stale_codes, history_years=years)
-                store.set_meta("last_pool_price_update", datetime.now().strftime("%Y-%m-%d"))
-                print(f"  候选池日线: +{sum(res.values())} 行")
+                # 数据源优先级: tushare 整表聚合腿优先(~1min), 残余/失败退逐股 sina
+                print(f"  候选池日线·tushare 整表优先({len(stale_codes)} 只落后)...")
+                n_mkt = dm.update_stock_daily_market()
+                still = [c for c in stale_codes
+                         if (store.last_date(c) or "") < (target or "9999-12-31")]
+                print(f"  整表腿: +{n_mkt} 行, 残余 {len(still)} 只")
+                if still:
+                    print(f"  逐股增量({len(still)} 只,~{len(still) * 1.2 / 60:.0f}min)...")
+                    res = dm.update_stock_daily(still, history_years=years)
+                    store.set_meta("last_pool_price_update",
+                                   datetime.now().strftime("%Y-%m-%d"))
+                    print(f"  候选池日线: +{sum(res.values())} 行")
         elif store.get_meta("pool_prices_ready") != "1":
             print("  候选池日线: 未冷启动(不阻塞) — python scripts/backfill_stock_pool.py --all")
 

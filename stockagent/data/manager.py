@@ -1140,21 +1140,21 @@ class DataManager:
         仍败退**腾讯批量行情**(qt.gtimg.cn,非东财主机;代码清单=DB 已知代码并集——
         report_actual 最新期 ∪ daily_prices ∪ consensus,段过滤;新 IPO 首份数据落地前缺席,
         诚实边界)。两路全败返回 0(保最后快照,显式报错)。"""
+        # 数据源优先级(用户原则 2026-09-13): tushare 官方优先 → push2 原生 → 腾讯兜底
+        df = None
         try:
-            df = fetcher.fetch_stock_spot()
-            source = "em_spot"
+            df = fetcher.fetch_stock_spot_tushare()
+            source = "tushare_daily_basic"
         except Exception as e:  # noqa: BLE001
-            log.warning("push2 spot failed (%s) — falling back to tushare daily_basic",
+            log.warning("tushare spot failed (%s) — falling back to push2 native",
                         str(e)[:120])
-            df = None
         if df is None:
             try:
-                df = fetcher.fetch_stock_spot_tushare()
-                source = "tushare_daily_basic"
+                df = fetcher.fetch_stock_spot()
+                source = "em_spot"
             except Exception as e2:  # noqa: BLE001
-                log.warning("tushare spot failed (%s) — falling back to tencent quotes",
+                log.warning("push2 spot failed (%s) — falling back to tencent quotes",
                             str(e2)[:120])
-                df = None
         if df is None:
             codes = self._known_stock_codes()
             if not codes:
@@ -1164,7 +1164,7 @@ class DataManager:
                 df = fetcher.fetch_stock_spot_via_tencent(codes)
                 source = "tencent_qt"
             except Exception as e3:  # noqa: BLE001
-                log.error("stock_spot FAILED (push2 + tushare + tencent all down: %s) — "
+                log.error("stock_spot FAILED (tushare + push2 + tencent all down: %s) — "
                           "保留最后快照", str(e3)[:120])
                 return 0
         today = fetcher.today_str()
@@ -1173,6 +1173,59 @@ class DataManager:
         pruned = self.store.prune_stock_spot(keep_days=90)
         log.info("stock_spot %s: %d names (src=%s, pruned %d old rows)", today, n, source, pruned)
         return n
+
+    def update_stock_daily_market(self, max_days: int = 7) -> int:
+        """全市场个股日线(tushare daily 按交易日整表,单次覆盖全市场)→ daily_prices。
+
+        数据源优先级原则的日线落地: 候选池价格日更从「逐股 sina 爬 45-75min」变为
+        「每日 1-3 次整表调用 ~1min」。只覆盖 DB 已跟踪的个股代码(防全市场噪音入库);
+        vol 手→股,amount 千元→元(与 sina 口径对齐);raw 不复权(sina 同族,基准混存安全)。
+        从最近缺日往回补 max_days 个交易日;失败记日志返回 0(调用方退逐股路径)。"""
+        from . import tushare_client as tc
+        with self.store._conn() as c:  # noqa: SLF001 — 覆盖集查询
+            tracked = {r[0] for r in c.execute(
+                "SELECT DISTINCT symbol FROM daily_prices WHERE length(symbol)=6 "
+                "AND symbol GLOB '[0-9]*'").fetchall()}
+        if not tracked:
+            return 0
+        from datetime import date, timedelta
+        d = date.today()
+        total = 0
+        tried = 0
+        while tried < max_days:
+            td = d.strftime("%Y%m%d")
+            tried += 1
+            try:
+                df = tc.query("daily", trade_date=td,
+                              fields="ts_code,trade_date,open,high,low,close,vol,amount")
+            except Exception as e:  # noqa: BLE001 — 非交易日返回空/接口失败都走退避
+                log.info("daily market %s empty/failed: %s", td, str(e)[:80])
+                d -= timedelta(days=1)
+                continue
+            if not len(df):
+                d -= timedelta(days=1)
+                continue
+            n_day = 0
+            for ts_code, g in df.groupby("ts_code"):
+                code = str(ts_code).split(".")[0].zfill(6)
+                if code not in tracked:
+                    continue
+                day_df = pd.DataFrame({
+                    "date": [str(g.iloc[0]["trade_date"])],
+                    "open": [float(g.iloc[0]["open"])],
+                    "high": [float(g.iloc[0]["high"])],
+                    "low": [float(g.iloc[0]["low"])],
+                    "close": [float(g.iloc[0]["close"])],
+                    "volume": [float(g.iloc[0]["vol"]) * 100.0],
+                    "amount": [float(g.iloc[0]["amount"]) * 1000.0],
+                }).set_index("date")
+                n_day += self.store.upsert_prices(code, day_df, source="tushare_daily")
+            total += n_day
+            log.info("daily market %s: +%d rows (tracked %d)", td, n_day, len(tracked))
+            d -= timedelta(days=1)
+        if total:
+            self.store.set_meta("last_pool_price_update", fetcher.today_str())
+        return total
 
     def _known_stock_codes(self) -> list[str]:
         """DB 已知 A 股代码并集(段过滤 60/68/00/30)——腾讯兜底的请求清单。
