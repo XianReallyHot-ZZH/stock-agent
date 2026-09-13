@@ -37,7 +37,50 @@ def _num(v) -> Optional[float]:
     return None if math.isnan(f) else f
 
 
-def collect_events(period_frames: dict[str, dict[str, pd.DataFrame]]) -> list[dict]:
+
+# ---- ST 历史过滤(tushare namechange 原料 · 2026-09-13; 消掉终审最大已知偏差) ----
+_ST_PREFIXES = ("ST", "*ST", "S*ST", "SST", "退")
+
+
+def is_st_name(name) -> bool:
+    """名称 ST 前缀判定(与 universe.is_excluded_name 同规则)。"""
+    if name is None:
+        return False
+    return str(name).strip().startswith(_ST_PREFIXES)
+
+
+def st_intervals_from_namechange(df) -> dict:
+    """曾用名帧 → {code: [(start, end)] ST 名称区间}(YYYYMMDD; end 空=至今)。
+    df columns [code, name, start_date, end_date]。纯函数。"""
+    out: dict[str, list] = {}
+    if df is None or not len(df):
+        return out
+    for _, r in df.iterrows():
+        if not is_st_name(r.get("name")):
+            continue
+        s = str(r.get("start_date") or "")
+        if len(s) != 8 or not s.isdigit():
+            continue
+        e = str(r.get("end_date") or "")
+        out.setdefault(str(r["code"]), []).append((s, e))
+    return out
+
+
+def make_st_filter(intervals: dict):
+    """ST 区间 → (code, YYYYMMDD) → bool 判定器(闭区间, end 空=开放)。纯。"""
+
+    def _norm(d: str) -> str:
+        return d.replace("-", "")
+
+    def judge(code, yyyymmdd) -> bool:
+        for s, e in intervals.get(str(code), ()):
+            if _norm(s) <= yyyymmdd and (not e or _norm(e) >= yyyymmdd):
+                return True
+        return False
+    return judge
+
+def collect_events(period_frames: dict[str, dict[str, pd.DataFrame]],
+                    st_filter=None) -> list[dict]:
     """全期三环事件流(纯): period_frames = {period: {'forecast': df, 'express': df,
     'actual': df}}(df indexed by code,含 announce_date+环数据)。
     → [{code, date, period, ring, yoy/np_yoy, rev_yoy, type}] 按 date 升序(同日: 预告<快报<正式)。
@@ -59,11 +102,14 @@ def collect_events(period_frames: dict[str, dict[str, pd.DataFrame]]) -> list[di
                     continue  # 公告日早于报告期末 = 上游错标,剔除
                 if not str(code).zfill(6).startswith(("60", "68", "00", "30")):
                     continue  # 代码段过滤(北交所/债/基金误行)
+                st_flag = (st_filter is not None
+                           and st_filter(str(code), ann.replace("-", "")))
                 events.append({
                     "code": str(code), "date": ann, "period": period, "ring": ring,
                     "np_yoy": _num(row.get("np_yoy") if ring != "forecast" else row.get("yoy")),
                     "rev_yoy": _num(row.get("rev_yoy")),
                     "type": row.get("type") if ring == "forecast" else None,
+                    "st": st_flag,   # 当时名称带 ST → gate 直接判负(持有中=退出信号)
                 })
     events.sort(key=lambda e: (e["date"], ring_order[e["ring"]], e["code"]))
     return events
@@ -81,6 +127,10 @@ def gate_at_event(ev: dict, cfg: dict, price_getter: Callable[[str], pd.Series],
     active = {"ring": ev["ring"], "announce_date": ev["date"],
               "np_yoy": ev["np_yoy"], "rev_yoy": ev["rev_yoy"],
               "yoy": ev["np_yoy"], "type": ev["type"]}
+    if ev.get("st"):
+        return {"passed": False, "np_yoy": None, "rev_yoy": None, "np_axis": None,
+                "flags": ["当时名称ST"], "valuation_pass": False,
+                "risk_red": ["当时名称ST"], "peg": None, "pb_pct": None, "cap": None}
     floor = gt.ring_floor(active, cfg)          # 回放统一归母口径(扣非腿退归母,docstring 近似①)
     out = {**floor, "valuation_pass": True, "risk_red": [], "peg": None, "pb_pct": None,
            "cap": None}
