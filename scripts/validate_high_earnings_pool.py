@@ -184,7 +184,8 @@ def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
         base = concentration_wins[sizes[0]] if sizes else []
         rows_m = []
         for i, w0 in enumerate(base):
-            sh = (w0["indices"] or {}).get("000001")
+            idxs = w0["indices"] or {}
+            avail = [r for r in idxs.values() if r is not None]
             cells = [f"<td>{_e(w0['period'])}</td>",
                      f"<td>{_e(w0['start'])}→{_e(w0['end'])}</td>"]
             for s in sizes:
@@ -193,22 +194,31 @@ def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
                 if v is None:
                     cells.append("<td class='dim'>—</td>")
                     continue
-                beat = sh is not None and v > sh
+                beat = bool(avail) and all(v > r for r in avail)
                 cls = "pos" if v > 0 else ("neg" if v < 0 else "")
                 mark = "✓" if beat else "✗"
                 mcls = "ok" if beat else "crit"
                 cells.append(f"<td><span class='{cls}'>{v * 100:+.1f}%</span>"
                              f"<span class='{mcls}'>{mark}</span></td>")
-            sh_txt = "—" if sh is None else f"{sh * 100:+.1f}%"
-            cells.append(f"<td>{sh_txt}</td>")
+            for sym in study.INDEX_BASELINES:
+                r = idxs.get(sym)
+                if r is None:
+                    cells.append("<td class='dim'>—</td>")
+                else:
+                    cls = "pos" if r > 0 else ("neg" if r < 0 else "")
+                    cells.append(f"<td><span class='{cls}'>{r * 100:+.1f}%</span></td>")
             rows_m.append("<tr>" + "".join(cells) + "</tr>")
         head_m = "".join(f"<th>Top-{s}</th>" for s in sizes)
+        head_i = "".join(f"<th>{_e(study.INDEX_LABELS.get(s, s))}</th>"
+                         for s in study.INDEX_BASELINES)
         conc_html += ("<details class='conc-detail'><summary>📋 集中度扫描 · 逐期明细"
-                      "(点开/收起)</summary><table style='font-size:12px'>"
-                      "<tr><th>报告期</th><th>窗口</th>" + head_m + "<th>上证综指</th></tr>"
-                      + "".join(rows_m) + "</table>"
-                      "<div class='hint'>✓/✗=该容量当期是否跑赢上证综指(仅单基准 eyeball 用,"
-                      "七基准全胜口径见主表);Top-5 单格波动巨大(单股 20% 敞口),读单格谨慎。</div></details>")
+                      "(点开/收起)</summary><div style='overflow-x:auto'><table "
+                      "style='font-size:12px;min-width:900px'>"
+                      "<tr><th>报告期</th><th>窗口</th>" + head_m + head_i + "</tr>"
+                      + "".join(rows_m) + "</table></div>"
+                      "<div class='hint'>✓/✗=该容量当期是否跑赢当窗全部可用宽基(科创50 "
+                      "2020-07 前不存在,缺席不计);七列指数=同窗对照;Top-5 单格波动巨大"
+                      "(单股 20% 敞口),读单格谨慎。</div></details>")
     idx_head = "".join(f"<th>{_e(study.INDEX_LABELS.get(s, s))}</th>" for s in idx_syms)
     notes_html = "".join(f"<li>{_e(n)}</li>" for n in approx_notes)
     missing_n = len(price_stats.get("missing") or ())
