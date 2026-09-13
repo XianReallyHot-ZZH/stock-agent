@@ -5,6 +5,7 @@
 
 用法:
   python scripts/recon_tushare.py valuation [code ...]   # 1.1 个股估值 baidu vs daily_basic
+  python scripts/recon_tushare.py macro                 # 1.2-1.6 金十宏观族 双实拉精确对账
 """
 from __future__ import annotations
 
@@ -95,7 +96,65 @@ def recon_valuation(codes: list[str] | None = None) -> Path:
     return out
 
 
-SUBS = {"valuation": recon_valuation}
+def recon_macro(_args=None) -> Path:
+    """1.2-1.6 金十宏观族: 新旧源**双实拉**重叠对账(表无 source 列,DB 存量不可分源,
+    故两侧都现拉)。精确族——官方同源数,容差 0。"""
+    def _to_df(rows, key):
+        return pd.DataFrame(rows).set_index(key) if rows else pd.DataFrame()
+
+    pairs = [
+        ("shibor", lambda: fetcher.fetch_shibor(), lambda: fetcher.fetch_shibor_tushare(),
+         "date", ["overnight", "w1", "w2", "m1", "m3", "m6", "m9", "y1"]),
+        ("lpr", lambda: fetcher.fetch_lpr(), lambda: fetcher.fetch_lpr_tushare(),
+         "date", ["lpr1y", "lpr5y"]),   # base* 金十独有,不入对账
+        ("money(M2/M1/M0)", lambda: fetcher.fetch_china_money_supply(),
+         lambda: fetcher.fetch_money_supply_tushare(), "month",
+         ["m2_amt", "m2_yoy", "m1_amt", "m1_yoy", "m0_amt", "m0_yoy"]),
+        ("cpi_yoy", lambda: fetcher.fetch_china_real(skip=("ppi_yoy", "pmi", "retail_yoy", "ind_yoy"))["cpi_yoy"],
+         lambda: fetcher.fetch_cpi_ppi_tushare()["cpi_yoy"], "month", ["value"]),
+        ("ppi_yoy", lambda: fetcher.fetch_china_real(skip=("cpi_yoy", "pmi", "retail_yoy", "ind_yoy"))["ppi_yoy"],
+         lambda: fetcher.fetch_cpi_ppi_tushare()["ppi_yoy"], "month", ["value"]),
+        ("tsf_inc", lambda: fetcher.fetch_china_tsf(), lambda: fetcher.fetch_tsf_inc_tushare(),
+         "month", ["tsf_inc"]),
+    ]
+    lines = ["# tushare 迁移对账 · 1.2-1.6 金十宏观族 (精确族: 容差 0)", "",
+             "- 双侧现拉(金十 vs tushare),重叠期逐格比对;金十被拦的腿标 SKIP 不阻塞其余", ""]
+    for name, fa, fb, key, cols in pairs:
+        try:
+            a, b = _to_df(fa(), key), _to_df(fb(), key)
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"- {name}: SKIP — 源拉取失败 {str(e)[:80]}")
+            continue
+        if not len(a) or not len(b):
+            lines.append(f"- {name}: SKIP — 一侧为空 (金十 {len(a)} / tushare {len(b)})")
+            continue
+        both = a.join(b, how="inner", lsuffix="_j", rsuffix="_t")
+        bad = 0
+        detail = []
+        for c in cols:
+            cj, ct = f"{c}_j", f"{c}_t"
+            if cj not in both or ct not in both:
+                continue
+            d = (pd.to_numeric(both[cj], errors="coerce")
+                 - pd.to_numeric(both[ct], errors="coerce")).abs()
+            both_nan = both[cj].isna() & both[ct].isna()
+            d = d[~both_nan].dropna()
+            n_bad = int((d > 1e-6).sum())
+            bad += n_bad
+            if n_bad:
+                detail.append(f"{c}: {n_bad} 格不一致(max |Δ|={float(d.max()):.4g})")
+        verdict = "PASS — 全部一致" if bad == 0 else f"FAIL — {bad} 格不一致"
+        lines.append(f"- {name}: 重叠 {len(both)} 期 · {verdict}"
+                     + ("; ".join(detail) if detail else ""))
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_macro.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
+SUBS = {"valuation": recon_valuation, "macro": recon_macro}
 
 
 def main() -> None:

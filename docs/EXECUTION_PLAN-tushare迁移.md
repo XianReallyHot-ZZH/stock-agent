@@ -18,11 +18,11 @@
 | # | 腿（表） | 现源→痛点 | tushare 接口 | 对账族 | 备注 |
 |---|---|---|---|---|---|
 | 1.1 | 个股估值（stock_valuation） | baidu 半月稀疏/NoneType/无股息率 | `daily_basic`（pe/pe_ttm/pb/ps/总市值/流通市值/dv_ratio/换手） | 口径差族（静/TTM 分列报告） | PCF 无消费方（已验证）可丢；白送股息率；按 ts_code 逐股全史 |
-| 1.2 | Shibor（shibor_daily） | 金十偶发被拦 | `shibor`（120积分，2006 起） | 精确族 | 全量重灌（历史比金十深 9 年，无拼接） |
-| 1.3 | LPR（lpr_monthly） | 金十 | `shibor_lpr` | 精确族 | **增量接续**唯一候选：起点≈2008 浅于金十 1991，重叠段对账后接续 |
-| 1.4 | M2/M1（china_money_supply） | 金十被拦退避 | `cn_m`（600积分） | 精确族 | 全量重灌；M1 2024 口径断点为序列固有，换源不解决 |
-| 1.5 | 社融增量（china_tsf） | 金十源滞后 2-3 月 | `sf_month` | 精确族 | 滞后是源侧固有，对账确认 tushare 滞后程度 |
-| 1.6 | CPI/PPI（china_macro_monthly 两 metric） | 金十 | `cn_cpi`/`cn_ppi`（600积分） | 精确族 | PMI/社零/工业增加值无接口，**留在 china_macro_monthly 旧源混存**，图注诚实标注 |
+| 1.2 | Shibor（shibor_daily） | 金十偶发被拦 | `shibor`（120积分，2006 起） | 精确族 | **已判(2026-09-13 对账)**：金十主源+tushare 应急——tushare 2022-04/05 overnight↔m3 两列交换 42 格，判金十优 |
+| 1.3 | LPR（lpr_monthly） | 金十 | `shibor_lpr` | 精确族 | **接线已落**：tushare 主源(keep_null 保旧基准列；限频 1次/时 失败即金十)；首次成功拉取时补对账+起点检查 |
+| 1.4 | M2/M1（china_money_supply） | 金十被拦退避 | `cn_m`（600积分） | 精确族 | **判死不迁(2026-09-13)**：tushare cn_m 的 M1=旧口径，2024 起新口径门 FAIL(差 43 万亿)；fallback 翻口径比缺数据更糟，金十留任 |
+| 1.5 | 社融增量（china_tsf） | 金十源滞后 2-3 月 | `sf_month` | 精确族 | **已判**：金十主源(分项列全)+tushare sf_month 应急(修订差≤0.2% 观测用途无碍,keep_null 保分项)；stk_endval 社融存量→批次 2.5 |
+| 1.6 | CPI/PPI（china_macro_monthly 两 metric） | 金十 | `cn_cpi`/`cn_ppi`（600积分） | 精确族 | **已判：tushare 主源**——金十=自算假精度(1.80138…)，tushare=官方发布口径(1.8)，严格更优；PMI/社零/工业增加值留金十同表混存，图注标注 |
 | 1.7 | ETF 净值（etf_nav） | 天天基金缺码双调 fallback | `fund_nav`（unit/accum/adj_nav） | 高精度族 | 研究看板主数据：偏离度全历史分位全量重算；accum 分红日附近逐日 ≤0.001 元；含商品看板 5 只非池内标的 |
 | 1.8 | 指数日线 7 宽基（index_daily） | sina（无痛） | `index_daily` | 精确族 | amount 千元单位换算；同官方数据期望零差 |
 | 1.9 | 分红（stock_dividend） | sina（无痛） | `dividend`（2000-01 起） | 精确族 | pool 宇宙周更腿同迁 |
@@ -39,6 +39,7 @@
 | 2.2 | 两市成交额（market_turnover） | `daily_info`（600积分，官方口径 SH_A 1991 起） | ⑧地量/⑨流动性换官方口径；量化旧 399001 口径差；白送全市场平均 PE |
 | 2.3 | 交易所仓单（commodity_inventory） | `fut_wsr` | **实测门**：覆盖面；CZCE 三品种重叠精确对账后扩 SHFE/DCE/GFEX |
 | 2.4 | 期限结构精确展期 | `fut_mapping` | 主力换月映射，修记录在案的「精确展期口径」待补项 |
+| 2.5 | 社融存量落地（china_tsf 扩列） | `sf_month.stk_endval` | 白捡升级(2026-09-13 探针发现)：社融存量直接可得，替换「增量 TTM/M2 代理」——解 CLAUDE.md 记录的「社融存量同比无免费源」老缺口 |
 
 ## 判死 / 保留清单（勿再评估）
 

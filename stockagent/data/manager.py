@@ -757,10 +757,33 @@ class DataManager:
         log.info("market_margin: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
         return n
 
+    def _ts_first(self, ts_fn, j10_fn):
+        """数据源优先级(2026-09-13 迁移·ADR-0002): tushare 主源→金十降级;无 token 直接金十。"""
+        from . import tushare_client as tc
+        if tc.has_token():
+            try:
+                return ts_fn()
+            except Exception as e:  # noqa: BLE001
+                log.warning("tushare 主源失败→金十降级: %s", str(e)[:100])
+        return j10_fn()
+
+    def _j10_fallback(self, j10_fn, ts_fn):
+        """金十主源→tushare 应急(对账判金十口径更优的腿用,如 shibor)。"""
+        try:
+            return j10_fn()
+        except Exception as e:  # noqa: BLE001
+            from . import tushare_client as tc
+            if not tc.has_token():
+                raise
+            log.warning("金十主源失败→tushare 应急: %s", str(e)[:100])
+            return ts_fn()
+
     def update_china_money(self) -> dict:
-        """Fetch + store 中国货币条件月度数据(国内宏观看板①: M2/M1/M0 + 社融增量, 金十源)。
-        两源独立容错(社融源滞后/偶发被拦不拖垮货币腿);源返回全历史 → 全量 upsert 幂等。
-        Returns {money: rows, tsf: rows}。"""
+        """Fetch + store 中国货币条件月度数据(国内宏观看板①)。
+        货币腿: 金十主源——tushare cn_m 对账判死不迁(2026-09-13: m1=旧口径,2024起新口径门
+        FAIL,差 43万亿;fallback 翻口径比缺数据更糟)。社融: 金十主源(分项列更全)+tushare
+        sf_month 应急 fallback(仅增量列,修订差≤0.2%无关观测用途,keep_null 保分项)。
+        两源独立容错;全量 upsert 幂等。Returns {money: rows, tsf: rows}。"""
         out = {"money": 0, "tsf": 0}
         try:
             rows = fetcher.fetch_china_money_supply()
@@ -771,7 +794,14 @@ class DataManager:
         except Exception as e:  # noqa: BLE001
             log.warning("china_money failed: %s", str(e)[:120])
         try:
-            rows = fetcher.fetch_china_tsf()
+            try:
+                rows = fetcher.fetch_china_tsf()
+            except Exception as e:  # noqa: BLE001
+                from . import tushare_client as tc
+                if not tc.has_token():
+                    raise
+                log.warning("china_tsf 金十失败→tushare sf_month 降级: %s", str(e)[:100])
+                rows = fetcher.fetch_tsf_inc_tushare()
             out["tsf"] = self.store.upsert_china_tsf(rows)
             log.info("china_tsf: +%d rows (to %s)", out["tsf"],
                      rows[0]["month"] if rows else "?")
@@ -780,13 +810,20 @@ class DataManager:
         return out
 
     def update_china_rates(self) -> dict:
-        """Fetch + store 中国利率与流动性四腿(第七看板: Shibor/FDR定盘/LPR/中债期限结构,金十源)。
-        逐腿独立容错;源返回全历史 → 全量 upsert 幂等(repo 按年分段拉)。Returns {leg: rows}。"""
+        """Fetch + store 中国利率与流动性四腿(第七看板)。接线(2026-09-13 迁移1.2/1.3 对账后):
+        Shibor=金十主源+tushare应急(tushare 2022-04/05 overnight↔m3 两列交换 42 格,判金十优);
+        LPR=tushare 主源(政策利率无修订,keep_null 保旧基准列;限频 1次/时 失败即金十);
+        FDR定盘/中债期限结构判死保留金十(yc_cb 单独权限)。逐腿独立容错;全量 upsert 幂等。
+        Returns {leg: rows}。"""
         out = {"shibor": 0, "repo": 0, "lpr": 0, "cnbond": 0}
         legs = [
-            ("shibor", fetcher.fetch_shibor, self.store.upsert_shibor),
+            ("shibor", lambda: self._j10_fallback(fetcher.fetch_shibor,
+                                                  fetcher.fetch_shibor_tushare),
+             self.store.upsert_shibor),
             ("repo", fetcher.fetch_repo_fix, self.store.upsert_repo_fix),
-            ("lpr", fetcher.fetch_lpr, self.store.upsert_lpr),
+            ("lpr", lambda: self._ts_first(fetcher.fetch_lpr_tushare,
+                                           fetcher.fetch_lpr),
+             self.store.upsert_lpr),
             ("cnbond", fetcher.fetch_cn_bond, self.store.upsert_cn_bond),
         ]
         for name, fetch, upsert in legs:
@@ -841,9 +878,23 @@ class DataManager:
         return out
 
     def update_china_real(self) -> dict:
-        """Fetch + store 通胀/实体五腿月度(cpi_yoy/ppi_yoy/pmi/retail_yoy/ind_yoy,金十各族)。
-        逐腿独立容错;幂等。Returns {metric: rows}(失败腿=0)。"""
-        res = fetcher.fetch_china_real()
+        """Fetch + store 通胀/实体五腿月度(cpi_yoy/ppi_yoy/pmi/retail_yoy/ind_yoy)。
+        主源(2026-09-13 迁移1.6): CPI/PPI=tushare cn_cpi/cn_ppi(1951/1978起,深于金十);
+        PMI/社零/工增无 tushare 接口留金十(同表混存,看板图注标注)。逐腿独立容错;幂等。
+        Returns {metric: rows}(失败腿=0)。"""
+        from . import tushare_client as tc
+        got: dict = {}
+        skip: tuple = ()
+        if tc.has_token():
+            try:
+                got = fetcher.fetch_cpi_ppi_tushare()
+                skip = tuple(k for k, v in got.items() if v)
+            except Exception as e:  # noqa: BLE001
+                log.warning("cpi/ppi tushare 失败→金十全腿: %s", str(e)[:100])
+        res = dict(got)
+        for metric, rows in fetcher.fetch_china_real(skip=skip).items():
+            if rows:  # 金十失败腿(None)不得覆写 tushare 已供的行
+                res[metric] = rows
         out = {k: 0 for k in ("cpi_yoy", "ppi_yoy", "pmi", "retail_yoy", "ind_yoy")}
         for metric, rows in res.items():
             if not rows:

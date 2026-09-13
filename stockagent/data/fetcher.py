@@ -2432,6 +2432,134 @@ def fetch_lpr(retries: int = 3) -> list[dict]:
     return _retry_ak_wrap(parse_lpr, ak.macro_china_lpr, retries)
 
 
+# ---- 中国宏观 tushare 主源 (2026-09-13 迁移 1.2-1.6 · ADR-0002;列名当日语探实证) ----
+# shibor={date,on,1w,2w,1m,3m,6m,9m,1y}; cn_m={month,m0/m1/m2+*_yoy/*_mom};
+# cn_cpi={month,nt_yoy(全国同比),..}; cn_ppi={month,ppi_yoy,..}; sf_month={month,inc_month,inc_cumval,stk_endval}
+_TS_SHIBOR_COLS = {"overnight": "on", "w1": "1w", "w2": "2w", "m1": "1m",
+                   "m3": "3m", "m6": "6m", "m9": "9m", "y1": "1y"}
+
+
+def _ts_f(v):
+    return float(v) if v is not None and v == v else None
+
+
+def _ts_d8(s) -> Optional[str]:
+    s = str(s or "")
+    return f"{s[:4]}-{s[4:6]}-{s[6:]}" if len(s) == 8 and s.isdigit() else None
+
+
+def fetch_shibor_tushare(start: str = "2006-01-01") -> list[dict]:
+    """Shibor 全史(tushare `shibor`,2006-10 起,深于金十 2015)。单次 2000 行 → 按年分段
+    (同 fetch_repo_fix 先例)。返回与 parse_shibor 同形 [{date,overnight,w1..y1}]。"""
+    from . import tushare_client as tc
+    end = today_str()
+    out: list[dict] = []
+    seg = start
+    while seg < end:
+        y = int(seg[:4])
+        seg_end = min(f"{y}-12-31", end)
+        df = tc.query("shibor", start_date=seg.replace("-", ""),
+                      end_date=seg_end.replace("-", ""))
+        for _, r in df.iterrows():
+            d = _ts_d8(r.get("date"))
+            if not d:
+                continue
+            row = {"date": d}
+            for k, col in _TS_SHIBOR_COLS.items():
+                row[k] = _ts_f(r.get(col))
+            out.append(row)
+        seg = f"{y + 1}-01-01"
+    if not out:
+        raise FetchError("shibor(tushare) empty")
+    return out
+
+
+def fetch_lpr_tushare() -> list[dict]:
+    """LPR(tushare `shibor_lpr`)。⚠实测限频 1 次/小时 → 单次全区间、retries=1。列名文档
+    lpr_1y/lpr_5y(防御式兼容);旧贷款基准利率(base*)无对应列→None,store keep_null 保留金十存量。"""
+    from . import tushare_client as tc
+    df = tc.query("shibor_lpr", start_date="19910101",
+                  end_date=today_str().replace("-", ""), retries=1)
+    if df is None or len(df) == 0:
+        raise FetchError("shibor_lpr empty")
+    c1y = next((c for c in df.columns if str(c).lower() in ("lpr_1y", "lpr1y")), None)
+    c5y = next((c for c in df.columns if str(c).lower() in ("lpr_5y", "lpr5y")), None)
+    dcol = next((c for c in df.columns if str(c).lower() in ("trade_date", "date")), None)
+    if c1y is None or c5y is None or dcol is None:
+        raise FetchError(f"shibor_lpr 列名不符: {list(df.columns)}")
+    out = []
+    for _, r in df.iterrows():
+        d = _ts_d8(r.get(dcol))
+        if not d:
+            continue
+        out.append({"date": d, "lpr1y": _ts_f(r.get(c1y)), "lpr5y": _ts_f(r.get(c5y)),
+                    "base1y": None, "base5y": None})
+    if not out:
+        raise FetchError("shibor_lpr rows empty")
+    return out
+
+
+def fetch_money_supply_tushare() -> list[dict]:
+    """M2/M1/M0 月度(tushare `cn_m`,1978 起单次全量,深于金十 2008)。
+    返回与 parse_china_money_supply 同形 [{month,m2_*,m1_*,m0_*}]。"""
+    from . import tushare_client as tc
+    df = tc.query("cn_m")
+    if df is None or len(df) == 0:
+        raise FetchError("cn_m empty")
+    out = []
+    for _, r in df.iterrows():
+        m = str(r.get("month") or "")
+        if len(m) != 6 or not m.isdigit():
+            continue
+        out.append({"month": f"{m[:4]}-{m[4:]}-01",
+                    "m2_amt": _ts_f(r.get("m2")), "m2_yoy": _ts_f(r.get("m2_yoy")),
+                    "m1_amt": _ts_f(r.get("m1")), "m1_yoy": _ts_f(r.get("m1_yoy")),
+                    "m0_amt": _ts_f(r.get("m0")), "m0_yoy": _ts_f(r.get("m0_yoy"))})
+    if not out:
+        raise FetchError("cn_m rows empty")
+    return out
+
+
+def fetch_tsf_inc_tushare() -> list[dict]:
+    """社融增量(tushare `sf_month`,2002 起)——仅 tsf_inc(分项无)。
+    定位=应急 fallback(金十列更全仍主源);upsert 走 keep_null 保分项。
+    (stk_endval=社融存量为批次 2 升级点,2026-09-13 记录未启用。)"""
+    from . import tushare_client as tc
+    df = tc.query("sf_month")
+    if df is None or len(df) == 0:
+        raise FetchError("sf_month empty")
+    out = []
+    for _, r in df.iterrows():
+        m = str(r.get("month") or "")
+        v = _ts_f(r.get("inc_month"))
+        if len(m) != 6 or not m.isdigit() or v is None:
+            continue
+        out.append({"month": f"{m[:4]}-{m[4:]}-01", "tsf_inc": v,
+                    "rmb_loans": None, "corp_bond": None, "equity_fin": None})
+    if not out:
+        raise FetchError("sf_month rows empty")
+    return out
+
+
+def fetch_cpi_ppi_tushare() -> dict:
+    """CPI/PPI 同比月度(tushare cn_cpi nt_yoy 1951 起 / cn_ppi ppi_yoy 1978 起,深于金十)。
+    Returns {'cpi_yoy': [{month,value}], 'ppi_yoy': [...]}——与 fetch_china_real 对应腿同形。"""
+    from . import tushare_client as tc
+    out: dict[str, list] = {}
+    for metric, api, col in (("cpi_yoy", "cn_cpi", "nt_yoy"), ("ppi_yoy", "cn_ppi", "ppi_yoy")):
+        df = tc.query(api)
+        rows = []
+        for _, r in (df.iterrows() if df is not None and len(df) else []):
+            m = str(r.get("month") or "")
+            v = _ts_f(r.get(col))
+            if len(m) == 6 and m.isdigit() and v is not None:
+                rows.append({"month": f"{m[:4]}-{m[4:]}-01", "value": v})
+        out[metric] = rows
+    if not out["cpi_yoy"] and not out["ppi_yoy"]:
+        raise FetchError("cn_cpi/cn_ppi empty")
+    return out
+
+
 def parse_cn_bond(df) -> list[dict]:
     """ak.bond_zh_us_rate (中美国债收益率同表) → 只取中国列 [{date,y2,y5,y10,y30,spread_10y2y}]
     (美国列归 western_macro 域,不在此存)。"""
@@ -2590,8 +2718,9 @@ def parse_report_monthly(df, ref_month: str = "same") -> list[dict]:
     return out
 
 
-def fetch_china_real(retries: int = 2) -> dict:
+def fetch_china_real(retries: int = 2, skip: tuple = ()) -> dict:
     """通胀/实体五腿一次拉齐(逐腿独立容错):cpi_yoy/ppi_yoy/pmi(官方制造业)/retail_yoy/ind_yoy。
+    skip: 跳过的 metric 元组(tushare 已供时省金十调用,2026-09-13 迁移 1.6)。
     Returns {metric: rows}。财新 PMI 弃用(源日期语义混杂,新旧行发布日/参考月口径不一,防错位)。"""
     legs = [
         ("cpi_yoy", lambda: parse_cn_month_value(
@@ -2608,6 +2737,9 @@ def fetch_china_real(retries: int = 2) -> dict:
     ]
     out: dict = {}
     for metric, leg in legs:
+        if metric in skip:
+            out[metric] = None
+            continue
         try:
             out[metric] = leg()
         except Exception as e:  # noqa: BLE001

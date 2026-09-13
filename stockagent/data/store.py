@@ -1773,9 +1773,11 @@ class Store:
             return row[0] if row and row[0] else None
 
     def upsert_china_tsf(self, rows: list[dict]) -> int:
-        """rows: {month,tsf_inc,rmb_loans,corp_bond,equity_fin}。幂等(分项 v2 扩列)。"""
+        """rows: {month,tsf_inc,rmb_loans,corp_bond,equity_fin}。幂等(分项 v2 扩列)。
+        keep_null: 分项列仅金十供给,tushare 应急腿(2026-09-13 迁移1.5,仅 tsf_inc)不抹分项存量。"""
         return self._upsert_simple("china_tsf",
-                                   ["month", "tsf_inc", "rmb_loans", "corp_bond", "equity_fin"], rows)
+                                   ["month", "tsf_inc", "rmb_loans", "corp_bond", "equity_fin"], rows,
+                                   keep_null=True)
 
     def get_china_tsf_series(self) -> pd.DataFrame:
         """社融增量 DataFrame(month 升序 index=month,
@@ -1845,14 +1847,20 @@ class Store:
         return pd.to_numeric(df.set_index("month")["value"], errors="coerce").dropna()
 
     # ---- China rates / cb balance (第七看板 国内宏观 · 利率与流动性,金十源) ----
-    def _upsert_simple(self, table: str, cols: list[str], rows: list[dict]) -> int:
-        """单主键 date/month 宽表通用 upsert(行=dict,键名含主键;主键原样 str,数值列过 _num)。幂等。"""
+    def _upsert_simple(self, table: str, cols: list[str], rows: list[dict],
+                       keep_null: bool = False) -> int:
+        """单主键 date/month 宽表通用 upsert(行=dict,键名含主键;主键原样 str,数值列过 _num)。幂等。
+        keep_null=True: 新行 None 列不覆盖存量值(COALESCE)——多源腿缺列时保留另一源的历史列
+        (lpr 旧基准/社融分项, 2026-09-13 迁移 1.2-1.6)。"""
         if not rows:
             return 0
         key = "date" if "date" in rows[0] else "month"
         payload = [tuple(str(r[key]) if c == key else _num(r.get(c)) for c in cols)
                    for r in rows]
-        upd = ", ".join(f"{c}=excluded.{c}" for c in cols if c != key)
+        upd = ", ".join(
+            (f"{c}=COALESCE(excluded.{c}, {table}.{c})" if keep_null
+             else f"{c}=excluded.{c}")
+            for c in cols if c != key)
         with self._conn() as c2:
             c2.executemany(
                 f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
@@ -1886,9 +1894,11 @@ class Store:
                                 ["fr001", "fr007", "fr014", "fdr001", "fdr007", "fdr014"])
 
     def upsert_lpr(self, rows: list[dict]) -> int:
-        """rows: {date,lpr1y,lpr5y,base1y,base5y}。幂等。"""
+        """rows: {date,lpr1y,lpr5y,base1y,base5y}。幂等。keep_null: 旧基准利率列(base*)仅金十供给,
+        tushare 腿(2026-09-13 迁移1.3)缺列时保留存量。"""
         return self._upsert_simple("lpr_monthly",
-                                   ["date", "lpr1y", "lpr5y", "base1y", "base5y"], rows)
+                                   ["date", "lpr1y", "lpr5y", "base1y", "base5y"], rows,
+                                   keep_null=True)
 
     def get_lpr_series(self) -> pd.DataFrame:
         return self._get_simple("lpr_monthly", "date", ["lpr1y", "lpr5y", "base1y", "base5y"])
