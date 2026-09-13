@@ -84,6 +84,11 @@ def test_spot_failure_returns_zero_and_keeps_last(monkeypatch):
         raise fetcher.FetchError("clist blocked after retries")
 
     monkeypatch.setattr(fetcher, "fetch_stock_spot", _boom)
+
+    def _boom_ts():
+        raise fetcher.FetchError("tushare: no token in test env")
+
+    monkeypatch.setattr(fetcher, "fetch_stock_spot_tushare", _boom_ts)
     st = _store()
     st.upsert_stock_spot(_spot_frame(), "2026-08-15")
     assert mgr.DataManager(store=st).update_stock_spot() == 0

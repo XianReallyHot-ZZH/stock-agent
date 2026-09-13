@@ -106,6 +106,16 @@ class Config:
         未列出的板块 = 未映射(候选池 join_industry 诚实降级为 type=None)。"""
         return self.industry.get("industry_class", {}) or {}
 
+    def sw_industry_class(self) -> dict[str, dict]:
+        """config/stock_industry_sw.yaml: 申万 L3 名 → {type, commodity}。交叉映射表由
+        scripts/gen_sw_industry_yaml.py 产出;缺文件 → {} = 全部未映射(调用方诚实降级)。"""
+        path = CONFIG_DIR / "stock_industry_sw.yaml"
+        if not path.exists():
+            return {}
+        with open(path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("industry_class", {}) or {}
+
 
 @lru_cache(maxsize=1)
 def get_config() -> Config:

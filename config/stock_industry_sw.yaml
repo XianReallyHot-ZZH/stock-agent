@@ -1,0 +1,1030 @@
+'# NOTE': 申万 L3 → {type, commodity};由 scripts/gen_sw_industry_yaml.py 从 stock_industry.yaml(东财口径)交叉映射生成,未匹配项需人工补
+  type。
+draft_unconfirmed:
+- 中间产品及消费品供应链服务
+- 公交
+- 冰洗
+- 化妆品制造及其他
+- 国际工程
+- 快递
+- 房产租赁经纪
+- 文字媒体
+- 楼宇设备
+- 模拟芯片设计
+- 横向通用软件
+- 氟化工
+- 火电设备
+- 熟食
+- 疫苗
+- 租赁
+- 车身附件及饰件
+- 钾肥
+industry_class:
+  IT服务Ⅲ:
+    commodity: null
+    type: growth
+  LED:
+    commodity: null
+    type: cyclic
+  专业连锁Ⅲ:
+    commodity: null
+    type: value
+  个护小家电:
+    commodity: null
+    type: value
+  中药Ⅲ:
+    commodity: null
+    type: value
+  中间产品及消费品供应链服务:
+    commodity: null
+    type: growth
+  乳品:
+    commodity: null
+    type: value
+  产业地产:
+    commodity: null
+    type: cyclic
+  人力资源服务:
+    commodity: null
+    type: value
+  人工景区:
+    commodity: null
+    type: value
+  仓储物流:
+    commodity: null
+    type: value
+  仪器仪表:
+    commodity: null
+    type: growth
+  会展服务:
+    commodity: null
+    type: value
+  住宅开发:
+    commodity: null
+    type: cyclic
+  体外诊断:
+    commodity: null
+    type: growth
+  体育Ⅲ:
+    commodity: null
+    type: growth
+  保健品:
+    commodity: null
+    type: value
+  保险Ⅲ:
+    commodity: null
+    type: value
+  信托:
+    commodity: null
+    type: value
+  光伏加工设备:
+    commodity: null
+    type: cyclic
+  光伏发电:
+    commodity: null
+    type: value
+  光伏电池组件:
+    commodity: null
+    type: cyclic
+  光伏辅材:
+    commodity: null
+    type: cyclic
+  光学元件:
+    commodity: null
+    type: cyclic
+  公交:
+    commodity: null
+    type: value
+  公路货运:
+    commodity: null
+    type: value
+  其他专业工程:
+    commodity: null
+    type: value
+  其他专业服务:
+    commodity: null
+    type: value
+  其他专用设备:
+    commodity: null
+    type: growth
+  其他养殖:
+    commodity: null
+    type: cyclic
+  其他农产品加工:
+    commodity: null
+    type: cyclic
+  其他化学制品:
+    commodity: null
+    type: cyclic
+  其他化学原料:
+    commodity: null
+    type: cyclic
+  其他化学纤维:
+    commodity: null
+    type: cyclic
+  其他医疗服务:
+    commodity: null
+    type: growth
+  其他塑料制品:
+    commodity: null
+    type: cyclic
+  其他多元金融:
+    commodity: null
+    type: value
+  其他家居用品:
+    commodity: null
+    type: cyclic
+  其他家电Ⅲ:
+    commodity: null
+    type: value
+  其他小金属:
+    commodity: null
+    type: cyclic
+  其他建材:
+    commodity: null
+    type: cyclic
+  其他数字媒体:
+    commodity: null
+    type: growth
+  其他橡胶制品:
+    commodity: null
+    type: cyclic
+  其他汽车零部件:
+    commodity: null
+    type: growth
+  其他生物制品:
+    commodity: null
+    type: growth
+  其他电子Ⅲ:
+    commodity: null
+    type: value
+  其他电源设备Ⅲ:
+    commodity: null
+    type: growth
+  其他石化:
+    commodity: 原油
+    type: cyclic
+  其他种植业:
+    commodity: null
+    type: cyclic
+  其他纺织:
+    commodity: null
+    type: cyclic
+  其他能源发电:
+    commodity: null
+    type: value
+  其他自动化设备:
+    commodity: null
+    type: growth
+  其他计算机设备:
+    commodity: null
+    type: growth
+  其他运输设备:
+    commodity: null
+    type: cyclic
+  其他通信设备:
+    commodity: null
+    type: growth
+  其他通用设备:
+    commodity: null
+    type: growth
+  其他酒类:
+    commodity: null
+    type: value
+  其他金属新材料:
+    commodity: null
+    type: cyclic
+  其他饰品:
+    commodity: null
+    type: value
+  其他黑色家电:
+    commodity: null
+    type: cyclic
+  军工电子Ⅲ:
+    commodity: null
+    type: growth
+  农业综合Ⅲ:
+    commodity: null
+    type: cyclic
+  农商行Ⅲ:
+    commodity: null
+    type: value
+  农用机械:
+    commodity: null
+    type: cyclic
+  农药:
+    commodity: null
+    type: cyclic
+  冰洗:
+    commodity: null
+    type: value
+  冶钢辅料:
+    commodity: null
+    type: cyclic
+  分立器件:
+    commodity: null
+    type: growth
+  制冷空调设备:
+    commodity: null
+    type: cyclic
+  动力煤:
+    commodity: null
+    type: cyclic
+  动物保健Ⅲ:
+    commodity: null
+    type: cyclic
+  化妆品制造及其他:
+    commodity: null
+    type: growth
+  化学制剂:
+    commodity: null
+    type: growth
+  化学工程:
+    commodity: null
+    type: cyclic
+  医疗研发外包:
+    commodity: null
+    type: growth
+  医疗耗材:
+    commodity: null
+    type: growth
+  医疗设备:
+    commodity: null
+    type: growth
+  医美服务:
+    commodity: null
+    type: growth
+  医美耗材:
+    commodity: null
+    type: growth
+  医药流通:
+    commodity: null
+    type: value
+  医院:
+    commodity: null
+    type: growth
+  半导体材料:
+    commodity: null
+    type: growth
+  半导体设备:
+    commodity: null
+    type: growth
+  卫浴制品:
+    commodity: null
+    type: cyclic
+  卫浴电器:
+    commodity: null
+    type: value
+  印制电路板:
+    commodity: null
+    type: growth
+  印刷:
+    commodity: null
+    type: cyclic
+  印刷包装机械:
+    commodity: null
+    type: cyclic
+  印染:
+    commodity: null
+    type: cyclic
+  原料药:
+    commodity: null
+    type: cyclic
+  原材料供应链服务:
+    commodity: null
+    type: value
+  厨房小家电:
+    commodity: null
+    type: value
+  厨房电器:
+    commodity: null
+    type: value
+  合成树脂:
+    commodity: null
+    type: cyclic
+  品牌化妆品:
+    commodity: null
+    type: growth
+  品牌消费电子:
+    commodity: null
+    type: growth
+  商业地产:
+    commodity: null
+    type: cyclic
+  商业物业经营:
+    commodity: null
+    type: value
+  商用载客车:
+    commodity: null
+    type: cyclic
+  商用载货车:
+    commodity: null
+    type: cyclic
+  啤酒:
+    commodity: null
+    type: value
+  园林工程:
+    commodity: null
+    type: value
+  固废治理:
+    commodity: null
+    type: value
+  国有大型银行Ⅲ:
+    commodity: null
+    type: value
+  国际工程:
+    commodity: null
+    type: cyclic
+  图片媒体:
+    commodity: null
+    type: growth
+  地面兵装Ⅲ:
+    commodity: null
+    type: growth
+  垂直应用软件:
+    commodity: null
+    type: growth
+  城商行Ⅲ:
+    commodity: null
+    type: value
+  培训教育:
+    commodity: null
+    type: growth
+  基建市政工程:
+    commodity: null
+    type: value
+  塑料包装:
+    commodity: null
+    type: cyclic
+  复合肥:
+    commodity: null
+    type: cyclic
+  多业态零售:
+    commodity: null
+    type: value
+  大众出版:
+    commodity: null
+    type: value
+  大宗用纸:
+    commodity: null
+    type: cyclic
+  大气治理:
+    commodity: null
+    type: value
+  娱乐用品:
+    commodity: null
+    type: value
+  学历教育:
+    commodity: null
+    type: growth
+  安防设备:
+    commodity: null
+    type: growth
+  定制家居:
+    commodity: null
+    type: cyclic
+  宠物食品:
+    commodity: null
+    type: growth
+  家电零部件Ⅲ:
+    commodity: null
+    type: growth
+  家纺:
+    commodity: null
+    type: value
+  工控设备:
+    commodity: null
+    type: growth
+  工程咨询服务Ⅲ:
+    commodity: null
+    type: value
+  工程机械器件:
+    commodity: null
+    type: cyclic
+  工程机械整机:
+    commodity: null
+    type: cyclic
+  广告媒体:
+    commodity: null
+    type: growth
+  底盘与发动机系统:
+    commodity: null
+    type: growth
+  彩电:
+    commodity: null
+    type: cyclic
+  影视动漫制作:
+    commodity: null
+    type: growth
+  快递:
+    commodity: null
+    type: growth
+  成品家居:
+    commodity: null
+    type: cyclic
+  房产租赁经纪:
+    commodity: null
+    type: value
+  房地产综合服务:
+    commodity: null
+    type: value
+  房屋建设Ⅲ:
+    commodity: null
+    type: value
+  摩托车:
+    commodity: null
+    type: cyclic
+  改性塑料:
+    commodity: null
+    type: cyclic
+  教育出版:
+    commodity: null
+    type: value
+  教育运营及其他:
+    commodity: null
+    type: growth
+  数字芯片设计:
+    commodity: null
+    type: growth
+  文化用品:
+    commodity: null
+    type: value
+  文字媒体:
+    commodity: null
+    type: growth
+  旅游综合:
+    commodity: null
+    type: value
+  旅游零售Ⅲ:
+    commodity: null
+    type: value
+  无机盐:
+    commodity: null
+    type: cyclic
+  有机硅:
+    commodity: null
+    type: cyclic
+  期货:
+    commodity: null
+    type: value
+  机器人:
+    commodity: null
+    type: growth
+  机场:
+    commodity: null
+    type: value
+  机床工具:
+    commodity: null
+    type: cyclic
+  板材:
+    commodity: 螺纹钢
+    type: cyclic
+  林业Ⅲ:
+    commodity: null
+    type: cyclic
+  果蔬加工:
+    commodity: null
+    type: cyclic
+  核力发电:
+    commodity: null
+    type: value
+  检测服务:
+    commodity: null
+    type: growth
+  棉纺:
+    commodity: null
+    type: cyclic
+  楼宇设备:
+    commodity: null
+    type: cyclic
+  模拟芯片设计:
+    commodity: null
+    type: growth
+  横向通用软件:
+    commodity: null
+    type: growth
+  橡胶助剂:
+    commodity: null
+    type: cyclic
+  民爆制品:
+    commodity: null
+    type: cyclic
+  氟化工:
+    commodity: null
+    type: cyclic
+  氨纶:
+    commodity: null
+    type: cyclic
+  氮肥:
+    commodity: null
+    type: cyclic
+  氯碱:
+    commodity: null
+    type: cyclic
+  水产养殖:
+    commodity: null
+    type: cyclic
+  水产饲料:
+    commodity: null
+    type: cyclic
+  水力发电:
+    commodity: null
+    type: value
+  水务及水治理:
+    commodity: null
+    type: value
+  水泥制品:
+    commodity: null
+    type: cyclic
+  水泥制造:
+    commodity: null
+    type: cyclic
+  汽车电子电气系统:
+    commodity: null
+    type: growth
+  汽车经销商:
+    commodity: null
+    type: value
+  汽车综合服务:
+    commodity: null
+    type: value
+  油品石化贸易:
+    commodity: 原油
+    type: cyclic
+  油气及炼化工程:
+    commodity: 原油
+    type: cyclic
+  油气开采Ⅲ:
+    commodity: 原油
+    type: cyclic
+  油田服务:
+    commodity: 原油
+    type: cyclic
+  洗护用品:
+    commodity: null
+    type: value
+  海洋捕捞:
+    commodity: null
+    type: cyclic
+  涂料:
+    commodity: null
+    type: cyclic
+  涂料油墨:
+    commodity: null
+    type: cyclic
+  消费电子零部件及组装:
+    commodity: null
+    type: growth
+  涤纶:
+    commodity: null
+    type: cyclic
+  清洁小家电:
+    commodity: null
+    type: value
+  港口:
+    commodity: null
+    type: cyclic
+  游戏Ⅲ:
+    commodity: null
+    type: growth
+  激光设备:
+    commodity: null
+    type: growth
+  火力发电:
+    commodity: null
+    type: value
+  火电设备:
+    commodity: null
+    type: growth
+  炭黑:
+    commodity: null
+    type: cyclic
+  炼油化工:
+    commodity: 原油
+    type: cyclic
+  烘焙食品:
+    commodity: null
+    type: value
+  热力服务:
+    commodity: null
+    type: value
+  焦炭Ⅲ:
+    commodity: 焦煤
+    type: cyclic
+  焦煤:
+    commodity: 焦煤
+    type: cyclic
+  煤化工:
+    commodity: null
+    type: cyclic
+  照明设备Ⅲ:
+    commodity: null
+    type: value
+  熟食:
+    commodity: null
+    type: value
+  燃料电池:
+    commodity: null
+    type: growth
+  燃气Ⅲ:
+    commodity: null
+    type: cyclic
+  物业管理:
+    commodity: null
+    type: value
+  特种纸:
+    commodity: null
+    type: cyclic
+  环保设备Ⅲ:
+    commodity: null
+    type: value
+  玻璃制造:
+    commodity: 玻璃
+    type: cyclic
+  玻纤制造:
+    commodity: null
+    type: cyclic
+  瓷砖地板:
+    commodity: null
+    type: cyclic
+  生活用纸:
+    commodity: null
+    type: value
+  生猪养殖:
+    commodity: 生猪
+    type: cyclic
+  电信运营商:
+    commodity: null
+    type: value
+  电动乘用车:
+    commodity: null
+    type: growth
+  电商服务:
+    commodity: null
+    type: growth
+  电子化学品Ⅲ:
+    commodity: null
+    type: growth
+  电工仪器仪表:
+    commodity: null
+    type: growth
+  电机Ⅲ:
+    commodity: null
+    type: growth
+  电池化学品:
+    commodity: null
+    type: cyclic
+  电网自动化设备:
+    commodity: null
+    type: growth
+  电能综合服务:
+    commodity: null
+    type: value
+  电视广播Ⅲ:
+    commodity: null
+    type: value
+  畜禽饲料:
+    commodity: null
+    type: cyclic
+  疫苗:
+    commodity: null
+    type: growth
+  白酒Ⅲ:
+    commodity: null
+    type: value
+  白银:
+    commodity: 白银
+    type: cyclic
+  百货:
+    commodity: null
+    type: value
+  硅料硅片:
+    commodity: null
+    type: cyclic
+  磁性材料:
+    commodity: null
+    type: cyclic
+  磨具磨料:
+    commodity: null
+    type: cyclic
+  磷肥及磷化工:
+    commodity: null
+    type: cyclic
+  种子:
+    commodity: null
+    type: cyclic
+  租赁:
+    commodity: null
+    type: value
+  稀土:
+    commodity: null
+    type: cyclic
+  空调:
+    commodity: null
+    type: value
+  管材:
+    commodity: null
+    type: cyclic
+  粘胶:
+    commodity: null
+    type: cyclic
+  粮油加工:
+    commodity: null
+    type: cyclic
+  粮食种植:
+    commodity: null
+    type: cyclic
+  纯碱:
+    commodity: 纯碱
+    type: cyclic
+  纸包装:
+    commodity: null
+    type: cyclic
+  纺织化学制品:
+    commodity: null
+    type: cyclic
+  纺织服装设备:
+    commodity: null
+    type: cyclic
+  纺织鞋类制造:
+    commodity: null
+    type: cyclic
+  线下药店:
+    commodity: null
+    type: value
+  线缆部件及其他:
+    commodity: null
+    type: growth
+  综合Ⅲ:
+    commodity: null
+    type: cyclic
+  综合乘用车:
+    commodity: null
+    type: cyclic
+  综合包装:
+    commodity: null
+    type: cyclic
+  综合环境治理:
+    commodity: null
+    type: value
+  综合电力设备商:
+    commodity: null
+    type: growth
+  综合电商:
+    commodity: null
+    type: growth
+  耐火材料:
+    commodity: null
+    type: cyclic
+  聚氨酯:
+    commodity: null
+    type: cyclic
+  肉制品:
+    commodity: null
+    type: value
+  肉鸡养殖:
+    commodity: null
+    type: cyclic
+  股份制银行Ⅲ:
+    commodity: null
+    type: value
+  胶黏剂及胶带:
+    commodity: null
+    type: cyclic
+  能源及重型设备:
+    commodity: null
+    type: cyclic
+  膜材料:
+    commodity: null
+    type: cyclic
+  自然景区:
+    commodity: null
+    type: value
+  航天装备Ⅲ:
+    commodity: null
+    type: growth
+  航海装备Ⅲ:
+    commodity: null
+    type: cyclic
+  航空装备Ⅲ:
+    commodity: null
+    type: growth
+  航空运输:
+    commodity: null
+    type: value
+  航运:
+    commodity: null
+    type: cyclic
+  营销代理:
+    commodity: null
+    type: growth
+  蓄电池及其他电池:
+    commodity: null
+    type: cyclic
+  血液制品:
+    commodity: null
+    type: growth
+  被动元件:
+    commodity: null
+    type: growth
+  装修装饰Ⅲ:
+    commodity: null
+    type: cyclic
+  视频媒体:
+    commodity: null
+    type: growth
+  证券Ⅲ:
+    commodity: null
+    type: cyclic
+  诊断服务:
+    commodity: null
+    type: growth
+  调味发酵品Ⅲ:
+    commodity: null
+    type: value
+  贸易Ⅲ:
+    commodity: null
+    type: value
+  资产管理:
+    commodity: null
+    type: value
+  超市:
+    commodity: null
+    type: value
+  跨境物流:
+    commodity: null
+    type: value
+  跨境电商:
+    commodity: null
+    type: growth
+  车身附件及饰件:
+    commodity: null
+    type: cyclic
+  轨交设备Ⅲ:
+    commodity: null
+    type: cyclic
+  轮胎轮毂:
+    commodity: null
+    type: cyclic
+  软饮料:
+    commodity: null
+    type: value
+  辅料:
+    commodity: null
+    type: cyclic
+  输变电设备:
+    commodity: null
+    type: growth
+  运动服装:
+    commodity: null
+    type: value
+  逆变器:
+    commodity: null
+    type: cyclic
+  通信工程及服务:
+    commodity: null
+    type: growth
+  通信应用增值服务:
+    commodity: null
+    type: growth
+  通信线缆及配套:
+    commodity: null
+    type: growth
+  通信终端及配件:
+    commodity: null
+    type: growth
+  通信网络设备及器件:
+    commodity: null
+    type: growth
+  配电设备:
+    commodity: null
+    type: growth
+  酒店:
+    commodity: null
+    type: value
+  金属制品:
+    commodity: 黄金
+    type: cyclic
+  金属包装:
+    commodity: null
+    type: cyclic
+  金融信息服务:
+    commodity: null
+    type: growth
+  金融控股:
+    commodity: null
+    type: value
+  钛白粉:
+    commodity: null
+    type: cyclic
+  钟表珠宝:
+    commodity: null
+    type: value
+  钢结构:
+    commodity: null
+    type: cyclic
+  钢铁管材:
+    commodity: 螺纹钢
+    type: cyclic
+  钨:
+    commodity: null
+    type: cyclic
+  钴:
+    commodity: 碳酸锂
+    type: cyclic
+  钼:
+    commodity: null
+    type: cyclic
+  钾肥:
+    commodity: null
+    type: cyclic
+  铁矿石:
+    commodity: 铁矿石
+    type: cyclic
+  铁路运输:
+    commodity: null
+    type: value
+  铅锌:
+    commodity: 锌
+    type: cyclic
+  铜:
+    commodity: 铜
+    type: cyclic
+  铝:
+    commodity: 铝
+    type: cyclic
+  锂:
+    commodity: 碳酸锂
+    type: cyclic
+  锂电专用设备:
+    commodity: null
+    type: growth
+  锂电池:
+    commodity: null
+    type: cyclic
+  锦纶:
+    commodity: null
+    type: cyclic
+  镍:
+    commodity: 碳酸锂
+    type: cyclic
+  长材:
+    commodity: 螺纹钢
+    type: cyclic
+  门户网站:
+    commodity: null
+    type: growth
+  防水材料:
+    commodity: null
+    type: cyclic
+  院线:
+    commodity: null
+    type: growth
+  集成电路制造:
+    commodity: null
+    type: growth
+  集成电路封测:
+    commodity: null
+    type: growth
+  零食:
+    commodity: null
+    type: value
+  非运动服装:
+    commodity: null
+    type: value
+  非金属材料Ⅲ:
+    commodity: null
+    type: cyclic
+  面板:
+    commodity: null
+    type: cyclic
+  鞋帽及其他:
+    commodity: null
+    type: value
+  预加工食品:
+    commodity: null
+    type: value
+  风力发电:
+    commodity: null
+    type: value
+  风电整机:
+    commodity: null
+    type: cyclic
+  风电零部件:
+    commodity: null
+    type: cyclic
+  食品及饲料添加剂:
+    commodity: null
+    type: cyclic
+  食用菌:
+    commodity: null
+    type: cyclic
+  餐饮:
+    commodity: null
+    type: value
+  高速公路:
+    commodity: null
+    type: value
+  黄金:
+    commodity: 黄金
+    type: cyclic

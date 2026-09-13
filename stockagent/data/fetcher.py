@@ -1020,6 +1020,140 @@ def fetch_industry_cons(industry: str, timeout: float = 40.0, retries: int = 2) 
     raise FetchError(f"industry_cons {industry} failed ({last_err})")
 
 
+# ---- tushare pro 腿(2000 积分档 · 2026-09-13 引入; 替换被 push2 掐脖子的腿+补齐
+#      长期缺数据源; 客户端见 tushare_client.py, token 缺失时各腿 TushareError → 调用方降级) ----
+def _ts_norm_code(ts_code: str) -> str:
+    """600519.SH / 000001.SZ → 6 位数字代码(.BJ 北交所返回原样,调用方按段过滤)。"""
+    s = str(ts_code)
+    return s.split(".")[0].zfill(6) if "." in s else s.zfill(6)
+
+
+def _ts_latest_trade_date(max_back: int = 10) -> str:
+    """最近的 tushare daily_basic 有数据的交易日(YYYYMMDD): 从今天往回试(周末/节假日空)。"""
+    from datetime import date, timedelta
+    from . import tushare_client as tc
+    d = date.today()
+    for _ in range(max_back):
+        df = tc.query("daily_basic", trade_date=d.strftime("%Y%m%d"),
+                      fields="ts_code,close,pe_ttm,pb,total_mv,circ_mv")
+        if df is not None and len(df):
+            return d.strftime("%Y%m%d")
+        d -= timedelta(days=1)
+    raise FetchError("daily_basic 近 10 天无数据(节假日异常或权限)")
+
+
+def fetch_stock_spot_tushare(timeout: float = 60.0) -> pd.DataFrame:
+    """全市场现货快照(tushare 版): stock_basic 名称 ⨝ daily_basic(最新交易日估值)。
+
+    与 fetch_stock_spot 同列契约 [name, close, mktcap, float_mktcap, pe_dyn, pb]
+    (indexed by 6 位 code); pe_dyn 承载 tushare pe_ttm 口径(交叉核对列,同腾讯)。
+    总市值/流通市值单位: tushare 万元 → ×1e4 转元。北交所按段自然过滤。"""
+    from . import tushare_client as tc
+    basic = tc.query("stock_basic", exchange="", list_status="L",
+                     fields="ts_code,name,list_date")
+    td = _ts_latest_trade_date()
+    daily = tc.query("daily_basic", trade_date=td,
+                     fields="ts_code,close,pe_ttm,pb,total_mv,circ_mv")
+    df = daily.merge(basic[["ts_code", "name"]], on="ts_code", how="left")
+    df["code"] = df["ts_code"].map(_ts_norm_code)
+    df = df[df["code"].str.startswith(("60", "68", "00", "30"))]
+    out = pd.DataFrame({
+        "code": df["code"],
+        "name": df["name"].fillna("").astype(str),
+        "close": pd.to_numeric(df["close"], errors="coerce"),
+        "mktcap": pd.to_numeric(df["total_mv"], errors="coerce") * 1e4,
+        "float_mktcap": pd.to_numeric(df["circ_mv"], errors="coerce") * 1e4,
+        "pe_dyn": pd.to_numeric(df["pe_ttm"], errors="coerce"),
+        "pb": pd.to_numeric(df["pb"], errors="coerce"),
+    })
+    if len(out) < 4000:
+        raise FetchError(f"tushare spot too thin ({len(out)})")
+    return out.drop_duplicates("code", keep="last").set_index("code")
+
+
+def fetch_sw_industry_tushare(timeout: float = 60.0) -> pd.DataFrame:
+    """申万 2021 行业成分(三级)。Returns DataFrame
+    [code, l1, l2, l3, in_date, out_date, is_new] —— in/out 日期让回放可以做
+    point-in-time 行业归属(东财口径从未有过)。逐 L3 拉成分(~346 次调用,节流后
+    ~3-5 分钟,月度节奏一次成本)。"""
+    from . import tushare_client as tc
+    cat = tc.query("index_classify", level="L3", src="SW2021")
+    frames = []
+    for _, row in cat.iterrows():
+        l3_code = row.get("index_code")
+        try:
+            m = tc.query("index_member_all", l3_code=l3_code)
+        except Exception:  # noqa: BLE001 — 单板块失败跳过
+            continue
+        if m is None or not len(m):
+            continue
+        m = m.copy()
+        con_col = "ts_code" if "ts_code" in m.columns else "con_code"   # 实测列名 ts_code
+        m["code"] = m[con_col].map(_ts_norm_code)
+        m = m.rename(columns={"l1_name": "l1", "l2_name": "l2", "l3_name": "l3"})
+        for col in ("l1", "l2", "l3"):
+            if col not in m.columns:
+                m[col] = ""
+        frames.append(m[["code", "l1", "l2", "l3", "in_date", "out_date", "is_new"]])
+        time.sleep(0.05)
+    if not frames:
+        raise FetchError("sw industry empty (all L3 failed)")
+    out = pd.concat(frames, ignore_index=True)
+    out = out[out["code"].str.startswith(("60", "68", "00", "30"))]
+    return out.drop_duplicates(["code", "l3"], keep="last")
+
+
+def fetch_namechange_tushare(timeout: float = 60.0) -> pd.DataFrame:
+    """股票曾用名全史(namechange)——历史 ST 过滤的唯一原料(回测按当时名称执行
+    非 ST 过滤,消掉终审里最大的已知偏差)。Returns [code, name, start_date,
+    end_date, ann_date, change_reason];分页拉全量。注: 上游 issue 反映日期参数
+    语义有坑——本腿不做日期过滤,全量拉后由消费方自校验(名称区间连续性)。"""
+    from . import tushare_client as tc
+    df = tc.query_paged("namechange", page_size=4000, max_pages=60,
+                        fields="ts_code,name,start_date,end_date,ann_date,change_reason")
+    if not len(df):
+        raise FetchError("namechange empty")
+    df = df.copy()
+    df["code"] = df["ts_code"].map(_ts_norm_code)
+    return df[["code", "name", "start_date", "end_date", "ann_date", "change_reason"]]
+
+
+def fetch_fina_indicator_tushare(code: str, timeout: float = 60.0) -> pd.DataFrame:
+    """财务指标(按股全历史一次调用,fina_indicator)——扣非净利润(profit_dedt)批量源。
+    2000 积分档 ts_code 必填(按期全市场为 5000 积分 vip 版),按股形状恰好替换 sina
+    逐股精筛腿且无限流。Returns [code, report_period, ann_date, profit_dedt, roe]。"""
+    from . import tushare_client as tc
+    ts_code = f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ"
+    df = tc.query("fina_indicator", ts_code=ts_code,
+                  fields="ts_code,end_date,ann_date,profit_dedt,roe")
+    if not len(df):
+        raise FetchError(f"fina_indicator {code} empty")
+    out = df.rename(columns={"end_date": "report_period"})
+    out["code"] = code
+    return out[["code", "report_period", "ann_date", "profit_dedt", "roe"]]
+
+
+def fetch_balancesheet_tushare(code: str, timeout: float = 60.0) -> pd.DataFrame:
+    """资产负债表明细(按股全历史一次调用,balancesheet)——商誉/货币资金/借款/流动项:
+    存贷双高精确口径 + 营运资本/长期负债门的数据底座。Returns [code, report_period,
+    ann_date, monetary_cap, accounts_receiv, goodwill, total_cur_assets,
+    total_cur_liab, total_assets, total_liab, st_borr, lt_borr, bond_payable]。"""
+    from . import tushare_client as tc
+    ts_code = f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ"
+    src_cols = ("money_cap", "accounts_receiv", "goodwill", "total_cur_assets",
+                "total_cur_liab", "total_assets", "total_liab", "st_borr", "lt_borr",
+                "bond_payable")   # tushare 实测列名: 货币资金=money_cap(非 monetary_cap)
+    out_cols = ("monetary_cap", "accounts_receiv", "goodwill", "total_cur_assets",
+                "total_cur_liab", "total_assets", "total_liab", "st_borr", "lt_borr",
+                "bond_payable")
+    fields = "ts_code,end_date,ann_date," + ",".join(src_cols)
+    df = tc.query("balancesheet", ts_code=ts_code, fields=fields)
+    if not len(df):
+        raise FetchError(f"balancesheet {code} empty")
+    out = df.rename(columns=dict(zip(src_cols, out_cols)) | {"end_date": "report_period"})
+    out["code"] = code
+    return out[["code", "report_period", "ann_date"] + list(out_cols)]
+
 # ---- Broad-index daily / valuation (V4 tracker) — sina + legulegu, proxy-independent ----
 def _index_prefix(symbol: str) -> str:
     """Broad-index sina prefix: 399xxx (深证, e.g. 创业板指) -> sz; everything else

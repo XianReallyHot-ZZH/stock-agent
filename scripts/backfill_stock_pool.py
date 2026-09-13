@@ -122,6 +122,12 @@ def main():
     ap.add_argument("--prices", action="store_true", help="宇宙日线→daily_prices(增量)")
     ap.add_argument("--dividends", action="store_true", help="宇宙分红→stock_dividend")
     ap.add_argument("--survivors", action="store_true", help="幸存者 sina 精筛腿(扣非/商誉)")
+    ap.add_argument("--sw", action="store_true", help="申万三级成分(tushare,月更·带in/out历史)")
+    ap.add_argument("--namechange", action="store_true", help="股票曾用名全史(tushare·历史ST过滤原料)")
+    ap.add_argument("--fina", action="store_true", help="扣非财务指标(tushare按股全历史·替换sina腿)")
+    ap.add_argument("--bal", action="store_true", help="资产负债明细(tushare按股全历史·商誉/借款/营运资本)")
+    ap.add_argument("--pull-codes", action="store_true",
+                    help="历期过地板者并集拉取模式(--fina/--balance 的清单口径)")
     ap.add_argument("--all", action="store_true",
                     help="冷启动全跑(spot→industry→report→balance→prices→dividends→survivors)")
     ap.add_argument("--periods", type=int, default=DEEP_PERIODS,
@@ -135,8 +141,8 @@ def main():
 
     do_prices = args.prices or args.all
     do_divs = args.dividends or args.all
-    if not (args.spot or args.industry or args.report or args.balance
-            or do_prices or do_divs or args.survivors or args.all):
+    if not (args.spot or args.industry or args.report or args.balance or args.sw
+            or args.namechange or args.fina or do_prices or do_divs or args.survivors or args.all):
         ap.print_help()
         return
 
@@ -194,6 +200,40 @@ def main():
     if args.survivors or args.all:
         print("=== survivors sina 精筛腿(扣非/商誉) ===")
         _step_survivors(dm)
+
+    # ---- tushare 腿(2000 积分档 · 2026-09-13) ----
+    if args.sw or args.all:
+        print("=== sw 申万三级成分(tushare · 月更) ===")
+        n = dm.update_sw_industry()
+        print(f"  sw_industry_member: {n} rows" if n else "  ⚠️ sw 失败(行业退东财口径,不阻塞)")
+    if args.namechange or args.all:
+        print("=== namechange 曾用名全史(tushare) ===")
+        n = dm.update_namechange()
+        print(f"  stock_namechange: {n} rows" if n else "  ⚠️ namechange 失败(回放ST过滤缺席,不阻塞)")
+    if args.fina or args.bal or args.pull_codes or args.all:
+        import sqlite3
+        conn = sqlite3.connect(str(dm.store.db_path))
+        pull = set()
+        for tbl in ("stock_report_actual", "stock_express"):
+            for c, np_, rv in conn.execute(
+                    f"SELECT symbol, np_yoy, rev_yoy FROM {tbl}").fetchall():
+                if np_ is not None and rv is not None and np_ >= 50 and rv >= 20:
+                    pull.add(str(c))
+        for c, yoy, tp in conn.execute(
+                "SELECT symbol, yoy, type FROM stock_forecast").fetchall():
+            if tp == "扭亏" or (yoy is not None and yoy >= 50):
+                pull.add(str(c))
+        seg = ("60", "68", "00", "30")
+        codes = sorted(c for c in pull if str(c).zfill(6)[:2] in seg)
+        print(f"=== 历期过地板者并集: {len(codes)} 只 ===")
+        if args.fina or args.all:
+            print(f"=== fina 扣非财务指标(tushare 按股,~{len(codes) * 0.55 / 60:.0f}min) ===")
+            r = dm.update_fina_indicator(symbols=codes)
+            print(f"  fina_indicator: {sum(1 for v in r.values() if v)}/{len(codes)} 只有数据")
+        if args.bal or args.all:
+            print(f"=== bal 资产负债明细(tushare 按股,~{len(codes) * 0.55 / 60:.0f}min) ===")
+            r2 = dm.update_balance_full(symbols=codes)
+            print(f"  balance_full: {sum(1 for v in r2.values() if v)}/{len(codes)} 只有数据")
 
     print("\n提示: 生成看板 → python scripts/stock_pool_report.py · 验证器 → python scripts/validate_high_earnings_pool.py")
 

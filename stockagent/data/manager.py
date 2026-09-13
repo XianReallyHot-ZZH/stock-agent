@@ -1144,18 +1144,28 @@ class DataManager:
             df = fetcher.fetch_stock_spot()
             source = "em_spot"
         except Exception as e:  # noqa: BLE001
-            log.warning("push2 spot failed (%s) — falling back to tencent quotes",
+            log.warning("push2 spot failed (%s) — falling back to tushare daily_basic",
                         str(e)[:120])
+            df = None
+        if df is None:
+            try:
+                df = fetcher.fetch_stock_spot_tushare()
+                source = "tushare_daily_basic"
+            except Exception as e2:  # noqa: BLE001
+                log.warning("tushare spot failed (%s) — falling back to tencent quotes",
+                            str(e2)[:120])
+                df = None
+        if df is None:
             codes = self._known_stock_codes()
             if not codes:
-                log.error("stock_spot: push2 down 且 DB 无已知代码清单 — 保留最后快照")
+                log.error("stock_spot: 三通道全败且 DB 无已知代码清单 — 保留最后快照")
                 return 0
             try:
                 df = fetcher.fetch_stock_spot_via_tencent(codes)
                 source = "tencent_qt"
-            except Exception as e2:  # noqa: BLE001
-                log.error("stock_spot FAILED (push2 + tencent both down: %s) — 保留最后快照",
-                          str(e2)[:120])
+            except Exception as e3:  # noqa: BLE001
+                log.error("stock_spot FAILED (push2 + tushare + tencent all down: %s) — "
+                          "保留最后快照", str(e3)[:120])
                 return 0
         today = fetcher.today_str()
         n = self.store.upsert_stock_spot(df, date=today, source=source)
@@ -1224,6 +1234,86 @@ class DataManager:
         results = self.update_stock_dividend(symbols)
         if any(results.values()):
             self.store.set_meta("last_pool_dividend_update", fetcher.today_str())
+        return results
+
+    # ---- tushare 腿 (2000 积分档 · 2026-09-13; 行业/曾用名/扣非/资产负债明细) ----
+    def update_sw_industry(self) -> int:
+        """申万 2021 三级成分(index_classify + index_member_all, 逐 L3 ~346 次调用)→
+        sw_industry_member 整帧替换。月度节奏(meta 门控 35 天); in/out 日期保留——
+        回放 point-in-time 行业归属的原料。"""
+        try:
+            df = fetcher.fetch_sw_industry_tushare()
+        except Exception as e:  # noqa: BLE001
+            log.warning("sw_industry failed: %s", str(e)[:150])
+            return 0
+        n = self.store.replace_sw_industry_members(df)
+        self.store.set_meta("last_sw_industry_update", fetcher.today_str())
+        log.info("sw_industry_member: %d rows", n)
+        return n
+
+    def update_namechange(self) -> int:
+        """股票曾用名全史(namechange, 分页全量)→ stock_namechange 全量替换。
+        低频腿(季度/手动); 历史 ST 过滤的唯一原料。"""
+        try:
+            df = fetcher.fetch_namechange_tushare()
+        except Exception as e:  # noqa: BLE001
+            log.warning("namechange failed: %s", str(e)[:150])
+            return 0
+        n = self.store.upsert_namechange(df)
+        self.store.set_meta("last_namechange_update", fetcher.today_str())
+        log.info("stock_namechange: %d rows", n)
+        return n
+
+    def update_fina_indicator(self, symbols: Optional[list[str]] = None) -> dict:
+        """财务指标(扣非,fina_indicator 按股全历史)→ stock_fina_indicator。
+        2000 积分档按期全市场不可用(vip),按股一次=全史——形状同旧 sina 精筛腿但无限流;
+        默认清单=当前过地板幸存者(screen 的 sina_needed 语义),冷启动传历期过地板者并集。
+        Returns {symbol: rows}。"""
+        syms = symbols or self.STOCK_WATCHLIST
+        results: dict[str, int] = {}
+        for i, code in enumerate(syms):
+            if i:
+                time.sleep(0.4)
+            try:
+                df = fetcher.fetch_fina_indicator_tushare(str(code))
+            except Exception as e:  # noqa: BLE001 — 新股/缺报表 0 行正常
+                log.warning("fina_indicator %s failed: %s", code, str(e)[:80])
+                results[str(code)] = 0
+                continue
+            rows = [(str(r["code"]), str(r["report_period"]), r.get("ann_date"),
+                     r.get("profit_dedt"), r.get("roe")) for _, r in df.iterrows()]
+            results[str(code)] = self.store.upsert_fina_indicator(rows)
+        if any(results.values()):
+            self.store.set_meta("last_fina_indicator_update", fetcher.today_str())
+        log.info("fina_indicator: %d/%d symbols with data",
+                 sum(1 for v in results.values() if v), len(syms))
+        return results
+
+    def update_balance_full(self, symbols: Optional[list[str]] = None) -> dict:
+        """资产负债表明细(balancesheet 按股全历史)→ stock_balance_full——商誉/借款/流动项,
+        存贷双高精确口径 + 营运资本门底座。同 fina_indicator 的按股形状。
+        Returns {symbol: rows}。"""
+        syms = symbols or self.STOCK_WATCHLIST
+        results: dict[str, int] = {}
+        for i, code in enumerate(syms):
+            if i:
+                time.sleep(0.4)
+            try:
+                df = fetcher.fetch_balancesheet_tushare(str(code))
+            except Exception as e:  # noqa: BLE001
+                log.warning("balance_full %s failed: %s", code, str(e)[:80])
+                results[str(code)] = 0
+                continue
+            cols = ("monetary_cap", "accounts_receiv", "goodwill", "total_cur_assets",
+                    "total_cur_liab", "total_assets", "total_liab", "st_borr",
+                    "lt_borr", "bond_payable")
+            rows = [(str(r["code"]), str(r["report_period"]), r.get("ann_date"),
+                     *[r.get(c) for c in cols]) for _, r in df.iterrows()]
+            results[str(code)] = self.store.upsert_balance_full(rows)
+        if any(results.values()):
+            self.store.set_meta("last_balance_full_update", fetcher.today_str())
+        log.info("balance_full: %d/%d symbols with data",
+                 sum(1 for v in results.values() if v), len(syms))
         return results
 
     # ---- Western-macro series (V6 tracker · 西方宏观预测台账 只读旁路 · ADR-0001) ----

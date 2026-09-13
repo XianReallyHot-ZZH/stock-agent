@@ -475,6 +475,53 @@ CREATE TABLE IF NOT EXISTS pool_membership (     -- 候选个股池(V8 高业绩
     PRIMARY KEY (asof, code)
 );
 CREATE INDEX IF NOT EXISTS idx_pool_membership_code ON pool_membership(code);
+CREATE TABLE IF NOT EXISTS sw_industry_member (   -- tushare 申万2021三级成分(月更·快照全量替换)
+    code    TEXT NOT NULL,
+    l1      TEXT,                                 -- 申万一级行业名
+    l2      TEXT,                                 -- 二级
+    l3      TEXT,                                 -- 三级(universe.industry 消费口径)
+    in_date TEXT,                                 -- 纳入日(回放 point-in-time 行业用)
+    out_date TEXT,                                -- 剔除日(空=在册)
+    is_new  TEXT,
+    PRIMARY KEY (code, l3)
+);
+CREATE INDEX IF NOT EXISTS idx_sw_member_code ON sw_industry_member(code);
+CREATE TABLE IF NOT EXISTS stock_namechange (     -- tushare 股票曾用名全史(历史ST过滤唯一原料)
+    code         TEXT NOT NULL,
+    name         TEXT,
+    start_date   TEXT,                            -- 名称生效日(YYYYMMDD)
+    end_date     TEXT,                            -- 名称失效日(空=至今)
+    ann_date     TEXT,
+    change_reason TEXT,
+    PRIMARY KEY (code, start_date, name)
+);
+CREATE INDEX IF NOT EXISTS idx_namechange_code ON stock_namechange(code);
+CREATE TABLE IF NOT EXISTS stock_fina_indicator ( -- tushare 财务指标(扣非批量源,替换sina逐股np_deducted)
+    code         TEXT NOT NULL,
+    report_period TEXT NOT NULL,
+    ann_date     TEXT,
+    profit_dedt  REAL,                            -- 扣非净利润(元)
+    roe          REAL,
+    PRIMARY KEY (code, report_period)
+);
+CREATE INDEX IF NOT EXISTS idx_fina_indicator_code ON stock_fina_indicator(code);
+CREATE TABLE IF NOT EXISTS stock_balance_full (   -- tushare 资产负债表明细(商誉/借款/流动项)
+    code             TEXT NOT NULL,
+    report_period    TEXT NOT NULL,
+    ann_date         TEXT,
+    monetary_cap     REAL,                        -- 货币资金
+    accounts_receiv  REAL,                        -- 应收账款
+    goodwill         REAL,                        -- 商誉(sina逐股腿的精确继任)
+    total_cur_assets REAL,                        -- 流动资产合计(营运资本分子)
+    total_cur_liab   REAL,                        -- 流动负债合计
+    total_assets     REAL,
+    total_liab       REAL,
+    st_borr          REAL,                        -- 短期借款
+    lt_borr          REAL,                        -- 长期借款
+    bond_payable     REAL,                        -- 应付债券
+    PRIMARY KEY (code, report_period)
+);
+CREATE INDEX IF NOT EXISTS idx_balance_full_code ON stock_balance_full(code);
 """
 
 
@@ -1282,6 +1329,110 @@ class Store:
                 "INSERT OR REPLACE INTO pool_membership(asof,code,period,ring,entered,rank,score) "
                 "VALUES(?,?,?,?,?,?,?)", payload)
         return len(payload)
+
+    # ---- tushare 腿存取 (2026-09-13 · 四表) ----
+    def replace_sw_industry_members(self, df: pd.DataFrame) -> int:
+        """申万三级成分整帧全量替换(快照式,防调出残留)。df columns
+        [code, l1, l2, l3, in_date, out_date, is_new]。"""
+        if df is None or len(df) == 0:
+            return 0
+        rows = [(str(r["code"]), str(r.get("l1") or ""), str(r.get("l2") or ""),
+                 str(r.get("l3") or ""), str(r.get("in_date") or ""),
+                 str(r.get("out_date") or ""), str(r.get("is_new") or ""))
+                for _, r in df.iterrows()]
+        with self._conn() as c:
+            c.execute("DELETE FROM sw_industry_member")
+            c.executemany(
+                "INSERT OR REPLACE INTO sw_industry_member(code,l1,l2,l3,in_date,"
+                "out_date,is_new) VALUES(?,?,?,?,?,?,?)", rows)
+        return len(rows)
+
+    def sw_industry_map(self) -> pd.DataFrame:
+        """在册成分 indexed by code [industry(=l3), l1, l2](out_date 空=在册)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT code,l3 AS industry,l1,l2 FROM sw_industry_member "
+                "WHERE out_date IS NULL OR out_date=''", c)
+        if len(df) == 0:
+            return pd.DataFrame(columns=["industry", "l1", "l2"])
+        return df.drop_duplicates("code", keep="last").set_index("code")
+
+    def upsert_namechange(self, df: pd.DataFrame) -> int:
+        """股票曾用名全史幂等 upsert(全量替换式: 先清后插,量级 ~5 万行)。"""
+        if df is None or len(df) == 0:
+            return 0
+        rows = [(str(r["code"]), str(r.get("name") or ""), str(r.get("start_date") or ""),
+                 str(r.get("end_date") or ""), str(r.get("ann_date") or ""),
+                 str(r.get("change_reason") or "")) for _, r in df.iterrows()]
+        with self._conn() as c:
+            c.execute("DELETE FROM stock_namechange")
+            c.executemany(
+                "INSERT OR REPLACE INTO stock_namechange(code,name,start_date,end_date,"
+                "ann_date,change_reason) VALUES(?,?,?,?,?,?)", rows)
+        return len(rows)
+
+    def get_namechange_all(self) -> pd.DataFrame:
+        """全表 [code, name, start_date, end_date](YYYYMMDD str)。"""
+        with self._conn() as c:
+            return pd.read_sql_query(
+                "SELECT code,name,start_date,end_date FROM stock_namechange", c)
+
+    def upsert_fina_indicator(self, rows: list, source: str = "tushare") -> int:
+        """rows: (code, report_period, ann_date, profit_dedt, roe)。幂等 (code, period)。"""
+
+        def _s(x):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return None
+            return str(x)[:10]
+        if not rows:
+            return 0
+        with self._conn() as c:
+            c.executemany(
+                "INSERT OR REPLACE INTO stock_fina_indicator(code,report_period,ann_date,"
+                "profit_dedt,roe) VALUES(?,?,?,?,?)",
+                [(str(c_), str(p), _s(a), _num(d), _num(r)) for (c_, p, a, d, r) in rows])
+        return len(rows)
+
+    def profit_dedt_map(self, code: str) -> dict:
+        """单股 {report_period: 扣非净利润}——gates.deducted_yoy 的输入契约。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT report_period,profit_dedt FROM stock_fina_indicator "
+                "WHERE code=? AND profit_dedt IS NOT NULL", (code,)).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def upsert_balance_full(self, rows: list) -> int:
+        """rows: 13 元组 (code, report_period, ann_date, monetary_cap, accounts_receiv,
+        goodwill, total_cur_assets, total_cur_liab, total_assets, total_liab, st_borr,
+        lt_borr, bond_payable)。幂等 (code, period)。"""
+
+        def _s(x):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return None
+            return str(x)[:10]
+        if not rows:
+            return 0
+        with self._conn() as c:
+            c.executemany(
+                "INSERT OR REPLACE INTO stock_balance_full(code,report_period,ann_date,"
+                "monetary_cap,accounts_receiv,goodwill,total_cur_assets,total_cur_liab,"
+                "total_assets,total_liab,st_borr,lt_borr,bond_payable) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [(str(r[0]), str(r[1]), _s(r[2]), *[_num(x) for x in r[3:]]) for r in rows])
+        return len(rows)
+
+    def get_balance_full_period(self, report_period: str) -> pd.DataFrame:
+        """一期全市场明细帧 indexed by code(风险筛精确口径的输入)。"""
+        cols = ["monetary_cap", "accounts_receiv", "goodwill", "total_cur_assets",
+                "total_cur_liab", "total_assets", "total_liab", "st_borr", "lt_borr",
+                "bond_payable", "ann_date"]
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                f"SELECT code,{','.join(cols)} FROM stock_balance_full "
+                "WHERE report_period=?", c, params=(report_period,))
+        if len(df) == 0:
+            return pd.DataFrame(columns=cols)
+        return df.set_index("code")
 
     def latest_pool_snapshots(self, n: int = 10) -> list[dict]:
         """最近 n 个池快照日 [{asof, n_members, period}]降序——历史回放节 + 环比 diff 的锚。"""

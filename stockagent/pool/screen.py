@@ -126,13 +126,22 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
     now = (datetime.strptime(asof, "%Y-%m-%d") if asof else datetime.now())
     asof_str = now.strftime("%Y-%m-%d")
 
-    # ---- 宇宙 + 行业 ----
+    # ---- 宇宙 + 行业(申万优先[tushare 月更,in/out 带历史],东财回退) ----
     spot = store.latest_stock_spot()
     uni_df = uni.derive_universe(
         spot, exclude_prefixes=tuple(ucfg.get("exclude_name_prefixes",
                                               uni.EXCLUDED_NAME_PREFIXES)))
-    ind_map = store.industry_map()
-    joined = uni.join_industry(uni_df, ind_map, cfg.industry_class())
+    ind_cfg = ucfg.get("industry_source", "sw")
+    ind_map, class_cfg = store.industry_map(), cfg.industry_class()
+    if ind_cfg == "sw" or len(ind_map) == 0:
+        sw_map = store.sw_industry_map()
+        if len(sw_map):
+            ind_map = sw_map
+            try:
+                class_cfg = cfg.sw_industry_class()   # config/stock_industry_sw.yaml
+            except Exception:  # noqa: BLE001 — yaml 缺 → 未映射降级
+                class_cfg = {}
+    joined = uni.join_industry(uni_df, ind_map, class_cfg)
     cov = uni.industry_coverage(joined)
     codeset = {str(c) for c in joined.index}
 
@@ -209,25 +218,45 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
         })
 
     # ---- 第二段: 幸存者逐股懒装配(精筛+估值+风险) ----
+    bal_full = {}   # tushare 资产负债明细(入场环报告期,惰性按期取)
     rows: list[dict] = []
     gaps: dict[str, int] = {}
     sina_needed: list[str] = []
     for s in survivors:
         code = s["code"]
         report_rows = store.stock_report_rows_for(code)
-        # sina 精筛面板(扣非/商誉/净资产——幸存者才有;缺=sina 腿未拉,旗标可消)
-        panel = store.get_stock_financials_panel(code, metrics=["np_deducted", "goodwill"])
-        np_ded = None
-        goodwill_now = None
+        if s["period_used"] not in bal_full:
+            try:
+                bal_full[s["period_used"]] = store.get_balance_full_period(s["period_used"])
+            except Exception:  # noqa: BLE001
+                bal_full[s["period_used"]] = pd.DataFrame()
+        bf_row = (bal_full[s["period_used"]].loc[code]
+                  if len(bal_full[s["period_used"]]) and code in bal_full[s["period_used"]].index
+                  else None)
+        # 扣非源: tushare fina_indicator 批量(优先,全市场覆盖) → sina 逐股回退
+        np_ded = store.profit_dedt_map(code) or None
+        sina_panel = None
+        if np_ded is None:
+            # sina 精筛面板(幸存者才有;缺=腿未拉,旗标可消)
+            sina_panel = store.get_stock_financials_panel(code, metrics=["np_deducted", "goodwill"])
         goodwill_series: dict[str, float] = {}
-        if panel is not None and len(panel):
-            if "np_deducted" in panel.columns:
-                np_ded = {str(k): v for k, v in panel["np_deducted"].dropna().items()}
-            if "goodwill" in panel.columns:
-                gw = panel["goodwill"].dropna()
+        if sina_panel is not None and len(sina_panel):
+            if "np_deducted" in sina_panel.columns and not np_ded:
+                np_ded = {str(k): v for k, v in sina_panel["np_deducted"].dropna().items()}
+            if "goodwill" in sina_panel.columns:
+                gw = sina_panel["goodwill"].dropna()
                 goodwill_series = {str(k): v for k, v in gw.items()}
-        else:
-            gaps["sina 未拉"] = gaps.get("sina 未拉", 0) + 1
+        goodwill_now = None
+        # 商誉优先 tushare 资产负债明细(精确+带披露日);sina 序列留作环比激增的历史轴
+        bf_row = bal_full.get(code)
+        if bf_row is not None and _num(bf_row.get("goodwill")) is not None:
+            known_gw = [k for k in goodwill_series if k <= s["period_used"]]
+            if known_gw:
+                goodwill_now = goodwill_series[max(known_gw)]  # 序列与明细一致时用序列末值
+            else:
+                goodwill_now = float(bf_row["goodwill"])
+        elif sina_panel is None or not len(sina_panel):
+            gaps["精筛腿未拉"] = gaps.get("精筛腿未拉", 0) + 1
             sina_needed.append(code)
         # 正式环: 扣非复核(有 sina 才精化;无=归母回退+未精筛旗,gates 已带)
         if s["ring"] == "actual" and np_ded:
@@ -296,10 +325,15 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
                 s.update(pb_series_len=0, pb_pct=None)
                 score_note = "PB 数据缺(bvps/价格腿)"
 
-        # ---- 风险红黄旗(资产负债/营收按入场环的报告期取) ----
+        # ---- 风险红黄旗(资产负债: tushare 精确表优先 → zcfz 代理回退) ----
         bal_f = bal_frames.get(s["period_used"])
         bal = None
-        if bal_f is not None and len(bal_f) and code in bal_f.index:
+        if bf_row is not None:
+            bal = {k: bf_row.get(k) for k in ("monetary_cap", "accounts_receiv",
+                                              "total_assets", "total_liab", "st_borr",
+                                              "lt_borr", "bond_payable", "goodwill",
+                                              "total_cur_assets", "total_cur_liab")}
+        elif bal_f is not None and len(bal_f) and code in bal_f.index:
             b = bal_f.loc[code]
             bal = {k: b.get(k) for k in ("cash", "receivables", "total_assets",
                                          "equity", "debt_ratio")}

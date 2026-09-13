@@ -71,8 +71,37 @@ def risk_flags(balance: dict | None, goodwill_now: Optional[float],
     elif goodwill_now is None:
         gaps.append("商誉未精筛")
 
-    # 存贷双高代理(zcfz;期未披露 → 数据缺,不判)
-    if balance and _num(balance.get("total_assets")) and _num(balance.get("total_assets")) > 0:
+    # 存贷双高: 精确口径(tushare stock_balance_full: 有息负债=短借+长借+应付债券)
+    # 优先于代理口径(zcfz 无借款列);两套都只判「现金高 ∧ 有息负债高」
+    interest_debt = None
+    if balance and _num(balance.get("monetary_cap")) is not None and (
+            _num(balance.get("st_borr")) is not None
+            or _num(balance.get("lt_borr")) is not None
+            or _num(balance.get("bond_payable")) is not None):
+        interest_debt = ((_num(balance.get("st_borr")) or 0.0)
+                         + (_num(balance.get("lt_borr")) or 0.0)
+                         + (_num(balance.get("bond_payable")) or 0.0))
+        ta = _num(balance.get("total_assets"))
+        cash = _num(balance.get("monetary_cap"))
+        if ta and ta > 0:
+            cash_pct = cash / ta
+            debt_pct = interest_debt / ta
+            metrics["cash_assets"] = cash_pct
+            metrics["interest_debt_assets"] = debt_pct
+            if (cash_pct >= float(rcfg.get("dual_high_cash_pct", 0.15))
+                    and debt_pct >= float(rcfg.get("dual_high_debt_ratio", 0.40))):
+                red.append("存贷双高(精确口径)")
+            # 营运资本/长期负债(原文四条之一,tushare 后可算): 过低=短债长投错配(黄旗)
+            ca, cl = _num(balance.get("total_cur_assets")), _num(balance.get("total_cur_liab"))
+            lb = _num(balance.get("lt_borr"))
+            if ca is not None and cl is not None and lb and lb > 0:
+                wc_lt = (ca - cl) / lb
+                metrics["working_capital_lt_debt"] = wc_lt
+                floor = rcfg.get("working_capital_floor")
+                if floor is not None and wc_lt < float(floor):
+                    yellow.append("营运资本/长期负债过低")
+    elif balance and _num(balance.get("total_assets")) and _num(balance.get("total_assets")) > 0:
+        # 代理口径(zcfz: 负债率代替有息负债)
         cash = _num(balance.get("cash")) or 0.0
         ta = _num(balance.get("total_assets"))
         dr = _num(balance.get("debt_ratio"))

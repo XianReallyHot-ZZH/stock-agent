@@ -313,7 +313,15 @@ def main():
     print(f"回放期间: {periods[-1]} → {periods[0]}({len(periods)} 期)")
 
     frames = _load_frames(store, periods)
-    events = study.collect_events(frames)
+    # ST 历史过滤(tushare namechange; 表空则无过滤+注记)——消掉终审最大已知偏差
+    st_filter = None
+    try:
+        nc = store.get_namechange_all()
+        if len(nc):
+            st_filter = study.make_st_filter(study.st_intervals_from_namechange(nc))
+    except Exception:  # noqa: BLE001
+        st_filter = None
+    events = study.collect_events(frames, st_filter=st_filter)
     print(f"三环事件: {len(events)} 条(首 {events[0]['date']} 末 {events[-1]['date']})")
 
     shares = _shares_map(store)
@@ -493,7 +501,8 @@ def main():
         "ST 代理敏感性臂: 历史 ST 名单不可回放(名称逐期漂移)——用事件日价 <2 元近似垃圾股"
         "剔除(实盘当时按名称排除);该门方向为收紧回测池,给出「32% 被垃圾股压了多少」的界",
         "回放统一归母口径(扣非精筛腿是幸存者逐股腿,回放退归母保持全市场一致)",
-        "股本=现市值/现价反推→np_abs/eps 反推兜底(股本缓变);历史 universe 无逐期 ST 名单(代码段过滤)",
+        "股本=现市值/现价反推→np_abs/eps 反推兜底(股本缓变);ST 历史过滤=tushare namechange"
+        "当时名称区间(namechange 表空时此过滤缺席并在此注明)",
         "窗口=报告期首个环事件日→下期首个环事件日(滚动覆盖);指数=窗口 close 简单收益",
         "市值P80 臂=全门+总市值≤当前全市场 P80(阈值当前 spot 分位,回放共用)",
         f"集中度扫描与主口径同门同纪律,仅 Top-N 容量不同;小样本 n={len(wins)},对「70% 场合跑赢所有指数」是小样本检验——观察口径,温度计非开关",
