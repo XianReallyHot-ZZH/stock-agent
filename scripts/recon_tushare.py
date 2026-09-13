@@ -345,8 +345,49 @@ def recon_commodity(_args=None) -> Path:
     return out
 
 
+def recon_margin(_args=None) -> Path:
+    """批次2.1 两融: DB akshare 沪市存量 vs tushare margin 沪市侧。精确族(同官方数)。"""
+    import sqlite3
+    from stockagent.config import get_config
+    cfg = get_config()
+    conn = sqlite3.connect(cfg.db_path)
+    sse = pd.read_sql_query(
+        "SELECT date,financing_sse,total_margin_sse FROM market_margin "
+        "WHERE source='sse' ORDER BY date", conn)
+    conn.close()
+    lines = ["# tushare 对账 · 批次2.1 两融 (精确族: 沪市侧容差 0)", ""]
+    if not len(sse):
+        lines.append("- SKIP — DB 无 akshare 沪市存量")
+    else:
+        try:
+            ts = fetcher.fetch_margin_tushare(start=sse["date"].min(),
+                                              end=sse["date"].max())
+        except Exception as e:  # noqa: BLE001
+            ts = None
+            lines.append(f"- tushare 拉取失败: {str(e)[:100]}")
+        if ts is not None:
+            both = sse.set_index("date").join(ts, how="inner", rsuffix="_t")
+            for c in ("financing_sse", "total_margin_sse"):
+                d = (pd.to_numeric(both[c]) - pd.to_numeric(both[f"{c}_t"])).abs().dropna()
+                if not len(d):
+                    continue
+                lines.append(f"- {c}: 重叠 {len(d)} 日 · 不一致 {int((d > 1.0).sum())} 格"
+                             f"(max {float(d.max()):.0f} 元)")
+            cs = ts["financing_cs"].dropna()
+            lines.append(f"- tushare 沪深合计覆盖 {len(cs)} 日({cs.index.min()}..{cs.index.max()})"
+                         f" · 最新合计 {float(cs.iloc[-1])/1e8:.0f} 亿元)")
+    lines += ["", "> 放行判据: 沪市侧零格不一致(两源同为交易所官方数);合计列为新增无对照。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_margin.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
 SUBS = {"valuation": recon_valuation, "macro": recon_macro, "nav": recon_nav,
-        "index": recon_index, "dividend": recon_dividend, "commodity": recon_commodity}
+        "index": recon_index, "dividend": recon_dividend, "commodity": recon_commodity,
+        "margin": recon_margin}
 
 
 def main() -> None:

@@ -279,6 +279,54 @@ def fetch_market_margin(start: str = "2010-03-01", end: Optional[str] = None,
               .drop_duplicates("date").sort_values("date").set_index("date"))
 
 
+def fetch_margin_tushare(start: str = "2010-03-01", end: Optional[str] = None) -> pd.DataFrame:
+    """沪深两融日级总量(tushare `margin` 按 exchange_id 分所×按年分段,2026-09-13 批次2.1)。
+    解「深市两融总量历史 akshare 不可得」老缺口(fetcher 旧注释记录)——两融 2010-03-30 起全史。
+    输出 DataFrame indexed by date: financing_sse/total_margin_sse(沪,元) +
+    financing_cs/total_margin_cs(**沪深合计**;北交所排除——量级微小且 2022 才起步,保两市口径
+    稳定,单边缺日则合计=可得侧)。⑨恐惧贪婪杠杆成分据此从沪市单边升级两市(旧列留档并排)。"""
+    from datetime import datetime
+    from . import tushare_client as tc
+    end = end or today_str()
+    s_dt = datetime.strptime(str(start)[:10], "%Y-%m-%d")
+    e_dt = datetime.strptime(str(end)[:10], "%Y-%m-%d")
+    parts: dict[str, dict[str, tuple]] = {}   # date -> {SSE: (rzye, rzrqye), SZSE: (...)}
+    last_err = None
+    cur_year = s_dt.year
+    while cur_year <= e_dt.year:
+        ys = max(s_dt, datetime(cur_year, 1, 1))
+        ye = min(e_dt, datetime(cur_year, 12, 31))
+        for ex in ("SSE", "SZSE"):
+            try:
+                df = tc.query("margin", exchange_id=ex,
+                              start_date=ys.strftime("%Y%m%d"), end_date=ye.strftime("%Y%m%d"),
+                              fields="trade_date,exchange_id,rzye,rzrqye")
+                for _, r in df.iterrows():
+                    d = _ts_d8(r.get("trade_date"))
+                    if d:
+                        parts.setdefault(d, {})[ex] = (_ts_f(r.get("rzye")),
+                                                        _ts_f(r.get("rzrqye")))
+                last_err = None
+            except Exception as ex_:  # noqa: BLE001
+                last_err = ex_
+        cur_year += 1
+    if not parts:
+        raise FetchError(f"margin(tushare) failed ({last_err})")
+    rows = []
+    for d in sorted(parts):
+        sse_f, sse_t = parts[d].get("SSE", (None, None))
+        sz_f, sz_t = parts[d].get("SZSE", (None, None))
+
+        def _sum2(a, b):
+            if a is None and b is None:
+                return None
+            return (a or 0.0) + (b or 0.0)
+        rows.append({"date": d, "financing_sse": sse_f, "total_margin_sse": sse_t,
+                     "financing_cs": _sum2(sse_f, sz_f),
+                     "total_margin_cs": _sum2(sse_t, sz_t)})
+    return pd.DataFrame(rows).set_index("date")
+
+
 _SOURCES = [_fetch_eastmoney, _fetch_sina, _fetch_baostock]
 
 

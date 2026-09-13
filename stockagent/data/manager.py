@@ -794,19 +794,32 @@ class DataManager:
         log.info("market_turnover: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
         return n
 
-    def update_market_margin(self) -> int:
-        """Fetch + store 上交所融资融券日级总量(stock_margin_sse,按年分段拉)。⑨恐惧贪婪·杠杆成分数据源。
-        冷启动(空表)从 2010-03 全量回填;否则从上次末日增量(通常只当年一段)。深市历史不可得,v1 仅沪市。"""
+    def update_market_margin(self, full: bool = False) -> int:
+        """Fetch + store 融资融券日级总量。主源(2026-09-13 批次2.1)=tushare margin 沪深两所
+        全史(financing_cs 合计新列——⑨杠杆成分从沪市单边升级两市,旧 *_sse 列留档并排,
+        消费方 fillna 过渡);降级=akshare 上交所(仅 sse 列,COALESCE 不抹合计)。
+        full=True 从 2010-03 全量重灌(升级一次性);默认从末日增量。"""
+        from . import tushare_client as tc
         last = self.store.last_market_margin_date()
-        start = "2010-03-01" if not last else last
-        try:
-            df = fetcher.fetch_market_margin(start=start, end=fetcher.today_str())
-        except Exception as e:  # noqa: BLE001
-            log.warning("market_margin failed: %s", str(e)[:120])
-            return 0
-        n = self.store.upsert_market_margin(df, source="sse")
+        start = "2010-03-01" if (not last or full) else last
+        end = fetcher.today_str()
+        df = None
+        src = "sse"
+        if tc.has_token():
+            try:
+                df = fetcher.fetch_margin_tushare(start=start, end=end)
+                src = "tushare_margin"
+            except Exception as e:  # noqa: BLE001
+                log.warning("market_margin tushare 失败→akshare 沪市降级: %s", str(e)[:100])
+        if df is None:
+            try:
+                df = fetcher.fetch_market_margin(start=start, end=end)
+            except Exception as e:  # noqa: BLE001
+                log.warning("market_margin failed: %s", str(e)[:120])
+                return 0
+        n = self.store.upsert_market_margin(df, source=src)
         self.store.set_meta("last_market_margin_update", fetcher.today_str())
-        log.info("market_margin: +%d rows (to %s)", n, df.index[-1] if len(df) else "?")
+        log.info("market_margin[%s]: +%d rows (to %s)", src, n, df.index[-1] if len(df) else "?")
         return n
 
     def _ts_first(self, ts_fn, j10_fn):

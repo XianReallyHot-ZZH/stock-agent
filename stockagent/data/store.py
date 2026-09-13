@@ -220,10 +220,12 @@ CREATE TABLE IF NOT EXISTS market_turnover (
     total  REAL,
     source TEXT
 );
-CREATE TABLE IF NOT EXISTS market_margin (   -- ⑨ 恐惧贪婪·杠杆成分:上交所信用交易日级汇总
+CREATE TABLE IF NOT EXISTS market_margin (   -- ⑨ 恐惧贪婪·杠杆成分:两融信用交易日级汇总
     date             TEXT PRIMARY KEY,
-    financing_sse    REAL,   -- 上交所融资余额(元)。深市总量历史 akshare 不可得 → v1 仅沪市(_sz 列待扩)
+    financing_sse    REAL,   -- 上交所融资余额(元)。v1 仅沪市;批次2.1 起 *_cs 合计列为主口径
     total_margin_sse REAL,   -- 上交所融资融券余额(元)
+    financing_cs     REAL,   -- 沪深合计融资余额(元,2026-09-13 批次2.1;北交所排除)
+    total_margin_cs  REAL,   -- 沪深合计融资融券余额(元)
     source           TEXT
 );
 CREATE TABLE IF NOT EXISTS etf_dividend (
@@ -559,6 +561,9 @@ class Store:
             _ensure_column(c, "stock_spot", "float_mktcap", "REAL")
             _ensure_column(c, "stock_spot", "pe_dyn", "REAL")
             _ensure_column(c, "stock_spot", "pb", "REAL")
+            # 批次2.1(2026-09-13): 两融沪深合计列——⑨杠杆成分口径升级(沪市单边→两市)
+            _ensure_column(c, "market_margin", "financing_cs", "REAL")
+            _ensure_column(c, "market_margin", "total_margin_cs", "REAL")
 
     # ---- meta ----
     def get_meta(self, key: str, default=None):
@@ -1694,8 +1699,10 @@ class Store:
 
     # ---- 融资融券余额(⑨ 恐惧贪婪·杠杆成分 · 上交所信用交易日级汇总 stock_margin_sse)----
     def upsert_market_margin(self, df: pd.DataFrame, source: str = "") -> int:
-        """df indexed by date(str) with financing_sse/total_margin_sse (yuan)。
-        v1 仅沪市(stock_margin_sse 日级总量);深市总量历史 akshare 不可得。"""
+        """df indexed by date(str) with financing_sse/total_margin_sse(元) +
+        financing_cs/total_margin_cs(沪深合计,2026-09-13 批次2.1 升级)。COALESCE 语义:
+        新行 None 列保留存量(akshare 沪市腿缺 cs 列不抹 tushare 写入的合计;反之亦然)——
+        旧口径 *_sse 列留档并排,消费方 fillna 过渡(ADR-0002 升级类纪律)。"""
         if df is None or len(df) == 0:
             return 0
 
@@ -1703,22 +1710,28 @@ class Store:
             return None if x is None or (isinstance(x, float) and pd.isna(x)) else float(x)
 
         rows = [
-            (str(d), _f(r.get("financing_sse")), _f(r.get("total_margin_sse")), source)
+            (str(d), _f(r.get("financing_sse")), _f(r.get("total_margin_sse")),
+             _f(r.get("financing_cs")), _f(r.get("total_margin_cs")), source)
             for d, r in df.iterrows()
         ]
         with self._conn() as c:
             c.executemany(
-                "INSERT INTO market_margin(date,financing_sse,total_margin_sse,source) "
-                "VALUES(?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
-                "financing_sse=excluded.financing_sse,"
-                "total_margin_sse=excluded.total_margin_sse,source=excluded.source",
+                "INSERT INTO market_margin(date,financing_sse,total_margin_sse,"
+                "financing_cs,total_margin_cs,source) "
+                "VALUES(?,?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET "
+                "financing_sse=COALESCE(excluded.financing_sse,market_margin.financing_sse),"
+                "total_margin_sse=COALESCE(excluded.total_margin_sse,market_margin.total_margin_sse),"
+                "financing_cs=COALESCE(excluded.financing_cs,market_margin.financing_cs),"
+                "total_margin_cs=COALESCE(excluded.total_margin_cs,market_margin.total_margin_cs),"
+                "source=excluded.source",
                 rows,
             )
         return len(rows)
 
     def get_market_margin_series(self, start: Optional[str] = None,
                                  end: Optional[str] = None) -> pd.DataFrame:
-        q = "SELECT date,financing_sse,total_margin_sse FROM market_margin"
+        q = ("SELECT date,financing_sse,total_margin_sse,financing_cs,total_margin_cs "
+             "FROM market_margin")
         params: list = []
         clauses = []
         if start:

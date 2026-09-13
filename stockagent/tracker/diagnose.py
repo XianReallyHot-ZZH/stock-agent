@@ -253,8 +253,9 @@ def diagnose_fear_greed(store, index_sym: str = "000001") -> dict:
     """⑨ 恐惧贪婪指数(只读诊断旁路):5 成分 → 0-100 复合 + 五档标签 + 各成分末值 + 复合历史。
 
     温度计不是开关(同 ⑧ 实证无择时 edge);永不喂引擎。index_sym 默认上证综指(动量/波动成分基准,
-    与 ⑦ 相对周期律同)。估值成分用全市场 PB 中位(market_pb.pb,与 ⑥ 市场温度同口径);杠杆成分仅沪市
-    (深市总量历史 akshare 不可得,见 fetcher.fetch_market_margin)。
+    与 ⑦ 相对周期律同)。估值成分用全市场 PB 中位(market_pb.pb,与 ⑥ 市场温度同口径);杠杆成分
+    =沪深两市融资余额合计(2026-09-13 批次2.1 从沪市单边升级,深市历史经 tushare margin 补齐;
+    旧 *_sse 列留档,cs 列缺失日 fillna 旧口径过渡)。
     返回 {score, label, date, score_series, components, valid}。"""
     from . import fear_greed as fg
     close_df = store.get_index_daily_series(index_sym)
@@ -264,7 +265,10 @@ def diagnose_fear_greed(store, index_sym: str = "000001") -> dict:
     pb_df = store.get_market_pb_series()
     pb = pb_df["pb"] if len(pb_df) and "pb" in pb_df.columns else pd.Series(dtype=float)
     marg_df = store.get_market_margin_series()
-    financing = marg_df["financing_sse"] if len(marg_df) else pd.Series(dtype=float)
+    if len(marg_df) and "financing_cs" in marg_df.columns:
+        financing = marg_df["financing_cs"].fillna(marg_df["financing_sse"])  # 口径升级过渡
+    else:
+        financing = marg_df["financing_sse"] if len(marg_df) else pd.Series(dtype=float)
 
     comp_series = {
         "momentum": fg.momentum_component(close),
