@@ -1,9 +1,15 @@
 """库存(交割仓单)event-study(只读诊断,二期剩余·礼遇):库存极位/去化累库后,商品本身涨不涨。
 
-覆盖=郑商所三品种(玻璃FG/纯碱SA/尿素UR)周采样仓单,2021 起(LPG 郑商所仓单接口无该键,2026-09-06 实测)——多史免费源仅此一家
-(SHFE/DCE 端点死、GFEX 解析坏、99qh 死、东财仅72天,见 fetcher 端点真相注;碳酸锂/金属库存待补)。
+覆盖(批次2.3 扩界·2026-09-13,边界显式不静默混口径):
+  - CZCE 三品种(玻璃FG/纯碱SA/尿素UR)=郑商所日报「总计」口径(张),周采样 2021 起,akshare 源
+    (2026-09-13 修 3× 小计/总计高估——分位/环比比例不变,本验证结论不受影响);
+  - WSR 八品种(铜CU/铝AL/锌ZN/螺纹钢RB=SHFE·原油SC=INE·金AU/银AG=SHFE·碳酸锂LC=GFEX)
+    =tushare fut_wsr 仓库和(吨/千克/桶/手随品种,铜含完税+保税两段),周采样 2019 起(LC 2024 起)。
+  单位随品种但**分析为品种内自身分位/环比**,无跨品种量纲比较;DCE 品种(铁矿/焦煤/豆粕/玉米/生猪/LPG)无源。
 臂(预登记):库存分位 ≤10%(低库存)/ ≥90%(高库存);4周库存变化 ≤−8%(去化)/ ≥+8%(累库)。
-分位 expanding(周频 min_history=100≈2年,无前视);冷却 8 周;结果=品种主连 20/60 日收益 vs 全日抽样基线。
+分位 expanding(周频 min_history=100≈2年,无前视);冷却 8 周;结果=品种主连 20/60 日收益 vs 全日抽样基线
+——批次2.4(2026-09-13)起前向收益用**展期调整指数**(fut_mapping 换月映射+逐合约收盘,
+换月日收益按旧合约计;无映射/回退日诚实注记)。
 判据(同 speed/basis 礼遇):60日中位差 ≥ +1pp 且胜率差 ≥ +3pp → 有信号价值;否则温度计非开关。
 
 Usage:
@@ -21,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 from stockagent.commodity import fundamentals as fund
+from stockagent.commodity import panel
 from stockagent.config import get_config
 from stockagent.data import Store, fetcher
 
@@ -44,11 +51,15 @@ def main():
     base_samples = {h: [] for h in HORIZONS}
     per_var: list[tuple[str, str, int]] = []
     n_events = {a: 0 for a in ARMS}
+    n_roll_fallback: list = []     # 批次2.4:换月日旧约收盘缺→回退主连原生收益的次数(按品种)
 
-    for code in fetcher.CZCE_INVENTORY_SYMBOLS:
+    for code in list(fetcher.CZCE_INVENTORY_SYMBOLS) + list(fetcher.WSR_INVENTORY_SYMBOLS):
         variety = code2var.get(code)
         inv = st.get_commodity_inventory(code)
-        px = st.get_commodity_series(variety) if variety else None
+        # 批次2.4 展期口径:前向收益用换月调整指数(无映射回退主连原生,n_fb 聚合进注记)
+        px, n_fb = (panel.roll_adjusted_from_store(st, variety, code) if variety
+                    else (None, None))
+        n_roll_fallback.append(n_fb)
         if inv is None or len(inv) < MIN_HIST + 20 or px is None or len(px) < 300:
             continue
         inv = inv.astype(float)
@@ -110,7 +121,7 @@ def main():
         print("无事件(库存史不足或臂未触发):先 backfill_commodity.py --inv 攒史")
         sys.exit(1)
 
-    print(f"=== 库存 event-study (CZCE 四品种周采样 · 冷却{COOLDOWN_WEEKS}周 · 4周阈±{W4_TH:.0%}) ===")
+    print(f"=== 库存 event-study (CZCE 3 品种总计口径 + fut_wsr 8 品种仓库和 · 周采样 · 冷却{COOLDOWN_WEEKS}周 · 4周阈±{W4_TH:.0%}) ===")
     print("事件数:", {ARM_LABEL[a]: n for a, n in n_events.items()})
     rows_html = ("<tr><th style='text-align:left'>臂</th><th>窗口</th><th>n</th><th>胜率</th>"
                  "<th>中位收益</th></tr>")
@@ -134,8 +145,11 @@ def main():
     verdict = (f"**{ARM_LABEL[a]}臂有信号价值**(60日中位差{edge*100:+.1f}pp≥+1pp 且胜率差{wr-b_wr:+.0%}≥+3pp)"
                if has_edge else
                f"**温度计非开关**(最强臂={ARM_LABEL[a]},60日中位差{edge*100:+.1f}pp/胜率差{wr-b_wr:+.0%},未达判据)")
-    concl = (f"库存臂(CZCE 三品种·玻璃/纯碱/尿素 周采样2021起,expanding分位防前视,冷却{COOLDOWN_WEEKS}周):"
-             + ";".join(concl_bits) + f" → {verdict}(覆盖仅郑商所三品种,金属/碳酸锂库存无多史免费源——结论外推需谨慎)")
+    n_fb_total = sum(x for x in n_roll_fallback if x)
+    n_nomap = sum(1 for x in n_roll_fallback if x is None)
+    concl = (f"库存臂(CZCE 3品种总计口径2021起+fut_wsr 8品种仓库和2019起·碳酸锂2024,expanding分位防前视,冷却{COOLDOWN_WEEKS}周"
+             f";前向收益=展期调整指数(批次2.4,回退日{n_fb_total}·无映射品种{n_nomap}):"
+             + ";".join(concl_bits) + f" → {verdict}(DCE 品种无源;SHFE 含完税+保税两段;结论外推需谨慎)")
 
     per_rows = "".join(f"<tr><td>{v}</td><td>{ARM_LABEL[a]}</td><td>{n}</td></tr>" for v, a, n in per_var)
     html = (f"<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
@@ -148,12 +162,14 @@ def main():
             f"table{{border-collapse:collapse;width:100%;font-size:13px}}"
             f"th,td{{padding:6px 8px;border-bottom:1px solid #e1e0d9;text-align:center}}</style></head><body>"
             f"<h1>库存(交割仓单)event-study</h1>"
-            f"<div class='meta'>二期剩余·礼遇 · CZCE 四品种(玻璃/纯碱/尿素)周采样 2021 起 · "
+            f"<div class='meta'>二期剩余·礼遇 · CZCE 3 品种(总计口径,2021 起)+ fut_wsr 8 品种(仓库和,2019 起)· 周采样 · "
             f"expanding 分位(无前视) · 冷却 {COOLDOWN_WEEKS} 周 · 4周变化臂阈 ±{W4_TH:.0%}</div>"
             f"<div class='hint'><b>结论:</b> {concl}</div>"
             f"<div class='hint'>仓单=交易所交割仓库口径(≠社会总库存,只反映可交割边际);"
-            f"结果=品种主连 20/60 日收益(拼接未复权,看中位/胜率)。覆盖仅郑商所三品种——端点真相:"
-            f"SHFE/DCE 死、GFEX 解析坏、99qh 死、东财仅72天(碳酸锂/金属库存待补)。判据跑数前预登记。</div>"
+            f"结果=品种主连 20/60 日收益(拼接未复权,看中位/胜率)。口径边界(批次2.3):CZCE=郑商所日报「总计」"
+            f"(2026-09-13 前历史曾被小计/总计行 3× 高估,已重灌修正;比例不变故本验证历次结论可比);"
+            f"SHFE/INE/GFEX=tushare fut_wsr 仓库和(单位随品种,SHFE 含完税+保税两段,品种内自身分位无跨品种比较);"
+            f"DCE 品种(铁矿/焦煤/豆粕/玉米/生猪/LPG)无源。判据跑数前预登记。</div>"
             f"<h2>臂 × 窗口</h2><table>{rows_html}</table>"
             f"<h2>各品种事件数</h2><table><tr><th>品种</th><th>臂</th><th>n</th></tr>{per_rows}</table>"
             f"<p class='meta'>观察非信号 · 永不喂交易引擎 · 生成于 "

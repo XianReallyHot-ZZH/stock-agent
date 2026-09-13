@@ -7,6 +7,8 @@
   python scripts/recon_tushare.py valuation [code ...]   # 1.1 个股估值 baidu vs daily_basic
   python scripts/recon_tushare.py macro                 # 1.2-1.6 金十宏观族 双实拉精确对账
   python scripts/recon_tushare.py tsf                   # 批次2.5 社融存量 新旧口径并排快照对照
+  python scripts/recon_tushare.py wsr                   # 批次2.3 交易所仓单扩腿快照对照(3×修正验证)
+  python scripts/recon_tushare.py roll                  # 批次2.4 展期口径 raw vs adjusted 快照对照
 """
 from __future__ import annotations
 
@@ -500,9 +502,115 @@ def recon_tsf_stock(_args=None) -> Path:
     return out
 
 
+def recon_wsr(_args=None) -> Path:
+    """批次2.3 交易所仓单扩腿: 升级类快照对照——①CZCE 三品种新口径(总计) vs DB 旧存量
+    (应 ≈3×,小计/总计高估实证);②fut_wsr 八品种单日快照(仓库和/单位/双段同名行统计);
+    ③SHFE 侧 vol=pre_vol+vol_chg 恒等自洽。"""
+    import sqlite3
+    from stockagent.config import get_config
+    cfg = get_config()
+    conn = sqlite3.connect(cfg.db_path)
+    lines = ["# tushare 批次2.3 交易所仓单 (升级类: 旧口径存档+新口径并排快照对照)", "",
+             "- 腿A CZCE(FG/SA/UR): akshare 郑商所日报,聚合从「全列求和」改「总计行」——旧存量应 ≈3×",
+             "- 腿B WSR(CU/AL/ZN/RB/AU/AG/SC/LC): tushare fut_wsr 仓库和(SHFE 含完税+保税双段)",
+             "- CZCE 品种不吃 fut_wsr(混入升贴水/有效预报错位行,FG 实证 sum=真仓单+升贴水)", ""]
+    # ① 最近一个有 DB 存量的周三: czce 实拉 vs DB
+    db = pd.read_sql_query(
+        "SELECT variety,date,volume FROM commodity_inventory WHERE source='czce' "
+        "ORDER BY date DESC LIMIT 30", conn).drop_duplicates("variety")
+    if len(db):
+        d_iso = str(db["date"].max())
+        try:
+            fresh = fetcher.fetch_czce_receipts(d_iso.replace("-", ""))
+            for _, r in db.iterrows():
+                m = fresh[fresh["variety"] == r["variety"]]
+                new_v = float(m["volume"].iloc[0]) if len(m) else float("nan")
+                ratio = float(r["volume"]) / new_v if new_v else float("nan")
+                lines.append(f"- CZCE {r['variety']} @ {d_iso}: DB(旧全列和)={r['volume']:.0f} → "
+                             f"新(总计)={new_v:.0f} · 比值 {ratio:.2f}(预期 ≈3.0)")
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"- CZCE 实拉失败: {str(e)[:90]}")
+    else:
+        lines.append("- CZCE: DB 无 czce 存量(先 backfill_commodity.py --inv)")
+    conn.close()
+    # ② fut_wsr 单日快照
+    try:
+        from stockagent.data import tushare_client as tc
+        df = tc.query_paged("fut_wsr", page_size=800, trade_date="20260911").drop_duplicates()
+        sub = df[df["symbol"].isin(fetcher.WSR_INVENTORY_SYMBOLS)]
+        # 恒等自洽只在 pre_vol 在的行核(当日接口 pre_vol 多为 NaN,非数据错)
+        chk = sub.dropna(subset=["pre_vol", "vol_chg", "vol"])
+        dev = (pd.to_numeric(chk["pre_vol"]) + pd.to_numeric(chk["vol_chg"])
+               - pd.to_numeric(chk["vol"])).abs().max() if len(chk) else 0.0
+        lines.append(f"- fut_wsr@20260911: 总行 {len(df)}(去重) · WSR 八品种 {len(sub)} 行 · "
+                     f"vol-(pre_vol+vol_chg) 最大偏差 {float(dev):.1f}"
+                     f"(可核行 {len(chk)},恒等自洽)")
+        for sym, g in sub.groupby("symbol"):
+            dup = int(g.duplicated(["warehouse"]).sum())
+            lines.append(f"  {sym}: {len(g)} 仓库 · vol和 {float(pd.to_numeric(g['vol']).sum()):,.0f} "
+                         f"{g['unit'].iloc[0]} · 同名双行 {dup}(完税+保税)")
+    except Exception as e:  # noqa: BLE001
+        lines.append(f"- fut_wsr 快照失败: {str(e)[:90]}")
+    lines += ["", "> 放行判据(升级类): 无 PASS/FAIL——①比值≈3 确认旧口径高估已修;②恒等偏差=0、"
+              "同名双行集中在 SHFE 品种即入板(CZCE 品种已在腿A隔离)。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_wsr.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
+def recon_roll(_args=None) -> Path:
+    """批次2.4 展期口径: 升级类快照对照——逐品种换月次数/跳空幅度(raw vs adjusted 换月日收益差)/
+    回退日计数,量化「主连拼接未复权」对 event-study 前向收益的污染消除。"""
+    from stockagent.commodity import panel as cpanel
+    from stockagent.config import get_config
+    from stockagent.data.store import Store
+    cfg = get_config()
+    st = Store(cfg.db_path)
+    lines = ["# tushare 批次2.4 展期口径 (升级类: 换月日 raw vs adjusted 快照对照)", "",
+             "- adjusted=换月日收益按旧合约 close 计(fundamentals.roll_adjusted_series);",
+             "- raw=主连拼接原生收益(新约(t)/旧约(t−1),含跳空);差=被消除的展期跳空。", ""]
+    n_var = 0
+    for variety, code in fetcher.COMMODITY_CODES.items():
+        if variety in fetcher.TS_COMMODITY_EXCLUDE:
+            continue
+        px = st.get_commodity_series(variety)
+        adj, n_fb = cpanel.roll_adjusted_from_store(st, variety, code)
+        if px is None or not len(px) or adj is None or not len(adj):
+            lines.append(f"- {variety}({code}): SKIP — 无主连或无映射数据")
+            continue
+        n_var += 1
+        suf = fetcher.COMMODITY_TS_SUFFIX.get(code)
+        mapping = st.get_fut_mapping(f"{code}.{suf}")
+        rolls = (mapping != mapping.shift(1)).fillna(False)
+        n_rolls = int(rolls.sum())
+        raw_ret = px / px.shift(1) - 1.0
+        adj_ret = adj / adj.shift(1) - 1.0
+        both = pd.concat([raw_ret.rename("raw"), adj_ret.rename("adj")], axis=1).dropna()
+        diff_days = both[(both["raw"] - both["adj"]).abs() > 1e-9]
+        if len(diff_days):
+            d = (diff_days["raw"] - diff_days["adj"]) * 100
+            lines.append(f"- {variety}({code}.{suf}): 映射 {len(mapping)} 日 · 换月 {n_rolls} 次 · "
+                         f"修正日 {len(diff_days)} · 跳空差中位 {float(d.abs().median()):+.2f}pp / "
+                         f"最大 {float(d.abs().max()):+.2f}pp · 回退日 {n_fb or 0}")
+        else:
+            lines.append(f"- {variety}({code}.{suf}): 映射 {len(mapping)} 日 · 换月 {n_rolls} 次 · 无修正差")
+    lines += ["", f"合计 {n_var} 品种有映射(碳酸锂/LPG 无主连映射);> 放行判据(升级类): 回退日占比小"
+              "(<10% 换月日)、跳空差量级=换月价差(品种自身 contango/backwardation 决定)即可入 event-study。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_roll.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
 SUBS = {"valuation": recon_valuation, "macro": recon_macro, "nav": recon_nav,
         "index": recon_index, "dividend": recon_dividend, "commodity": recon_commodity,
-        "margin": recon_margin, "turnover": recon_turnover, "tsf": recon_tsf_stock}
+        "margin": recon_margin, "turnover": recon_turnover, "tsf": recon_tsf_stock,
+        "wsr": recon_wsr, "roll": recon_roll}
 
 
 def main() -> None:

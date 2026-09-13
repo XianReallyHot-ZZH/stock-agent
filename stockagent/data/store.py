@@ -111,6 +111,18 @@ CREATE TABLE IF NOT EXISTS commodity_basis (    -- 基差+期限结构(第八看
     source        TEXT,
     PRIMARY KEY (symbol, date)
 );
+CREATE TABLE IF NOT EXISTS fut_mapping (          -- 主力换月映射(tushare fut_mapping·批次2.4 展期口径,event-study 前向收益去换月跳空)
+    ts_code      TEXT NOT NULL,                   -- 主力连续代码(RB.SHF)
+    date         TEXT NOT NULL,
+    mapping_code TEXT,                            -- 当日主力实际合约(RB2701.SHF)
+    PRIMARY KEY (ts_code, date)
+);
+CREATE TABLE IF NOT EXISTS fut_contract_daily (   -- 逐合约收盘(fut_mapping 出现过的合约,全生命一次拉齐;批次2.4)
+    ts_code      TEXT NOT NULL,                   -- 实际合约代码(RB2701.SHF)
+    date         TEXT NOT NULL,
+    close        REAL,
+    PRIMARY KEY (ts_code, date)
+);
 CREATE TABLE IF NOT EXISTS commodity_inventory ( -- 交割仓库仓单/库存(二期剩余·CZCE 日报聚合;SHFE/DCE 端点死·GFEX 解析坏·99qh 死·em 仅72天,见 fetcher 注)
     variety    TEXT NOT NULL,                    -- 品种代码(CZCE:FG/SA/UR/PG)
     date       TEXT NOT NULL,
@@ -1003,6 +1015,59 @@ class Store:
         if len(df) == 0:
             return pd.Series(dtype=float)
         return df.set_index("date")["volume"].astype(float)
+
+    # ---- fut_mapping / fut_contract_daily (批次2.4 展期口径·event-study 前向收益) ----
+    def upsert_fut_mapping(self, rows: list[tuple]) -> int:
+        """rows: (ts_code, date, mapping_code)。幂等,主键 (ts_code, date)。"""
+        if not rows:
+            return 0
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO fut_mapping(ts_code,date,mapping_code) VALUES(?,?,?) "
+                "ON CONFLICT(ts_code,date) DO UPDATE SET mapping_code=excluded.mapping_code",
+                rows)
+        return len(rows)
+
+    def get_fut_mapping(self, ts_code: str) -> pd.Series:
+        """某主连的 映射合约 序列(date 升序 index=date, value=mapping_code)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT date,mapping_code FROM fut_mapping WHERE ts_code=? ORDER BY date ASC",
+                c, params=[ts_code])
+        if len(df) == 0:
+            return pd.Series(dtype=object)
+        return df.set_index("date")["mapping_code"].astype(str)
+
+    def upsert_fut_contract_daily(self, rows: list[tuple]) -> int:
+        """rows: (ts_code, date, close)。幂等,主键 (ts_code, date)。"""
+        if not rows:
+            return 0
+        with self._conn() as c:
+            c.executemany(
+                "INSERT INTO fut_contract_daily(ts_code,date,close) VALUES(?,?,?) "
+                "ON CONFLICT(ts_code,date) DO UPDATE SET close=excluded.close",
+                rows)
+        return len(rows)
+
+    def get_fut_contract_close(self, ts_code: str) -> pd.Series:
+        """某实际合约的 close 序列(date 升序)。"""
+        with self._conn() as c:
+            df = pd.read_sql_query(
+                "SELECT date,close FROM fut_contract_daily WHERE ts_code=? ORDER BY date ASC",
+                c, params=[ts_code])
+        if len(df) == 0:
+            return pd.Series(dtype=float)
+        return pd.to_numeric(df.set_index("date")["close"], errors="coerce")
+
+    def fut_contract_codes(self) -> set:
+        """已入库的逐合约代码集合(增量拉取用)。"""
+        with self._conn() as c:
+            return {r[0] for r in c.execute("SELECT DISTINCT ts_code FROM fut_contract_daily")}
+
+    def last_fut_mapping_date(self) -> Optional[str]:
+        with self._conn() as c:
+            row = c.execute("SELECT MAX(date) FROM fut_mapping").fetchone()
+        return row[0] if row and row[0] else None
 
     def get_industry_pe_series(self, industry: str, start: Optional[str] = None,
                                end: Optional[str] = None) -> pd.DataFrame:

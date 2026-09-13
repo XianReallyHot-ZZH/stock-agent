@@ -2,8 +2,9 @@
 
 数据:commodity_basis(100ppi 生意社,2019 起,dom_basis_rate=主力(期货−现货)/现货;
 term_slope=主力/近月−1 年化,正=contango 远月升水/负=backwardation 现货紧)。
-结果 = 事件后 20/60 日**品种主连**收益(close-to-close,主连拼接未复权——换月跳空会污染,
-读中位/胜率并如实标注);基线 = 同品种全部交易日抽样。
+结果 = 事件后 20/60 日**品种主连**收益——批次2.4(2026-09-13)起为**展期调整指数**
+(fut_mapping 换月映射+逐合约收盘,换月日收益按旧合约计,消除拼接跳空;无映射数据的品种/
+回退日诚实注记);基线 = 同品种全部交易日抽样。
 判据(跑数前预登记,同 speed-study):60日中位差 ≥ +1pp 且胜率差 ≥ +3pp → 该臂有信号价值;
 否则温度计非开关。冷却 60 交易日/品种/族(基差族与期限族各自独立冷却)。
 
@@ -23,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from stockagent.commodity import fundamentals as fund
+from stockagent.commodity import panel
 from stockagent.config import get_config
 from stockagent.data import Store, fetcher
 
@@ -67,10 +69,13 @@ def main():
     base_samples = {h: [] for h in HORIZONS}
     per_var: list[tuple[str, str, int]] = []
     n_events = {a: 0 for a in samples}
+    n_roll_fallback: list = []     # 批次2.4:换月日旧约收盘缺→回退主连原生收益的次数(按品种)
 
     for variety, code in fetcher.COMMODITY_CODES.items():
         bdf = st.get_commodity_basis(code)
-        px = st.get_commodity_series(variety)
+        # 批次2.4 展期口径:前向收益用换月调整指数(无映射数据回退主连原生,n_fb 聚合进注记)
+        px, n_fb = panel.roll_adjusted_from_store(st, variety, code)
+        n_roll_fallback.append(n_fb)
         if bdf is None or len(bdf) < 300 or px is None or len(px) < 300:
             continue
         feat = pd.DataFrame({
@@ -145,7 +150,12 @@ def main():
     verdict = (f"**{arm_label[a]}臂有信号价值**(60日中位差{edge*100:+.1f}pp≥+1pp 且胜率差{wr-b_wr:+.0%}≥+3pp)"
                if has_edge else
                f"**温度计非开关**(最强臂={arm_label[a]},60日中位差{edge*100:+.1f}pp/胜率差{wr-b_wr:+.0%},未达预登记判据)")
-    concl = (f"基差/期限结构极端臂(100ppi 2019起,expanding 分位防前视,冷却{COOLDOWN}日):"
+    n_fb_total = sum(x for x in n_roll_fallback if x)
+    n_nomap = sum(1 for x in n_roll_fallback if x is None)
+    roll_note = (f";前向收益=展期调整指数(换月日按旧合约计,批次2.4)·回退日{n_fb_total}"
+                 f"·无映射品种{n_nomap}(碳酸锂/LPG 无主连映射)")
+    concl = (f"基差/期限结构极端臂(100ppi 2019起,expanding 分位防前视,冷却{COOLDOWN}日"
+             + roll_note + "):"
              + ";".join(concl_bits) + f" → {verdict}")
 
     per_rows = "".join(f"<tr><td>{v}</td><td>{arm_label[a]}</td><td>{n}</td></tr>"
@@ -164,8 +174,9 @@ def main():
             f"expanding 分位(无前视) · 冷却 {COOLDOWN} 交易日</div>"
             f"<div class='hint'><b>结论:</b> {concl}</div>"
             f"<div class='hint'>基差率=(主力期货−现货)/现货(正=升水);期限斜率=主力/近月−1 年化"
-            f"(正=contango/负=backwardation)。结果=品种主连 20/60 日收益——<b>主连拼接未复权,"
-            f"换月跳空会污染个别读数</b>,故看中位/胜率。判据跑数前预登记。</div>"
+            f"(正=contango/负=backwardation)。结果=品种主连 20/60 日收益——<b>批次2.4 起为展期调整指数</b>"
+            f"(fut_mapping 换月映射+逐合约收盘:换月日收益按旧合约 close 计,拼接跳空消除;碳酸锂/LPG 无"
+            f"主连映射走原生主连,个别换月日旧约收盘缺亦回退原生——回退数见结论注)。判据跑数前预登记。</div>"
             f"<h2>臂 × 窗口</h2><table>{rows_html}</table>"
             f"<h2>各品种事件数</h2><table><tr><th>品种</th><th>臂</th><th>n</th></tr>{per_rows}</table>"
             f"<p class='meta'>观察非信号 · 永不喂交易引擎 · 生成于 "

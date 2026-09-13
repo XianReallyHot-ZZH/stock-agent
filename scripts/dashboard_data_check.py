@@ -360,8 +360,13 @@ def main():
         dm.update_commodity_basis()
     inv_last = store.get_meta("last_commodity_inventory_update")
     if inv_last is None or (datetime.now() - datetime.strptime(inv_last, "%Y-%m-%d")).days > 5:
-        print(f"  郑商所仓单刷新·周采样(当前 {inv_last or '无'})...")
+        print(f"  仓单刷新·周采样(当前 {inv_last or '无'})...")
         dm.update_commodity_inventory()
+    # 6.15) fut_mapping 换月映射+逐合约收盘(批次2.4 展期口径·event-study 前向收益;>35天门控月更节奏)
+    roll_last = store.get_meta("last_fut_rollover_update")
+    if roll_last is None or (datetime.now() - datetime.strptime(roll_last, "%Y-%m-%d")).days > 35:
+        print(f"  换月映射+逐合约刷新(当前 {roll_last or '无'})...")
+        dm.update_fut_rollover()
 
     # 7-9) candidate-pool legs (V8 高业绩池·2026-09 重启): spot/行业/分红/日线/资产负债
     #      (2026-08-29 暂停已解除——看板重写为高业绩池, 数据更新随本批恢复; --no-pool 可再停)

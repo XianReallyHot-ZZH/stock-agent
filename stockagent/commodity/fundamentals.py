@@ -1,9 +1,11 @@
 """🔬 基差/期限结构/库存 纯函数(二期剩余 · event-study 礼遇层与看板观察层共享)。
 
-数据:commodity_basis(100ppi 生意社,2019 起日频) + commodity_inventory(CZCE 周采样,2021 起)。
+数据:commodity_basis(100ppi 生意社,2019 起日频) + commodity_inventory(CZCE 总计口径周采样
+2021 起 + 批次2.3 fut_wsr 仓库和周采样 2019 起) + fut_mapping/fut_contract_daily(批次2.4
+展期口径,roll_adjusted_series 消费)。
 口径纪律:分位一律 expanding(point-in-time,无前视,同 validate_deviation_extreme 礼遇);
 温度计非开关——实证结论注入看板,不出现买卖措辞。
-端点真相(SHFE/DCE 仓单死·GFEX 解析坏·99qh 死·em 仅72天)见 fetcher 注,库存覆盖=郑商所四品种。
+端点真相(DCE 仓单无源·CZCE 品种不吃 fut_wsr 混列·99qh 死·em 仅72天)见 fetcher 注。
 """
 from __future__ import annotations
 
@@ -78,6 +80,43 @@ def forward_return(close: pd.Series, h: int) -> pd.Series:
     if close is None or len(close) == 0:
         return pd.Series(dtype=float)
     return close.shift(-h).astype(float) / close.astype(float) - 1.0
+
+
+def roll_adjusted_series(dom_close: pd.Series, mapping: pd.Series,
+                         contract_close: dict) -> tuple[pd.Series, int]:
+    """展期调整连续指数(批次2.4·精确展期口径)。
+
+    主力拼接序列在换月日的收益 = 新约(t)/旧约(t−1),含换月跳空(contango 展期成本一次性兑现),
+    污染 event-study 前向收益。修正法(收益率口径拼接):换月日 t 的持仓真实收益 =
+    **旧合约** close(t)/close(t−1) − 1(旧约 t 日仍在交易;收盘后切新约,次日起恢复主连自身收益);
+    逐日收益 cumprod 还原为指数(基=主连首个有效收盘;指数水平无绝对意义,只供跨换月 close-to-close)。
+
+    dom_close=主连收盘(Series,date 升序);mapping=换月映射(date→当日主力实际合约);
+    contract_close={合约代码: close Series}。旧约在 t/t−1 收盘缺 → 该换月日回退主连原生收益
+    (含跳空,诚实计数)。Returns (指数 Series 与 dom_close 同 index, 回退换月日数)。"""
+    px = pd.to_numeric(dom_close, errors="coerce").dropna().astype(float)
+    if not len(px) or mapping is None or not len(mapping):
+        return px, 0
+    mp = mapping.reindex(px.index)          # 对齐主连交易日(fut_mapping 逐交易日,缺口→NaN)
+    ret = px / px.shift(1) - 1.0
+    n_fallback = 0
+    prev = None
+    idx = list(px.index)
+    for i in range(1, len(idx)):
+        cur_code = mp.iloc[i]
+        if pd.notna(cur_code) and prev is not None and pd.notna(prev) and cur_code != prev:
+            old = contract_close.get(prev)
+            t, t1 = idx[i], idx[i - 1]
+            if old is not None and t in old.index and t1 in old.index \
+                    and float(old[t1]) > 0:
+                ret.iloc[i] = float(old[t]) / float(old[t1]) - 1.0
+            else:
+                n_fallback += 1             # 旧约收盘缺 → 回退含跳空的原生收益
+        if pd.notna(mp.iloc[i]):
+            prev = mp.iloc[i]
+    adj = (1.0 + ret.fillna(0.0)).cumprod() * px.iloc[0]
+    adj.iloc[0] = px.iloc[0]
+    return adj, n_fallback
 
 
 def cooldown_mask(flags: pd.Series, cooldown: int) -> pd.Series:

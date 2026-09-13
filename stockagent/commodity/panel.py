@@ -56,6 +56,30 @@ def intl_series(store, symbol: str):
     return s if len(s) >= 2 else None
 
 
+def roll_adjusted_from_store(store, variety: str, code: str) -> tuple:
+    """(批次2.4)主连收盘 → 展期调整连续指数(读 store:fut_mapping+fut_contract_daily)。
+    event-study 前向收益用——主连拼接换月跳空由此修正(见 fundamentals.roll_adjusted_series)。
+    无映射/无合约日线/读表失败 → (原主连序列, None) 诚实回退(调用方注记)。"""
+    from . import fundamentals as fund
+    px = store.get_commodity_series(variety)
+    if px is None or not len(px):
+        return pd.Series(dtype=float), None
+    suf = fetcher.COMMODITY_TS_SUFFIX.get(code)
+    if not suf or variety in fetcher.TS_COMMODITY_EXCLUDE:
+        return px, None
+    try:
+        mapping = store.get_fut_mapping(f"{code}.{suf}")
+    except Exception:  # noqa: BLE001
+        return px, None
+    if mapping is None or not len(mapping):
+        return px, None
+    try:
+        cc = {c: store.get_fut_contract_close(c) for c in sorted(set(mapping.unique()))}
+    except Exception:  # noqa: BLE001
+        return px, None
+    return fund.roll_adjusted_series(px, mapping, cc)
+
+
 def spot_map(store, valid_days: int = 2) -> tuple[dict, str]:
     """夜盘快照 {variety: price}(超过 valid_days 天视为失效) + 快照日。无 → ({}, '')。"""
     if not hasattr(store, "get_commodity_spot"):

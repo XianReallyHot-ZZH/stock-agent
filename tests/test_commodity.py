@@ -350,6 +350,73 @@ def test_forward_return_and_cooldown():
     assert list(cm) == [True, False, False, True, False, False, True, False, False, False]
 
 
+# ---------- 批次2.4 展期调整连续(roll_adjusted_series + panel loader) ----------
+def test_roll_adjusted_series_roll_day_uses_old_contract():
+    """换月日收益=旧合约 close(t)/close(t−1)−1(消除拼接跳空);非换月日=主连原生。"""
+    from stockagent.commodity.fundamentals import roll_adjusted_series
+    dates = pd.bdate_range("2026-01-05", periods=6).strftime("%Y-%m-%d")
+    dom = pd.Series([100.0, 105.0, 110.0, 120.0, 121.0, 122.0], index=dates)
+    mapping = pd.Series(["OLD.SHF"] * 3 + ["NEW.SHF"] * 3, index=dates)
+    old = pd.Series([100.0, 105.0, 110.0, 112.0], index=dates[:4])
+    adj, nfb = roll_adjusted_series(dom, mapping, {"OLD.SHF": old})
+    assert nfb == 0
+    assert adj.iloc[0] == pytest.approx(100.0)                     # 基=主连首个有效收盘
+    assert adj.iloc[3] / adj.iloc[2] - 1 == pytest.approx(112.0 / 110.0 - 1)   # 换月日按旧约
+    assert adj.iloc[4] / adj.iloc[3] - 1 == pytest.approx(121.0 / 120.0 - 1)   # 次日起新约原生
+    assert adj.iloc[1] / adj.iloc[0] - 1 == pytest.approx(0.05)
+
+
+def test_roll_adjusted_series_fallback_and_empty():
+    from stockagent.commodity.fundamentals import roll_adjusted_series
+    dates = pd.bdate_range("2026-01-05", periods=6).strftime("%Y-%m-%d")
+    dom = pd.Series([100.0, 105.0, 110.0, 120.0, 121.0, 122.0], index=dates)
+    mapping = pd.Series(["OLD.SHF"] * 3 + ["NEW.SHF"] * 3, index=dates)
+    # 旧约缺换月日收盘 → 回退主连原生(含跳空)+ 计数
+    adj, nfb = roll_adjusted_series(dom, mapping, {"OLD.SHF": pd.Series(
+        [100.0, 105.0, 110.0], index=dates[:3])})
+    assert nfb == 1
+    assert adj.iloc[3] / adj.iloc[2] - 1 == pytest.approx(120.0 / 110.0 - 1)
+    # 无映射 → 原样返回
+    adj2, nfb2 = roll_adjusted_series(dom, pd.Series(dtype=object), {})
+    assert list(adj2) == list(dom) and nfb2 == 0
+
+
+def test_roll_adjusted_series_double_roll():
+    """两次换月各自按当次旧约计;非换月日=主连原生(同合约)。"""
+    from stockagent.commodity.fundamentals import roll_adjusted_series
+    dates = pd.bdate_range("2026-01-05", periods=8).strftime("%Y-%m-%d")
+    dom = pd.Series([100.0, 100.0, 90.0, 91.0, 85.0, 86.0, 87.0, 88.0], index=dates)
+    mapping = pd.Series(["A.SHF"] * 2 + ["B.SHF"] * 3 + ["C.SHF"] * 3, index=dates)
+    a = pd.Series([100.0, 100.0, 91.0], index=dates[:3])           # A 在换月日收 91(不是主连的 90)
+    b = pd.Series([90.0, 91.0, 85.0, 86.0], index=dates[2:6])      # B 主导期+第二次换月日收 86
+    adj, nfb = roll_adjusted_series(dom, mapping, {"A.SHF": a, "B.SHF": b})
+    assert nfb == 0
+    assert adj.iloc[2] / adj.iloc[1] - 1 == pytest.approx(91.0 / 100.0 - 1)   # 换月1:按 A
+    assert adj.iloc[5] / adj.iloc[4] - 1 == pytest.approx(86.0 / 85.0 - 1)    # 换月2:按 B
+    assert adj.iloc[3] / adj.iloc[2] - 1 == pytest.approx(91.0 / 90.0 - 1)    # 非换月日原生
+
+
+def test_roll_adjusted_from_store_roundtrip(tmp_path):
+    """panel loader: fut_mapping+fut_contract_daily 落库 → 换月日按旧约;缺映射回退原生。"""
+    from stockagent.commodity import panel as cpanel
+    st = Store(tmp_path / "t.db")
+    dates = pd.bdate_range("2026-01-05", periods=4).strftime("%Y-%m-%d")
+    st.upsert_commodity_price([("螺纹钢", d, v) for d, v in zip(dates, [100.0, 105.0, 110.0, 120.0])],
+                              source="tushare_fut_daily")
+    st.upsert_fut_mapping([("RB.SHF", d, m) for d, m in
+                           zip(dates, ["A.SHF", "A.SHF", "B.SHF", "B.SHF"])])
+    st.upsert_fut_contract_daily([("A.SHF", d, v) for d, v in
+                                  zip(dates[:3], [100.0, 105.0, 112.0])])
+    adj, nfb = cpanel.roll_adjusted_from_store(st, "螺纹钢", "RB")
+    assert nfb == 0
+    assert adj.iloc[2] / adj.iloc[1] - 1 == pytest.approx(112.0 / 105.0 - 1)
+    # 无映射品种(如碳酸锂) → 原样主连 + None
+    st.upsert_commodity_price([("碳酸锂", d, v) for d, v in zip(dates, [7.0, 7.1, 7.2, 7.3])],
+                              source="akshare_futures")
+    adj2, nfb2 = cpanel.roll_adjusted_from_store(st, "碳酸锂", "LC")
+    assert nfb2 is None and list(adj2) == [7.0, 7.1, 7.2, 7.3]
+
+
 def test_basis_inventory_store_roundtrip(tmp_path):
     st = Store(tmp_path / "t.sqlite")
     rows = [("CU", "2026-09-04", 78900.0, 79120.0, 79500.0, 2609, 2701, 600.0, 0.0076, 0.0052)]

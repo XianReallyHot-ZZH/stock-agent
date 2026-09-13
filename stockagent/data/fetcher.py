@@ -1692,20 +1692,32 @@ def fetch_commodity_basis(start: str, end: str,
     raise FetchError(f"commodity_basis {start}~{end} failed ({last_err})")
 
 
-# 库存(仓单)端点真相(2026-09-06 实测,二期剩余审计):
+# 库存(仓单)端点真相(2026-09-06 实测,二期剩余审计;2026-09-13 批次2.3 tushare fut_wsr 扩腿后修订):
 #   futures_inventory_99(99qh)      死(JSONDecodeError,源站改版)
 #   futures_inventory_em(东财)      活但仅 72 天(~3个月)——event-study 不够深,只配日度观察累积
 #   futures_shfe_warehouse_receipt  死(JSONDecodeError)
-#   futures_warehouse_receipt_dce   死(JSONDecodeError)
-#   futures_gfex_warehouse_receipt  解析坏(KeyError 增减,akshare 未跟上 gfex 改版)→ 碳酸锂库存待补
-#   futures_warehouse_receipt_czce  活(0.9s/次,dict{品种代码:逐仓库行})——本模块唯一多史源,
-#                                   覆盖 玻璃FG/纯碱SA/尿素UR/LPG PG(郑商所四品种),周采样进库
+#   futures_warehouse_receipt_dce   死(JSONDecodeError)——DCE 品种(铁矿I/焦煤JM/豆粕M/玉米C/生猪LH/
+#                                   LPG PG)库存无源,fut_wsr 也不覆盖 DCE(2026-09-13 实测单日 55 品种无 DCE)
+#   futures_gfex_warehouse_receipt  解析坏(KeyError 增减)——但 fut_wsr 覆盖 GFEX(碳酸锂 LC 2024 起)
+#   futures_warehouse_receipt_czce  活(0.9s/次,dict{品种代码:逐仓库行})——CZCE 品种唯一可靠源
+#   tushare fut_wsr                 活(2026-09-13 批次2.3):仓库粒度,按 trade_date 拉全市场分页
+#                                   (单次~1200 行含截断,必须 query_paged);SHFE/INE/GFEX 干净
+#                                   (vol=pre_vol+vol_chg 恒等成立;同名仓库双行=完税+保税两段,
+#                                   如 CU 世天威外高桥,sum 全行=正确总量);
+#                                   **CZCE 品种不可用**——混入升贴水/有效预报列错位行(FG 对账实证:
+#                                   sum=1568=真仓单1268+升贴水300;UR 缺续表仓库 4395 vs 官方总计 7645)
 CZCE_INVENTORY_SYMBOLS = ["FG", "SA", "UR"]   # PG(LPG)郑商所仓单接口无该键(2026-09-06 实测)——LPG 库存无源
+# fut_wsr 扩腿品种(批次2.3,2026-09-13):SHFE/INE/GFEX,与 COMMODITY_CODES 的交集减 CZCE(DCE 全缺)。
+# 单位随品种:CU/AL/ZN/RB=吨、AU/AG=千克、SC=桶、LC=手——分析为品种内自身分位/环比,无跨品种量纲比较
+WSR_INVENTORY_SYMBOLS = ["CU", "AL", "ZN", "RB", "AU", "AG", "SC", "LC"]
 
 
 def fetch_czce_receipts(date: str, timeout: float = 20.0) -> pd.DataFrame:
-    """郑商所仓单日报(逐日调用)→ 按品种聚合(仓单数量合计)。返回 [variety, date, volume]。
-    只返回 CZCE_INVENTORY_SYMBOLS 内品种;该日无数据/源失败 → 空表(调用方跳过,幂等重跑)。"""
+    """郑商所仓单日报(逐日调用)→ 按品种取「总计」行(官方口径)。返回 [variety, date, volume]。
+    **口径修正(2026-09-13 批次2.3)**:旧版对全表 仓单数量 列求和,而 CZCE 报表含 仓库行+小计行+
+    总计行(长表还分裂续行丢名)→ 恰好 3× 高估(FG 3804 vs 官方 1268 实证);分位/环比比例不变,
+    event-study 结论不受影响,绝对值全量重灌修正。只返回 CZCE_INVENTORY_SYMBOLS 内品种;
+    该日无数据/源失败 → 空表(调用方跳过,幂等重跑)。"""
     try:
         d = _run_with_timeout(ak.futures_warehouse_receipt_czce, timeout, date=date)
     except Exception:  # noqa: BLE001 — 单日失败静默(周采样靠重跑自愈)
@@ -1718,10 +1730,82 @@ def fetch_czce_receipts(date: str, timeout: float = 20.0) -> pd.DataFrame:
             continue
         if "仓单数量" not in sub.columns or not len(sub):
             continue
-        vol = pd.to_numeric(sub["仓单数量"], errors="coerce").sum()
+        code_col = sub.columns[0]                       # 仓库编号(首列;小计/总计行在此)
+        num = pd.to_numeric(sub["仓单数量"], errors="coerce")
+        total_rows = sub[sub[code_col].astype(str).str.strip() == "总计"]
+        if len(total_rows) and pd.notna(num[total_rows.index[0]]):
+            vol = float(num[total_rows.index[0]])       # 官方总计行(首选——续行丢名也不受影响)
+        else:                                           # 无总计行:仓库行求和(编号为数字者,剔除小计/总计/续行)
+            keep = sub[code_col].astype(str).str.fullmatch(r"\d{3,4}", na=False)
+            vol = float(num[keep].sum()) if keep.any() else float("nan")
         if pd.notna(vol) and vol > 0:
             rows.append({"variety": str(sym).upper(), "date": iso, "volume": float(vol)})
     return pd.DataFrame(rows, columns=["variety", "date", "volume"])
+
+
+def fetch_inventory_wsr_tushare(date: str) -> pd.DataFrame:
+    """交易所仓单日报(tushare `fut_wsr`,批次2.3)→ WSR_INVENTORY_SYMBOLS 品种按日聚合。
+    单次调用 ~1200 行截断(含重复),必须 query_paged 分页;聚合=逐仓库 vol 求和——SHFE 同名
+    仓库双行=完税+保税两段,sum 全行即注册仓单总量(CZCE 例外不在此腿,见端点真相注)。
+    返回 [variety, date, volume];空/失败 → 空表(周采样调用方跳过,幂等重跑)。"""
+    from . import tushare_client as tc
+    d8 = str(date).replace("-", "")
+    iso = f"{d8[:4]}-{d8[4:6]}-{d8[6:]}"
+    try:
+        df = tc.query_paged("fut_wsr", page_size=800, trade_date=d8)
+    except Exception:  # noqa: BLE001 — 单日失败静默(周采样靠重跑自愈)
+        return pd.DataFrame(columns=["variety", "date", "volume"])
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=["variety", "date", "volume"])
+    df = df.drop_duplicates()
+    sub = df[df["symbol"].astype(str).str.upper().isin(WSR_INVENTORY_SYMBOLS)]
+    if not len(sub):
+        return pd.DataFrame(columns=["variety", "date", "volume"])
+    agg = (pd.to_numeric(sub["vol"], errors="coerce").groupby(sub["symbol"]).sum())
+    rows = [{"variety": str(sym).upper(), "date": iso, "volume": float(v)}
+            for sym, v in agg.items() if pd.notna(v) and v > 0]
+    return pd.DataFrame(rows, columns=["variety", "date", "volume"])
+
+
+# ---- 批次2.4 展期口径(2026-09-13): 主力换月映射 + 逐合约收盘 → 展期调整连续 ----
+def fetch_fut_mapping_tushare(code: str, start: str = "2020-01-01",
+                              end: Optional[str] = None) -> pd.DataFrame:
+    """主力换月映射(tushare `fut_mapping`,ts_code=<品种>.<所>)。返回 [ts_code, date, mapping_code]。
+    event-study 前向收益的「精确展期」原料——主连拼接未复权在换月日的跳空由此修正。"""
+    from . import tushare_client as tc
+    suf = COMMODITY_TS_SUFFIX.get(code)
+    if not suf:
+        return pd.DataFrame(columns=["ts_code", "date", "mapping_code"])
+    s = str(start).replace("-", "")
+    e = str(end or today_str()).replace("-", "")
+    df = tc.query("fut_mapping", ts_code=f"{code}.{suf}", start_date=s, end_date=e)
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=["ts_code", "date", "mapping_code"])
+    out = pd.DataFrame({
+        "ts_code": f"{code}.{suf}",
+        "date": pd.to_datetime(df["trade_date"].astype(str), format="%Y%m%d",
+                               errors="coerce").dt.strftime("%Y-%m-%d"),
+        "mapping_code": df["mapping_ts_code"].astype(str),
+    }).dropna(subset=["date"]).drop_duplicates(["ts_code", "date"])
+    return out.sort_values("date")
+
+
+def fetch_fut_contract_daily_tushare(ts_code: str) -> pd.DataFrame:
+    """单合约日线收盘(tushare `fut_daily`,ts_code=实际合约如 RB2701.SHF;全生命 ≤250 行)。
+    返回 [ts_code, date, close];失败 raise(调用方记日志跳过该合约,重跑自愈)。"""
+    from . import tushare_client as tc
+    df = tc.query("fut_daily", ts_code=ts_code, fields="ts_code,trade_date,close")
+    if df is None or len(df) == 0:
+        raise FetchError(f"fut_daily {ts_code} empty")
+    out = pd.DataFrame({
+        "ts_code": ts_code,
+        "date": pd.to_datetime(df["trade_date"].astype(str), format="%Y%m%d",
+                               errors="coerce").dt.strftime("%Y-%m-%d"),
+        "close": pd.to_numeric(df["close"], errors="coerce"),
+    }).dropna(subset=["date", "close"]).drop_duplicates(["ts_code", "date"])
+    if not len(out):
+        raise FetchError(f"fut_daily {ts_code} rows empty")
+    return out.sort_values("date")
 
 
 def fetch_market_pb(timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:

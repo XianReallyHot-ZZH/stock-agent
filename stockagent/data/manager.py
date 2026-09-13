@@ -420,24 +420,28 @@ class DataManager:
                 rows = list(zip(d["code"], [period] * len(d), _col("announce_date"),
                                 _col("np_yoy"), _col("rev_yoy"), _col("eps"),
                                 _col("bvps"), _col("np_abs"), _col("rev_abs")))
-                results[period] = self.store.upsert_stock_report_actual(rows, source="em_yjbb")
+                results[period] = self.store.upsert_stock_report_actual(rows, source=src)
             else:
                 rows = list(zip(d["code"], [period] * len(d), _col("announce_date"),
                                 _col("np_yoy"), _col("rev_yoy")))
-                results[period] = self.store.upsert_stock_express(rows, source="em_yjkb")
-            log.info("%s %s: %d rows", results_tag, period, results[period])
+                results[period] = self.store.upsert_stock_express(rows, source=src)
+            log.info("%s %s: %d rows (%s)", results_tag, period, results[period], src)
         if any(results.values()):
             self.store.set_meta(f"last_{table_tag}_update", fetcher.today_str())
         return results
 
     def update_stock_express(self, periods: Optional[list[str]] = None) -> dict:
-        """业绩快报(stock_yjkb_em)全市场 → stock_express。快报集中年报期(深市2月底惯例),
-        中期稀疏。Returns {period: rows}。"""
-        return self._update_perf_panel(fetcher.fetch_stock_express, "express", periods, 10, "stock_express")
+        """业绩快报(stock_yjkb_em)全市场 → stock_express(东财主源+tushare ann_date 应急,1.12)。
+        快报集中年报期(深市2月底惯例),中期稀疏。Returns {period: rows}。"""
+        return self._update_perf_panel(fetcher.fetch_stock_express, "express", periods, 10,
+                                       "stock_express",
+                                       ts_fetch_fn=fetcher.fetch_stock_express_tushare)
 
     def update_stock_report_actual(self, periods: Optional[list[str]] = None) -> dict:
         """定期报告实际值(stock_yjbb_em)全市场 → stock_report_actual(含 V8 扩列
-        eps/bvps/np_abs/rev_abs——TTM/PE 自算与 PB 分位轨原料)。季度全量(数千行)。"""
+        eps/bvps/np_abs/rev_abs——TTM/PE 自算与 PB 分位轨原料)。季度全量(数千行)。
+        (tushare 应急=income 逐股全市场=5000 积分 vip,2000 档不可行——正式报腿东财唯一源,
+        失败仅告警等下次;1.12 降级说明见 docs/EXECUTION_PLAN-tushare迁移.md)"""
         return self._update_perf_panel(fetcher.fetch_stock_report_actual, "report", periods, 500, "stock_report")
 
     def update_stock_balance(self, periods: Optional[list[str]] = None) -> dict:
@@ -739,18 +743,25 @@ class DataManager:
         return total
 
     def update_commodity_inventory(self, start: str = "2021-01-01",
-                                   end: Optional[str] = None) -> int:
-        """Fetch + store 郑商所仓单(周采样:每周三;CZCE 四品种 FG/SA/UR/PG——多史免费源仅此一家,
-        见 fetcher 端点真相注)。从库内最新周增量;单日失败静默跳过(重跑自愈)。返回新增行数。"""
+                                   end: Optional[str] = None,
+                                   refill: bool = False) -> int:
+        """Fetch + store 交易所仓单(周采样:每周三;批次2.3 扩腿后双源):
+        腿A CZCE(FG/SA/UR,akshare 郑商所日报「总计」口径——2026-09-13 修 3× 小计/总计高估,
+        refill=True 全量重灌修正存量);腿B WSR(CU/AL/ZN/RB/AU/AG/SC/LC,tushare fut_wsr 仓库和,
+        2019 起——CZCE 品种不吃 tushare 混列垃圾,DCE 品种无源,见 fetcher 端点真相注)。
+        各腿从库内最新周增量(腿B取全部 WSR 品种最旧末日,新品种自动补全史);单日失败静默跳过
+        (重跑自愈)。返回新增行数(两腿合计)。"""
         end = end or fetcher.today_str()
+        total = 0
+        # ---- 腿A: CZCE(akshare,总计口径) ----
         last = None
         for v in fetcher.CZCE_INVENTORY_SYMBOLS:
             s = self.store.get_commodity_inventory(v)
             if len(s):
                 d = str(s.index[-1])
                 last = d if last is None else max(last, d)
-        cur = pd.Timestamp(max(start, (last or start))) + pd.offsets.Week(weekday=2)   # 次一个周三
-        total = 0
+        a_start = start if (refill or last is None) else max(start, last)
+        cur = pd.Timestamp(a_start) + pd.offsets.Week(weekday=2)                     # 次一个周三
         n_fail = 0
         while cur <= pd.Timestamp(end):
             iso = cur.strftime("%Y-%m-%d")
@@ -765,10 +776,81 @@ class DataManager:
             else:
                 n_fail += 1
             cur = cur + pd.offsets.Week(weekday=2)
+        log.info("commodity_inventory czce weekly: +%d rows this run (%d empty weeks)", total, n_fail)
+        # ---- 腿B: WSR(tushare fut_wsr,SHFE/INE/GFEX 八品种) ----
+        from . import tushare_client as tc
+        if tc.has_token():
+            wsr_start = "2019-01-02"   # fut_wsr 单日覆盖 ~40 品种自此稳定(2016 前 SHFE 稀疏/2012 残缺)
+            b_start = None
+            for v in fetcher.WSR_INVENTORY_SYMBOLS:
+                s = self.store.get_commodity_inventory(v)
+                # min(各品种末日;缺史品种按 wsr_start 记):新加入品种 → 从覆盖起点全量补;全齐后=增量
+                d = str(s.index[-1]) if len(s) else wsr_start
+                b_start = d if b_start is None else min(b_start, d)
+            cur = pd.Timestamp(max(wsr_start, b_start)) + pd.offsets.Week(weekday=2)
+            b_total, n_empty = 0, 0
+            while cur <= pd.Timestamp(end):
+                iso = cur.strftime("%Y-%m-%d")
+                try:
+                    df = fetcher.fetch_inventory_wsr_tushare(iso)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("fut_wsr %s failed: %s", iso, str(e)[:120])
+                    df = pd.DataFrame()
+                if len(df):
+                    rows = [(r["variety"], r["date"], r["volume"]) for _, r in df.iterrows()]
+                    b_total += self.store.upsert_commodity_inventory(rows, source="ts_wsr")
+                else:
+                    n_empty += 1
+                cur = cur + pd.offsets.Week(weekday=2)
+            total += b_total
+            log.info("commodity_inventory wsr weekly: +%d rows (%d empty weeks)", b_total, n_empty)
+        else:
+            log.info("commodity_inventory wsr leg skipped (无 tushare token)")
         if total:
             self.store.set_meta("last_commodity_inventory_update", fetcher.today_str())
-        log.info("commodity_inventory(czce weekly): +%d rows (%d empty weeks)", total, n_fail)
         return total
+
+    def update_fut_rollover(self, start: str = "2020-01-01",
+                            end: Optional[str] = None) -> dict:
+        """主力换月映射 + 逐合约收盘回填(批次2.4·展期口径;event-study 前向收益消费,看板不直接用)。
+        映射: 15 品种整段重拉幂等(TS_COMMODITY_EXCLUDE 的碳酸锂/LPG 无主连映射);
+        逐合约: 映射中出现且未入库的合约逐个全生命拉(单合约 ≤250 行一次齐;缺者记日志跳过重跑自愈)。
+        Returns {mapping: rows, contracts: n, failed: n}。"""
+        out = {"mapping": 0, "contracts": 0, "failed": 0}
+        from . import tushare_client as tc
+        if not tc.has_token():
+            log.info("fut_rollover skipped (无 tushare token)")
+            return out
+        end = end or fetcher.today_str()
+        codes = [c for v, c in fetcher.COMMODITY_CODES.items()
+                 if v not in fetcher.TS_COMMODITY_EXCLUDE]
+        need_contracts: set = set()
+        for code in codes:
+            try:
+                m = fetcher.fetch_fut_mapping_tushare(code, start, end)
+            except Exception as e:  # noqa: BLE001
+                log.warning("fut_mapping %s failed: %s", code, str(e)[:110])
+                continue
+            if len(m):
+                out["mapping"] += self.store.upsert_fut_mapping(
+                    list(m[["ts_code", "date", "mapping_code"]]
+                         .itertuples(index=False, name=None)))
+                need_contracts |= set(m["mapping_code"])
+        todo = need_contracts - self.store.fut_contract_codes()
+        for ts in sorted(todo):
+            try:
+                d = fetcher.fetch_fut_contract_daily_tushare(ts)
+            except Exception as e:  # noqa: BLE001
+                out["failed"] += 1
+                log.warning("fut_contract %s failed: %s", ts, str(e)[:110])
+                continue
+            out["contracts"] += self.store.upsert_fut_contract_daily(
+                list(d[["ts_code", "date", "close"]].itertuples(index=False, name=None)))
+        if out["mapping"]:
+            self.store.set_meta("last_fut_rollover_update", fetcher.today_str())
+        log.info("fut_rollover: mapping +%d rows · contracts +%d (%d failed)",
+                 out["mapping"], out["contracts"], out["failed"])
+        return out
 
     def update_market_pb(self) -> int:
         """Fetch + store whole-A-market PB history + percentiles (legulegu). Single series."""

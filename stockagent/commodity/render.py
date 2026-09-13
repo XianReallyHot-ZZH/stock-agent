@@ -618,7 +618,8 @@ function sortTargets(col){
 # ---------------------------------------------------------------- 🔬 基差·期限结构·库存(二期剩余)
 def _fundamentals_section(store, config=None) -> str:
     """🔬 基差/期限结构/库存观察(二期剩余,2026-09 过 event-study 礼遇后入板):
-    主力基差率+分位 | 近月-主力斜率年化+分位 | CZCE 四品种库存分位+4周变化。
+    主力基差率+分位 | 近月-主力斜率年化+分位 | 库存分位+4周变化(CZCE 三品种总计口径 +
+    批次2.3 fut_wsr 扩腿 SHFE/INE/GFEX 八品种;DCE 品种无源)。
     实证结论活注入(meta:commodity_basis_conclusion / commodity_inventory_conclusion);
     温度计非开关。基差/库存史不足 250/100 观测的品种诚实缺省(—)。"""
     if store is None or not hasattr(store, "get_commodity_basis"):
@@ -634,7 +635,7 @@ def _fundamentals_section(store, config=None) -> str:
         return (f"<td style='{td};text-align:center'>{fmt.format(v)}{suffix}"
                 f"<br><span style='color:{c};font-size:11px'>分位{p}</span></td>")
 
-    czce_set = set(fetcher.CZCE_INVENTORY_SYMBOLS)
+    inv_set = set(fetcher.CZCE_INVENTORY_SYMBOLS) | set(fetcher.WSR_INVENTORY_SYMBOLS)
     body, n_basis, n_inv = [], 0, 0
     for variety, code in fetcher.COMMODITY_CODES.items():
         bdf = None
@@ -654,7 +655,7 @@ def _fundamentals_section(store, config=None) -> str:
                 term = float(ts.iloc[-1])
                 term_pct = fund.current_pct(ts, 250)
         inv_pct = inv_w4 = None
-        if code in czce_set:
+        if code in inv_set:
             try:
                 inv = store.get_commodity_inventory(code)
             except Exception:  # noqa: BLE001
@@ -679,7 +680,7 @@ def _fundamentals_section(store, config=None) -> str:
     if not body:
         return ""
     head = (f"<tr><th style='{th};text-align:left'>品种</th><th style='{th}'>主力基差率</th>"
-            f"<th style='{th}'>期限斜率(年化)</th><th style='{th}'>库存分位(CZCE)</th></tr>")
+            f"<th style='{th}'>期限斜率(年化)</th><th style='{th}'>库存分位</th></tr>")
 
     def _concl(key, prefix):
         if not hasattr(store, "get_meta"):
@@ -693,9 +694,12 @@ def _fundamentals_section(store, config=None) -> str:
     concl_html = (_concl("commodity_basis_conclusion", "基差/期限实证(validate_commodity_basis)")
                   + _concl("commodity_inventory_conclusion", "库存实证(validate_commodity_inventory)"))
     return (f'<div class="alerts"><h2>🔬 基差·期限结构·库存 '
-            f'<span class="count">基差 {n_basis} 品种 · 库存 {n_inv} 品种(CZCE)</span></h2>'
+            f'<span class="count">基差 {n_basis} 品种 · 库存 {n_inv} 品种</span></h2>'
             f'<p class="muted">基差率=(主力期货−现货)/现货,正=升水;期限斜率=主力/近月−1 年化,'
-            f'正=contango/负=现货紧(backwardation);库存=郑商所交割仓单周采样(≠社会总库存)。'
+            f'正=contango/负=现货紧(backwardation);库存=交割仓单周采样(≠社会总库存;2026-09-13 扩腿:'
+            f'CZCE 三品种=郑商所日报「总计」口径(张),SHFE/INE/GFEX 八品种=tushare fut_wsr 仓库和'
+            f'(铜/铝/锌/螺纹/吨·金银/千克·原油/桶·碳酸锂/手,铜含完税+保税两段;DCE 品种无源)。'
+            f'CZCE 历史曾在 2026-09-13 前被小计/总计行 3× 高估,已全量重灌修正(比例不变,分位/环比不变)。'
             f'分位=expanding 历史位(红≥95%/绿≤5%,与面板/雷达同阈)。温度计非开关,不构成买卖建议。</p>'
             f'<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
             f'<thead>{head}</thead><tbody>{"".join(body)}</tbody></table></div>{concl_html}</div>')
@@ -721,8 +725,10 @@ alpha——都是「含摩擦的跟踪差」。T+0 品种永不进引擎宇宙;�
 <div><b>数据腿</b> · 国内 17 品种=sina 连续合约(backfill_stock_data --comm);国际基准=sina 外盘
 (backfill_commodity.py);指数=ccidx。隔夜=夜盘快照 vs 国内日收盘(超 2 天显示 —)。</div>
 <div><b>🔬 基差/期限/库存</b> · 基差+期限结构=100ppi 生意社(2019 起,过了 event-study 礼遇后入板,
-结论活注入);库存=郑商所交割仓单周采样(2021 起,<b>仅玻璃/纯碱/尿素/LPG 四品种</b>——SHFE/DCE 端点死、
-GFEX 解析坏、99qh 死、东财仅 72 天,金属/碳酸锂库存无多史免费源待补)。仓单≠社会总库存。</div>
+结论活注入);库存=交割仓单周采样:玻璃/纯碱/尿素=郑商所日报「总计」(2021 起,akshare;<b>2026-09-13 前历史
+曾被小计/总计行 3× 高估已重灌修正</b>)+铜/铝/锌/螺纹/金/银/原油/碳酸锂=tushare fut_wsr 仓库和(2019 起,
+2026-09-13 批次2.3 扩腿;SHFE 含完税+保税两段;碳酸锂 2024 起 GFEX)。DCE 品种(铁矿/焦煤/豆粕/玉米/生猪/
+LPG)库存无源。仓单≠社会总库存。</div>
 </div></details>"""
 
 

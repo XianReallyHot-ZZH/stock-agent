@@ -84,8 +84,9 @@ def query(api: str, min_interval: float = 0.35, retries: int = 4, **params):
 
 def query_paged(api: str, page_size: int = 100, offset_field: str = "offset",
                  max_pages: int = 200, **params):
-    """分页拉全量(offset/limit 分页族——fina_indicator/balancesheet 等)。
+    """分页拉全量(offset/limit 分页族——fina_indicator/balancesheet/fut_wsr 等)。
     返回 concat 后的 DataFrame;首页为空 → 空 DataFrame。"""
+    import warnings
     import pandas as pd
     frames = []
     for page in range(max_pages):
@@ -97,5 +98,7 @@ def query_paged(api: str, page_size: int = 100, offset_field: str = "offset",
             break
     if not frames:
         return pd.DataFrame()
-    out = pd.concat(frames, ignore_index=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)   # pandas: 全 NA 列 concat 弃用噪音
+        out = pd.concat(frames, ignore_index=True)
     return out.drop_duplicates() if len(out.columns) else out

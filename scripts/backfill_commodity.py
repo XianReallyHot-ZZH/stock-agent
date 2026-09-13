@@ -11,7 +11,9 @@ Usage:
   python scripts/backfill_commodity.py --index      # 只中证商品指数
   python scripts/backfill_commodity.py --targets    # 只投资标的 NAV(非池内:有色期货/能化/豆粕/白银LOF/南方原油)
   python scripts/backfill_commodity.py --basis      # 只基差+期限结构(首次全史 ~11min,之后增量)
-  python scripts/backfill_commodity.py --inv        # 只郑商所仓单·周采样(首次 ~5min)
+  python scripts/backfill_commodity.py --inv        # 只仓单·周采样(CZCE 总计口径+tushare fut_wsr 八品种;首次 ~8min)
+  python scripts/backfill_commodity.py --inv --refill  # CZCE 腿全量重灌(2026-09-13 3× 口径修正用,一次性)
+  python scripts/backfill_commodity.py --roll       # 只主力换月映射+逐合约收盘(批次2.4 展期口径;首次 ~5min)
 """
 from __future__ import annotations
 
@@ -34,13 +36,17 @@ def main():
     ap.add_argument("--basis", action="store_true",
                     help="只基差+期限结构(100ppi→commodity_basis;首次全史 2019起 ~11min,之后增量秒级)")
     ap.add_argument("--inv", action="store_true",
-                    help="只郑商所仓单(CZCE 四品种 FG/SA/UR/PG 周采样→commodity_inventory;首次 2021起 ~5min)")
+                    help="只仓单周采样(CZCE FG/SA/UR 总计口径 + fut_wsr CU/AL/ZN/RB/AU/AG/SC/LC→commodity_inventory;首次 2019起 ~8min)")
+    ap.add_argument("--refill", action="store_true",
+                    help="配合 --inv:CZCE 腿全量重灌(2026-09-13 小计/总计 3× 口径修正,一次性)")
+    ap.add_argument("--roll", action="store_true",
+                    help="只主力换月映射+逐合约收盘(批次2.4 展期口径→fut_mapping/fut_contract_daily;event-study 前向收益用)")
     args = ap.parse_args()
     setup_logging()
 
     cfg = get_config()
     dm = DataManager(config=cfg)
-    all_legs = not (args.bench or args.index or args.targets or args.basis or args.inv)
+    all_legs = not (args.bench or args.index or args.targets or args.basis or args.inv or args.roll)
 
     if args.bench or all_legs:
         per = dm.update_commodity_benchmarks()
@@ -72,8 +78,12 @@ def main():
         n = dm.update_commodity_basis()
         print(f"  基差+期限结构(100ppi): +{n} 行(首次全史 2019起 ~11min,此处增量)")
     if args.inv or all_legs:
-        n = dm.update_commodity_inventory()
-        print(f"  郑商所仓单·周采样(CZCE 四品种): +{n} 行(首次 2021起 ~5min)")
+        n = dm.update_commodity_inventory(refill=args.refill)
+        print(f"  仓单·周采样(CZCE 总计+fut_wsr 八品种{',refill' if args.refill else ''}): +{n} 行")
+    if args.roll or all_legs:
+        r = dm.update_fut_rollover()
+        print(f"  换月映射+逐合约(批次2.4): mapping +{r['mapping']} 行 · 合约 +{r['contracts']}"
+              f" ({r['failed']} 失败)")
 
 
 if __name__ == "__main__":
