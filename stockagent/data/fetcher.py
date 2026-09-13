@@ -1396,6 +1396,61 @@ def fetch_commodity_price(varieties: list[str], start: str = "2020-01-01",
     return pd.concat(frames, ignore_index=True).sort_values(["variety", "date"])
 
 
+# tushare 主力连续合约代码后缀(2026-09-13 迁移1.11;RB.SHF=螺纹钢主力 已对账实证,
+# 各所后缀经 fut_basic 核: 上期.SHF/能源.INE/大商.DCE/郑商.ZCE/广期.GFX)
+COMMODITY_TS_SUFFIX = {
+    "LC": "GFX", "CU": "SHF", "AL": "SHF", "ZN": "SHF",
+    "RB": "SHF", "I": "DCE", "JM": "DCE",
+    "AU": "SHF", "AG": "SHF", "SC": "INE",
+    "PG": "ZCE", "FG": "ZCE", "SA": "ZCE", "UR": "ZCE",
+    "M": "DCE", "C": "DCE", "LH": "DCE",
+}
+# tushare fut_daily 无主力连续数据的品种(2026-09-13 实测 empty): 广期碳酸锂/郑商 LPG
+# ——这两品种永走 sina 连续,manager 按品种补位
+TS_COMMODITY_EXCLUDE = {"碳酸锂", "LPG"}
+
+
+def fetch_commodity_price_tushare(varieties: list[str], start: str = "2020-01-01",
+                                  end: Optional[str] = None) -> pd.DataFrame:
+    """商品主力连续日线(tushare `fut_daily` ts_code=<品种>.<所>,2026-09-13 迁移1.11 主源)。
+    与 sina 连续(code+'0')同为主力拼接——两源主力判定日可能差 1-2 天,换月附近 close 跳变
+    差由对账(recon commodity·口径差族)量化(中位 0.0000%,>1% 日=换月窗口);正常交易日一致。
+    TS_COMMODITY_EXCLUDE 品种(tushare 无主力连续)直接跳过→调用方走 sina 补位。
+    2020 起 ≤2000 行/品种单次。逐品种循环,失败品种跳过;全失败 raise。
+    返回同形长表 [variety, date, close]。"""
+    from . import tushare_client as tc
+    s = str(start).replace("-", "") or "20200101"
+    e = str(end or today_str()).replace("-", "")
+    frames = []
+    last_err = None
+    for v in varieties:
+        if v in TS_COMMODITY_EXCLUDE:
+            continue
+        code = COMMODITY_CODES.get(v)
+        suf = COMMODITY_TS_SUFFIX.get(code or "")
+        if not code or not suf:
+            continue
+        try:
+            df = tc.query("fut_daily", ts_code=f"{code}.{suf}",
+                          start_date=s if s >= "20200101" else "20200101", end_date=e,
+                          fields="ts_code,trade_date,close")
+            if df is None or len(df) == 0:
+                raise FetchError("empty")
+            d = (pd.to_datetime(df["trade_date"].astype(str), format="%Y%m%d",
+                                errors="coerce").dt.strftime("%Y-%m-%d"))
+            sub = pd.DataFrame({"variety": v, "date": d,
+                                "close": pd.to_numeric(df["close"], errors="coerce")})
+            sub = sub.dropna(subset=["date", "close"]).drop_duplicates(["variety", "date"])
+            if len(sub):
+                frames.append(sub)
+            last_err = None
+        except Exception as ex:  # noqa: BLE001
+            last_err = ex
+    if not frames:
+        raise FetchError(f"commodity_price(tushare) {varieties} failed ({last_err})")
+    return pd.concat(frames, ignore_index=True).sort_values(["variety", "date"])
+
+
 def fetch_commodity_spot(varieties: Optional[list[str]] = None, timeout: float = 12.0,
                          retries: int = 1) -> pd.DataFrame:
     """商品实时快照(盘前/盘中可调,A 类信号提速:夜盘隔夜变动在开盘前可见)。

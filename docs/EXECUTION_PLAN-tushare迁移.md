@@ -27,7 +27,7 @@
 | 1.8 | 指数日线 7 宽基（index_daily） | sina（无痛） | `index_daily` | 精确族 | **判死保留 sina(2026-09-13 对账)**：close 差=sina 3位小数 vs tushare 4位(升级无害)+1994/2001 古老修正(tushare 优)，但 **volume 单位沼泽**(上证系 t/s 恰0.01=股vs手、创业板指 0.0029=sina 深市另一套)，×100 对 399006 会错；无痛腿不赌单位 |
 | 1.9 | 分红（stock_dividend） | sina（无痛） | `dividend`（2000-01 起） | 精确族 | **已判：tushare 主源**——cash_div_tax=每股税前(对账实证,茅台 28.02423 两源相等)；送转合一(stk_div 每股,×10)、消费方按和用；sina 降级兜底 |
 | 1.10 | 指数成分+权重（index_constituents） | csindex（无痛，月更） | `index_weight` | 精确族 | **已落(2026-09-13)**：混合设计——csindex 保主源(成分名称+名称哨兵)，tushare 兜**国证系缺口**(399006 创业板指首次可得，etf_pool.yaml 补 index_code)；index_weight 无名称列→store name 保留守卫 + 权重和 90-110% 哨兵替代名称哨兵；实测 csindex 对 399006 超时 40s 时兜底实战接住 |
-| 1.11 | 商品国内 17 品种日线（commodity_price） | sina 连续合约（无痛） | `fut_daily`（带 oi 持仓量） | 口径差族 | **实测门**：连续合约代码映射（主力连续 9999 风格 / `fut_mapping`）；换月拼接口径差出报告 |
+| 1.11 | 商品国内 17 品种日线（commodity_price） | sina 连续合约（无痛） | `fut_daily`（带 oi 持仓量） | 口径差族 | **已判(2026-09-13)：15/17 品种迁主源**——对账中位 |Δ|/价 0.0000%（两源即同一主力收盘），>1% 日全部=换月判定差(铁矿16/焦煤20/纯碱24/生猪25天,原油47天月月换月属预期)；**碳酸锂(LC.GFX)/LPG(PG.ZCE) tushare 无主力连续→TS_COMMODITY_EXCLUDE 永走 sina 补位**(品种级来源标记) |
 | 1.12 | 预告/快报/正式报（stock_forecast/express/report_actual） | 东财（无痛） | `forecast`/`express`（按 ann_date）+ `income` 逐股 | 口径差族 | **实测门**：forecast 按 ann_date 拉全市场（文档自相矛盾）；正式报走 income 逐股（pool 模式）；type 八类 vs 东财标签映射 |
 | 1.13 | sina 17 项财报摘要（stock_financials） | 全量幂等无痛，冷启动慢 | `income`∪`fina_indicator` | 口径差族 | 17 项字段映射；与 1.12 共用逐股基础设施；sina 留精筛回退 |
 

@@ -302,8 +302,51 @@ def recon_dividend(_args=None) -> Path:
     return out
 
 
+def recon_commodity(_args=None) -> Path:
+    """1.11 商品日线: DB sina 连续存量 vs tushare 主力连续实拉。口径差族——正常日应一致,
+    换月附近差 1-2 天主力判定差属预期,只量化不拦。"""
+    import sqlite3
+    from stockagent.config import get_config
+    cfg = get_config()
+    conn = sqlite3.connect(cfg.db_path)
+    lines = ["# tushare 迁移对账 · 1.11 商品主力连续 (口径差族: 换月差量化不拦)", ""]
+    for v, code in fetcher.COMMODITY_CODES.items():
+        suf = fetcher.COMMODITY_TS_SUFFIX.get(code)
+        sina = pd.read_sql_query(
+            "SELECT date,close FROM commodity_price WHERE variety=? AND source='akshare_futures' "
+            "ORDER BY date", conn, params=(v,))
+        if not len(sina) or not suf:
+            lines.append(f"- {v}: SKIP — 无 sina 存量或无后缀映射")
+            continue
+        try:
+            df = fetcher.fetch_commodity_price_tushare([v])
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"- {v}: SKIP — tushare 失败 {str(e)[:80]}")
+            continue
+        both = sina.set_index("date").join(df.set_index("date"), how="inner",
+                                           lsuffix="_s", rsuffix="_t")
+        if not len(both):
+            lines.append(f"- {v}: ⚠ 无重叠 (sina {len(sina)} / ts {len(df)})")
+            continue
+        rel = ((both["close_s"] - both["close_t"]).abs()
+               / both["close_t"].where(both["close_t"] != 0)).dropna()
+        n_big = int((rel > 0.01).sum())
+        lines.append(
+            f"- {v}({code}.{suf}): 重叠 {len(both)} 日 · |Δ|/价 ≤0.1% 占 {(rel <= 0.001).mean():.1%}"
+            f" · 中位 {rel.median():.4%} · 最大 {rel.max():.2%} · >1% 日数 {n_big}"
+            f"{'(换月判定差,预期内)' if 0 < n_big <= 30 else '⚠偏多需人工看'} · ts 覆盖 {len(df)} 日")
+    conn.close()
+    lines += ["", "> 放行判据(口径差族): 正常日 ≤0.1% 占比 >99%、>1% 日数 ≤30(两源主力切换日差)即可切主源。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_commodity.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
 SUBS = {"valuation": recon_valuation, "macro": recon_macro, "nav": recon_nav,
-        "index": recon_index, "dividend": recon_dividend}
+        "index": recon_index, "dividend": recon_dividend, "commodity": recon_commodity}
 
 
 def main() -> None:

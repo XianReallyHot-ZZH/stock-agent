@@ -614,21 +614,46 @@ class DataManager:
 
     def update_commodity_price(self, varieties: Optional[list[str]] = None,
                                start: str = "2020-01-01", end: Optional[str] = None) -> dict:
-        """Fetch + store 商品现货价(日频,周期股上游领先指标,A 类强形式信号)。一次调多品种面板。"""
+        """Fetch + store 商品主力连续价(日频,周期股上游领先指标,A 类强形式信号)。
+        主源(2026-09-13 迁移1.11)=tushare fut_daily <品种>.<所>,降级 sina 连续;
+        换月口径差见 recon commodity。一次调多品种面板。"""
+        from . import tushare_client as tc
         varieties = varieties or self.COMMODITY_VARIETIES
         end = end or fetcher.today_str()
-        try:
-            df = fetcher.fetch_commodity_price(varieties, start, end)
-        except Exception as e:  # noqa: BLE001
-            log.warning("commodity_price failed: %s", str(e)[:120])
-            return {v: 0 for v in varieties}
+        df = None
+        ts_varieties: set = set()
+        if tc.has_token():
+            try:
+                df = fetcher.fetch_commodity_price_tushare(varieties, start, end)
+                ts_varieties = set(df["variety"])
+            except Exception as e:  # noqa: BLE001
+                log.warning("commodity_price tushare 失败→sina 降级: %s", str(e)[:120])
+                df = None
+        if df is not None:
+            # 品种补位: tushare 无数据的品种(EXCLUDE 或单品种失败)→ sina 补齐
+            missing = [v for v in varieties
+                       if v not in ts_varieties and v in fetcher.COMMODITY_CODES]
+            if missing:
+                try:
+                    extra = fetcher.fetch_commodity_price(missing, start, end)
+                    df = pd.concat([df, extra], ignore_index=True)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("commodity_price sina 补位 %s 失败: %s", missing, str(e)[:100])
+        else:
+            try:
+                df = fetcher.fetch_commodity_price(varieties, start, end)
+            except Exception as e:  # noqa: BLE001
+                log.warning("commodity_price failed: %s", str(e)[:120])
+                return {v: 0 for v in varieties}
         results: dict[str, int] = {}
         for v in varieties:
             sub = df[df["variety"] == v]
             rows = [(v, r["date"], r["close"]) for _, r in sub.iterrows()]
-            n = self.store.upsert_commodity_price(rows, source="akshare_futures")
+            src = "tushare_fut_daily" if v in ts_varieties else "akshare_futures"
+            n = self.store.upsert_commodity_price(rows, source=src)
             results[v] = n
-            log.info("commodity %s: +%d rows (to %s)", v, n, sub["date"].iloc[-1] if len(sub) else "?")
+            log.info("commodity[%s] %s: +%d rows (to %s)", src, v, n,
+                     sub["date"].iloc[-1] if len(sub) else "?")
         if any(results.values()):
             self.store.set_meta("last_commodity_update", fetcher.today_str())
         return results
