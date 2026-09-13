@@ -1227,6 +1227,28 @@ def fetch_index_daily(symbol: str, timeout: float = 40.0, retries: int = 2) -> p
     raise FetchError(f"{symbol}: index_daily failed ({last_err})")
 
 
+def fetch_index_daily_tushare(symbol: str) -> pd.DataFrame:
+    """宽基指数日线全史(tushare `index_daily`,2026-09-13 迁移1.8 主源)。399 开头→.SZ 其余→.SH。
+    同形 _normalize 输出(open/high/low/close/volume;amount 千元单位——表无此列,弃)。
+    vol 单位与 sina 的一致性由对账(recon index)验证。失败→调用方降级 sina。"""
+    from . import tushare_client as tc
+    ts_code = f"{symbol}.SZ" if str(symbol).startswith("399") else f"{symbol}.SH"
+    df = tc.query("index_daily", ts_code=ts_code)
+    if df is None or len(df) == 0:
+        raise FetchError(f"empty index_daily(tushare) {symbol}")
+    out = pd.DataFrame({
+        "date": pd.to_datetime(df["trade_date"].astype(str), format="%Y%m%d",
+                               errors="coerce").dt.strftime("%Y-%m-%d"),
+        "open": pd.to_numeric(df["open"], errors="coerce"),
+        "high": pd.to_numeric(df["high"], errors="coerce"),
+        "low": pd.to_numeric(df["low"], errors="coerce"),
+        "close": pd.to_numeric(df["close"], errors="coerce"),
+        "volume": pd.to_numeric(df["vol"], errors="coerce"),
+    })
+    return (out.dropna(subset=["date", "close"])
+               .drop_duplicates("date").set_index("date").sort_index())
+
+
 def fetch_index_pe(name: str, timeout: float = 40.0, retries: int = 3) -> pd.DataFrame:
     """Broad-index PE history (legulegu stock_index_pe_lg). `name` = Chinese index name
     (沪深300/上证50/中证500). Returns DataFrame indexed by date(str): pe_ttm = 滚动市盈率,
@@ -1835,6 +1857,38 @@ def fetch_stock_dividend(symbol: str, timeout: float = 40.0,
         except Exception as ex:  # noqa: BLE001
             last_err = FetchError(str(ex)[:200])
     raise FetchError(f"{symbol}: stock_dividend failed ({last_err})")
+
+
+def fetch_stock_dividend_tushare(symbol: str) -> pd.DataFrame:
+    """个股分红明细(tushare `dividend` 按 ts_code,只存 实施,2026-09-13 迁移1.9 主源)。
+    口径映射(2026-09-13 对账实证): cash_div_tax=**每股**税前派息(茅台 28.02423 与 sina
+    每股 28.0242 精确相等)→直接用;stk_div=每股送转(**送+转增合一**,消费方 pool/prices.py
+    前复权按 和 用、展示层不拆)→×10 存 stock_div_10,trans_10 恒 0(sina 历史存量的
+    送/转 拆分仅旧源行保留)。同形 ex_date-indexed 输出;无分红返回空表(正常);
+    接口失败抛错由 manager 降级 sina。"""
+    from . import tushare_client as tc
+    ts_code = (f"{symbol}.SH" if symbol.startswith(("6", "9"))
+               else f"{symbol}.BJ" if symbol.startswith(("4", "8"))
+               else f"{symbol}.SZ")
+    df = tc.query("dividend", ts_code=ts_code,
+                  fields="ts_code,end_date,ann_date,div_proc,cash_div_tax,stk_div,ex_date")
+    cols = ["announce_date", "cash_per_share", "stock_div_10", "trans_10"]
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=cols)
+    dv = df[df["div_proc"].astype(str).str.strip() == "实施"].copy()
+    if len(dv) == 0:
+        return pd.DataFrame(columns=cols)
+    out = pd.DataFrame({
+        "ex_date": pd.to_datetime(dv["ex_date"].astype(str), format="%Y%m%d",
+                                  errors="coerce").dt.strftime("%Y-%m-%d"),
+        "announce_date": pd.to_datetime(dv["ann_date"].astype(str), format="%Y%m%d",
+                                        errors="coerce").dt.strftime("%Y-%m-%d"),
+        "cash_per_share": pd.to_numeric(dv["cash_div_tax"], errors="coerce"),
+        "stock_div_10": pd.to_numeric(dv["stk_div"], errors="coerce") * 10.0,
+        "trans_10": 0.0,
+    })
+    return (out.dropna(subset=["ex_date"])
+               .drop_duplicates("ex_date").set_index("ex_date").sort_index())
 
 
 def fetch_stock_forecast_panel(report_period: str, timeout: float = 60.0,

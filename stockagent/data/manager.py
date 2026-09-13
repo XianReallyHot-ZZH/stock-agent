@@ -532,8 +532,11 @@ class DataManager:
     INDEX_PE_NAMES = ["沪深300", "上证50", "中证500"]  # stock_index_pe_lg supported subset
 
     def update_index_daily(self, symbols: Optional[list[str]] = None) -> dict:
-        """Fetch + store full daily OHLCV for broad indices (sina, RAW). Idempotent — sina
-        returns full history each call, upsert overwrites. Returns {symbol: rows}."""
+        """Fetch + store full daily OHLCV for broad indices (sina, RAW)。幂等全量 upsert。
+        (2026-09-13 迁移1.8 对账判死保留 sina: tushare close 为 4 位小数+古老年份修正
+        皆优,但 volume 单位沼泽——上证系 t/s 恰 0.01(股vs手)、创业板指 0.0029(sina 深市
+        另一套),×100 换算对 399006 会错;无痛腿不赌单位。fetch_index_daily_tushare 留盘
+        存档,recon index 可复查。) Returns {symbol: rows}。"""
         syms = symbols or self.BROAD_INDICES
         results: dict[str, int] = {}
         for i, sym in enumerate(syms):
@@ -1128,24 +1131,35 @@ class DataManager:
         return results
 
     def update_stock_dividend(self, symbols: Optional[list[str]] = None) -> dict:
-        """个股分红明细(sina, 只存 实施)→ stock_dividend。幂等主键 (symbol, ex_date)。
+        """个股分红明细(只存 实施)→ stock_dividend。主源(2026-09-13 迁移1.9)=tushare dividend
+        (送转合一,消费方按 和 用),降级 sina。幂等主键 (symbol, ex_date)。
         Returns {symbol: rows_added}。部分股票无分红记录 → 0 行,正常。"""
+        from . import tushare_client as tc
         syms = symbols or self.STOCK_WATCHLIST
         results: dict[str, int] = {}
         for i, sym in enumerate(syms):
             if i > 0:
                 time.sleep(0.4)
-            try:
-                df = fetcher.fetch_stock_dividend(sym)
-            except Exception as e:  # noqa: BLE001
-                log.warning("stock_dividend %s failed: %s", sym, str(e)[:100])
-                results[sym] = 0
-                continue
+            df = None
+            src = "sina"
+            if tc.has_token():
+                try:
+                    df = fetcher.fetch_stock_dividend_tushare(sym)
+                    src = "tushare_dividend"
+                except Exception as e:  # noqa: BLE001
+                    log.warning("stock_dividend tushare %s 失败→sina 降级: %s", sym, str(e)[:100])
+            if df is None:
+                try:
+                    df = fetcher.fetch_stock_dividend(sym)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("stock_dividend %s failed: %s", sym, str(e)[:100])
+                    results[sym] = 0
+                    continue
             if len(df) == 0:
                 results[sym] = 0
                 continue  # 无分红记录,正常
-            n = self.store.upsert_stock_dividend(sym, df, source="sina")
-            log.info("stock_dividend %s: +%d rows (to %s)", sym, n, df.index[-1])
+            n = self.store.upsert_stock_dividend(sym, df, source=src)
+            log.info("stock_dividend %s[%s]: +%d rows (to %s)", sym, src, n, df.index[-1])
             results[sym] = n
         if any(results.values()):
             self.store.set_meta("last_stock_dividend_update", fetcher.today_str())

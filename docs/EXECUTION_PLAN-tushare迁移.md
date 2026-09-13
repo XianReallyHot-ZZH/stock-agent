@@ -24,8 +24,8 @@
 | 1.5 | 社融增量（china_tsf） | 金十源滞后 2-3 月 | `sf_month` | 精确族 | **已判**：金十主源(分项列全)+tushare sf_month 应急(修订差≤0.2% 观测用途无碍,keep_null 保分项)；stk_endval 社融存量→批次 2.5 |
 | 1.6 | CPI/PPI（china_macro_monthly 两 metric） | 金十 | `cn_cpi`/`cn_ppi`（600积分） | 精确族 | **已判：tushare 主源**——金十=自算假精度(1.80138…)，tushare=官方发布口径(1.8)，严格更优；PMI/社零/工业增加值留金十同表混存，图注标注 |
 | 1.7 | ETF 净值（etf_nav） | 天天基金缺码双调 fallback | `fund_nav`（unit/accum/adj_nav） | 高精度族 | **已判(2026-09-13 对账)：tushare 主源**——39 标的 38 PASS(|Δ|=0.0000 为主)；**511990 货币ETF 除外**(两源面值/摊余口径结构性不同 max\|Δ\|=3.92，`NAV_TS_EXCLUDE` 永走 em)；含商品看板 5 只非池内标的 |
-| 1.8 | 指数日线 7 宽基（index_daily） | sina（无痛） | `index_daily` | 精确族 | amount 千元单位换算；同官方数据期望零差 |
-| 1.9 | 分红（stock_dividend） | sina（无痛） | `dividend`（2000-01 起） | 精确族 | pool 宇宙周更腿同迁 |
+| 1.8 | 指数日线 7 宽基（index_daily） | sina（无痛） | `index_daily` | 精确族 | **判死保留 sina(2026-09-13 对账)**：close 差=sina 3位小数 vs tushare 4位(升级无害)+1994/2001 古老修正(tushare 优)，但 **volume 单位沼泽**(上证系 t/s 恰0.01=股vs手、创业板指 0.0029=sina 深市另一套)，×100 对 399006 会错；无痛腿不赌单位 |
+| 1.9 | 分红（stock_dividend） | sina（无痛） | `dividend`（2000-01 起） | 精确族 | **已判：tushare 主源**——cash_div_tax=每股税前(对账实证,茅台 28.02423 两源相等)；送转合一(stk_div 每股,×10)、消费方按和用；sina 降级兜底 |
 | 1.10 | 指数成分+权重（index_constituents） | csindex（无痛，月更） | `index_weight` | 精确族 | **实测门**：国证系（399006）是否覆盖；QDII/CES 缺口保留 csindex 兜底 |
 | 1.11 | 商品国内 17 品种日线（commodity_price） | sina 连续合约（无痛） | `fut_daily`（带 oi 持仓量） | 口径差族 | **实测门**：连续合约代码映射（主力连续 9999 风格 / `fut_mapping`）；换月拼接口径差出报告 |
 | 1.12 | 预告/快报/正式报（stock_forecast/express/report_actual） | 东财（无痛） | `forecast`/`express`（按 ann_date）+ `income` 逐股 | 口径差族 | **实测门**：forecast 按 ann_date 拉全市场（文档自相矛盾）；正式报走 income 逐股（pool 模式）；type 八类 vs 东财标签映射 |

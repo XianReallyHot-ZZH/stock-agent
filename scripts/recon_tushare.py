@@ -213,7 +213,97 @@ def recon_nav(_args=None) -> Path:
     return out
 
 
-SUBS = {"valuation": recon_valuation, "macro": recon_macro, "nav": recon_nav}
+def recon_index(_args=None) -> Path:
+    """1.8 指数日线: DB sina 存量 vs tushare index_daily 实拉。精确族(close 同官方容差0;
+    volume 另报比值——单位若不一致只报不拦)。"""
+    import sqlite3
+    from stockagent.config import get_config
+    from stockagent.data.manager import DataManager
+    cfg = get_config()
+    conn = sqlite3.connect(cfg.db_path)
+    lines = ["# tushare 迁移对账 · 1.8 指数日线 (精确族: close 容差 0)", ""]
+    for sym in DataManager.BROAD_INDICES:
+        sina = pd.read_sql_query(
+            "SELECT date,close,volume FROM index_daily WHERE symbol=? AND source='sina_raw' "
+            "ORDER BY date", conn, params=(sym,))
+        if not len(sina):
+            lines.append(f"- {sym}: SKIP — DB 无 sina 存量")
+            continue
+        try:
+            ts = fetcher.fetch_index_daily_tushare(sym)
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"- {sym}: SKIP — tushare 失败 {str(e)[:80]}")
+            continue
+        both = sina.set_index("date").join(ts, how="inner", lsuffix="_s", rsuffix="_t")
+        if not len(both):
+            lines.append(f"- {sym}: SKIP — 无重叠")
+            continue
+        d_close = (both["close_s"] - both["close_t"]).abs()
+        n_bad = int((d_close > 1e-6).sum())
+        vol_ratio = (both["volume_t"] / both["volume_s"].where(both["volume_s"] > 0)).dropna()
+        ratio_med = float(vol_ratio.median()) if len(vol_ratio) else float("nan")
+        lines.append(
+            f"- {sym}: 重叠 {len(both)} 日 · close 不一致 {n_bad} 格(max {float(d_close.max()):.2e})"
+            f" · volume 比 t/s 中位 {ratio_med:.4f}({'单位一致' if 0.999 < ratio_med < 1.001 else '⚠单位不同'})")
+    conn.close()
+    lines += ["", "> 放行判据: close 全一致即切主源;volume 比值≈1 为单位一致佐证,≠1 则以 tushare 值为准重灌(单位自洽)。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_index.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
+def recon_dividend(_args=None) -> Path:
+    """1.9 分红: DB sina 存量 vs tushare dividend 实拉(同 ex_date 对齐)。
+    精确族: cash_per_share 容差 0;送转按 和 对账(tushare 送转合一)。"""
+    import sqlite3
+    from stockagent.config import get_config
+    from stockagent.data.manager import DataManager
+    cfg = get_config()
+    conn = sqlite3.connect(cfg.db_path)
+    lines = ["# tushare 迁移对账 · 1.9 分红 (精确族: cash 容差 0 · 送转按和对齐)", ""]
+    n_pairs = 0
+    for sym in DataManager.STOCK_WATCHLIST:
+        sina = pd.read_sql_query(
+            "SELECT ex_date,cash_per_share,stock_div_10,trans_10 FROM stock_dividend "
+            "WHERE symbol=? AND source='sina' ORDER BY ex_date", conn, params=(sym,))
+        if not len(sina):
+            continue
+        try:
+            ts = fetcher.fetch_stock_dividend_tushare(sym)
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"- {sym}: SKIP — tushare 失败 {str(e)[:80]}")
+            continue
+        if not len(ts):
+            lines.append(f"- {sym}: ⚠ sina 有 {len(sina)} 行,tushare 实施行为 0")
+            continue
+        both = sina.set_index("ex_date").join(ts, how="inner", lsuffix="_s", rsuffix="_t")
+        if not len(both):
+            lines.append(f"- {sym}: ⚠ 无同 ex_date 重叠 (sina {len(sina)} / ts {len(ts)})")
+            continue
+        d_cash = (both["cash_per_share_s"] - both["cash_per_share_t"]).abs().dropna()
+        sum_s = both["stock_div_10_s"].fillna(0) + both["trans_10_s"].fillna(0)
+        sum_t = both["stock_div_10_t"].fillna(0) + both["trans_10_t"].fillna(0)
+        d_sum = (sum_s - sum_t).abs()
+        n_pairs += 1
+        lines.append(
+            f"- {sym}: 重叠 {len(both)} 次 · cash 不一致 {int((d_cash > 1e-6).sum())} 格"
+            f"(max {float(d_cash.max()):.4f}) · 送转和 不一致 {int((d_sum > 1e-6).sum())} 格"
+            f"(max {float(d_sum.max()):.2f})")
+    conn.close()
+    lines += ["", f"对照 {n_pairs} 组;>放行判据: cash/送转和 全一致(零星 >0 差异逐例核对除权日口径)。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_dividend.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
+SUBS = {"valuation": recon_valuation, "macro": recon_macro, "nav": recon_nav,
+        "index": recon_index, "dividend": recon_dividend}
 
 
 def main() -> None:
