@@ -344,11 +344,22 @@ class DataManager:
         from ..research import earnings
         symbols = symbols or self.config.all_symbols()
         period = report_period or self._latest_report_period()
+        fc_source = "em_yjyg"
         try:
             forecast = fetcher.fetch_earnings_forecast(period)
         except Exception as e:  # noqa: BLE001
-            log.warning("earnings_forecast %s failed: %s", period, str(e)[:120])
-            return 0
+            from . import tushare_client as tc
+            if not tc.has_token():
+                log.warning("earnings_forecast %s failed: %s", period, str(e)[:120])
+                return 0
+            try:   # 1.12 降级件(2026-09-13): 东财失败→tushare ann_date 窗扫应急重建(口径差:幅度中值)
+                forecast = fetcher.fetch_earnings_forecast_tushare(period)
+                fc_source = "ts_forecast"
+                log.warning("earnings_forecast %s 东财失败(%s)→tushare 应急 %d rows",
+                            period, str(e)[:60], len(forecast))
+            except Exception as e2:  # noqa: BLE001
+                log.warning("earnings_forecast %s 应急也失败: %s", period, str(e2)[:120])
+                return 0
         # Safety net against a broken/empty fetch. Annual (YYYY1231) returns ~3000 rows; interim
         # periods return far fewer (一季报/中报/三季报 are 几百) — so floor by period type, not a flat 1000.
         floor = 1000 if period.endswith("1231") else 100
@@ -362,7 +373,7 @@ class DataManager:
         if "announce_date" in fc.columns:
             self.store.upsert_stock_forecast(
                 list(zip(fc["code"], [period] * len(fc), fc["yoy"], fc["type"], fc["announce_date"])),
-                source="em_yjyg")
+                source=fc_source)
 
         rows = []
         meta = self.config.symbol_meta()
@@ -395,19 +406,34 @@ class DataManager:
 
     # ---- 业绩三环链 (E3): 快报 + 正式报 全市场入库 ----
     def _update_perf_panel(self, fetch_fn, table_tag: str, periods: Optional[list[str]],
-                           floor: int, results_tag: str) -> dict:
+                           floor: int, results_tag: str,
+                           ts_fetch_fn=None) -> dict:
         """共用: 逐期全市场拉取→入库(幂等)。期行数 < floor 跳过不写库(快报中期稀疏属常态,
-        但 <10/500 视为端点半死)。V8: report 腿带扩列(eps/bvps/np_abs/rev_abs)。Returns
-        {period: rows_written}."""
+        但 <10/500 视为端点半死)。V8: report 腿带扩列(eps/bvps/np_abs/rev_abs)。
+        ts_fetch_fn(1.12 降级件·2026-09-13): 东财失败→tushare ann_date 窗扫应急重建,
+        source 记 ts_express(口径差族: 同比自算/幅度中值)。Returns {period: rows_written}。"""
+        from . import tushare_client as tc
         periods = periods or _recent_report_periods(8)
         results: dict[str, int] = {p: 0 for p in periods}
         for i, period in enumerate(periods):
             if i:
                 time.sleep(0.5)
+            df, src = None, None
             try:
                 df = fetch_fn(period)
+                src = "em_yjbb" if table_tag == "report" else "em_yjkb"
             except Exception as e:  # noqa: BLE001
-                log.warning("%s %s failed: %s", results_tag, period, str(e)[:100])
+                if ts_fetch_fn is not None and tc.has_token():
+                    try:
+                        df = ts_fetch_fn(period)
+                        src = "ts_report" if table_tag == "report" else "ts_express"
+                        log.warning("%s %s 东财失败(%s)→tushare 应急重建",
+                                    results_tag, period, str(e)[:60])
+                    except Exception as e2:  # noqa: BLE001
+                        log.warning("%s %s 应急也失败: %s", results_tag, period, str(e2)[:100])
+                else:
+                    log.warning("%s %s failed: %s", results_tag, period, str(e)[:100])
+            if df is None:
                 continue
             if len(df) < floor:
                 log.info("%s %s: %d rows < %d (稀疏期常态, skip write)", results_tag, period, len(df), floor)
@@ -1255,19 +1281,33 @@ class DataManager:
 
     def update_stock_financials(self, symbols: Optional[list[str]] = None) -> dict:
         """个股财务摘要(常用指标 17 项, sina)→ stock_financials 长表。sina 每次返回全历史(~102 期)
-        → 全量幂等 upsert,无增量游标。Returns {symbol: rows_added}。"""
+        → 全量幂等 upsert,无增量游标。sina 失败→tushare income∪fina_indicator 应急重建
+        (1.13 降级件·2026-09-13: 14/17 项,equity_total/goodwill/ocf 需 balancesheet/cashflow
+        不扩——缺项留空,sina 恢复全量覆盖自愈)。Returns {symbol: rows_added}。"""
+        from . import tushare_client as tc
         syms = symbols or self.STOCK_WATCHLIST
         results: dict[str, int] = {}
         for i, sym in enumerate(syms):
             if i > 0:
                 time.sleep(0.5)  # be gentle to sina
+            src = "sina"
             try:
                 df = fetcher.fetch_stock_financials(sym)
             except Exception as e:  # noqa: BLE001
-                log.warning("stock_financials %s failed: %s", sym, str(e)[:120])
-                results[sym] = 0
-                continue
-            n = self.store.upsert_stock_financials(sym, df, source="sina")
+                if not tc.has_token():
+                    log.warning("stock_financials %s failed: %s", sym, str(e)[:120])
+                    results[sym] = 0
+                    continue
+                try:
+                    df = fetcher.fetch_stock_financials_tushare(sym)
+                    src = "ts_income_fi"
+                    log.warning("stock_financials %s sina失败(%s)→tushare 应急 %d 行",
+                                sym, str(e)[:60], len(df))
+                except Exception as e2:  # noqa: BLE001
+                    log.warning("stock_financials %s 应急也失败: %s", sym, str(e2)[:120])
+                    results[sym] = 0
+                    continue
+            n = self.store.upsert_stock_financials(sym, df, source=src)
             log.info("stock_financials %s: +%d rows (%d periods × %d metrics, to %s)",
                      sym, n, df["report_period"].nunique() if len(df) else 0,
                      df["metric"].nunique() if len(df) else 0,

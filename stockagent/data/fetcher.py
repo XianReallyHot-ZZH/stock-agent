@@ -819,6 +819,92 @@ def fetch_stock_report_actual(report_period: str, timeout: float = 60.0) -> pd.D
     return out.drop_duplicates("code", keep="last").set_index("code")
 
 
+# ---- 1.12/1.13 应急 fallback(2026-09-13 降级件·ADR-0002): 东财/sina 主源不动,tushare 应急重建。
+# 实测约束: forecast/express 按报告期拉全市场=5000积分 vip 接口(forecast_vip/express_vip/income_vip),
+# 2000 档只能按 ann_date 逐日拉(高峰日 forecast 1002 行实测)→ 披露窗(~4 个月)逐交易日扫描,
+# 滤 end_date==报告期再拼整期面板。口径差族: 预告 yoy=幅度区间中值 vs 东财单值;express 的
+# yoy_* 字段实测为**上年同期绝对值**(非百分数)→ 同比自算。
+def _ts_disclosure_days(period: str) -> list[str]:
+    """报告期披露窗 ann_date 交易日序列(期末次日 → +4 个月,自然日 bdate;空窗日返回 0 行跳过)。"""
+    end = pd.Timestamp(period)
+    days = pd.bdate_range(end + pd.Timedelta(days=1),
+                          end + pd.DateOffset(months=4))
+    return [d.strftime("%Y%m%d") for d in days]
+
+
+def fetch_earnings_forecast_tushare(period: str) -> pd.DataFrame:
+    """业绩预告东财主源的 tushare 应急重建(`forecast` 按 ann_date 窗扫,1.12 降级件)。
+    形状与 fetch_earnings_forecast 一致:[yoy, type, announce_date] index=code(6 位)。
+    yoy=(p_change_min+p_change_max)/2 幅度中值(东财为单值,口径差族);type 八类同名;
+    同 code 多次公告取最晚 ann_date。全窗 0 行 → raise(调用方保持东财失败语义)。"""
+    from . import tushare_client as tc
+    frames = []
+    for d8 in _ts_disclosure_days(period):
+        try:
+            df = tc.query("forecast", ann_date=d8,
+                          fields="ts_code,ann_date,end_date,type,p_change_min,p_change_max")
+        except Exception:  # noqa: BLE001 — 单日失败跳过(幂等重跑自愈)
+            continue
+        if df is not None and len(df):
+            frames.append(df)
+    if not frames:
+        raise FetchError(f"forecast(tushare ann_date 窗扫) {period} empty")
+    raw = pd.concat(frames, ignore_index=True)
+    raw = raw[raw["end_date"].astype(str) == str(period)]
+    if not len(raw):
+        raise FetchError(f"forecast(tushare) {period} 无 end_date 命中")
+    raw["code"] = raw["ts_code"].astype(str).str[:6]
+    raw["yoy"] = (pd.to_numeric(raw["p_change_min"], errors="coerce")
+                  + pd.to_numeric(raw["p_change_max"], errors="coerce")) / 2.0
+    raw["type"] = raw["type"].astype(str)
+    raw["announce_date"] = (pd.to_datetime(raw["ann_date"].astype(str), format="%Y%m%d",
+                                           errors="coerce").dt.strftime("%Y-%m-%d"))
+    raw = raw.sort_values("ann_date").drop_duplicates("code", keep="last")
+    out = raw.set_index("code")[["yoy", "type", "announce_date"]]
+    if not len(out):
+        raise FetchError(f"forecast(tushare) {period} rows empty")
+    return out
+
+
+def fetch_stock_express_tushare(period: str) -> pd.DataFrame:
+    """业绩快报东财主源的 tushare 应急重建(`express` 按 ann_date 窗扫,1.12 降级件)。
+    形状与 fetch_stock_express 一致:[np_yoy, rev_yoy, announce_date] index=code。
+    实测 yoy_net_profit/yoy_revenue = **上年同期绝对值** → 同比自算 (本期−同期)/|同期|×100;
+    同期值 0/缺 → NaN(聚合按 notna 过滤)。全窗 0 行 → raise。"""
+    from . import tushare_client as tc
+    frames = []
+    for d8 in _ts_disclosure_days(period):
+        try:
+            df = tc.query("express", ann_date=d8,
+                          fields="ts_code,ann_date,end_date,revenue,n_income,yoy_net_profit,yoy_revenue")
+        except Exception:  # noqa: BLE001
+            continue
+        if df is not None and len(df):
+            frames.append(df)
+    if not frames:
+        raise FetchError(f"express(tushare ann_date 窗扫) {period} empty")
+    raw = pd.concat(frames, ignore_index=True)
+    raw = raw[raw["end_date"].astype(str) == str(period)]
+    if not len(raw):
+        raise FetchError(f"express(tushare) {period} 无 end_date 命中")
+    raw["code"] = raw["ts_code"].astype(str).str[:6]
+
+    def _yoy(cur_col, base_col):
+        cur = pd.to_numeric(raw[cur_col], errors="coerce")
+        base = pd.to_numeric(raw[base_col], errors="coerce")
+        return (cur - base) / base.abs().where(base.abs() > 1e-9) * 100.0
+
+    raw["np_yoy"] = _yoy("n_income", "yoy_net_profit")
+    raw["rev_yoy"] = _yoy("revenue", "yoy_revenue")
+    raw["announce_date"] = (pd.to_datetime(raw["ann_date"].astype(str), format="%Y%m%d",
+                                           errors="coerce").dt.strftime("%Y-%m-%d"))
+    raw = raw.sort_values("ann_date").drop_duplicates("code", keep="last")
+    out = raw.set_index("code")[["np_yoy", "rev_yoy", "announce_date"]]
+    if not len(out):
+        raise FetchError(f"express(tushare) {period} rows empty")
+    return out
+
+
 def fetch_stock_balance(report_period: str, timeout: float = 60.0) -> pd.DataFrame:
     """All A-share 资产负债表汇总(zcfz) for a report period → df indexed by code.
 
@@ -2085,6 +2171,61 @@ def fetch_stock_financials(symbol: str, timeout: float = 40.0,
         except Exception as ex:  # noqa: BLE001
             last_err = FetchError(str(ex)[:200])
     raise FetchError(f"{symbol}: stock_financials failed ({last_err})")
+
+
+def fetch_stock_financials_tushare(symbol: str) -> pd.DataFrame:
+    """sina 17 项财报摘要的 tushare 应急重建(income∪fina_indicator 逐股全史;1.13 降级件·2026-09-13)。
+    覆盖 **14/17 项**:equity_total/goodwill 需 balancesheet、ocf 需 cashflow——应急件不扩接口,
+    缺项诚实留空(长表按 metric 键消费,少键=少指标不炸;sina 恢复后全量 upsert 覆盖自愈)。
+    expense_ratio 自算 =(销售+管理+财务费用)/营业总收入×100。同形长表 [report_period, metric, value]。
+    双接口 0 行 → raise(调用方保持 sina 失败语义,下次重试)。"""
+    from . import tushare_client as tc
+    code = str(symbol).split(".")[0].zfill(6)
+    ts_code = (f"{code}.SH" if code.startswith(("6", "9"))
+               else f"{code}.BJ" if code.startswith(("4", "8"))
+               else f"{code}.SZ")
+    inc = tc.query("income", ts_code=ts_code,
+                   fields="ann_date,end_date,total_revenue,oper_cost,sell_exp,admin_exp,fin_exp,"
+                          "n_income,n_income_attr_p")
+    fi = tc.query("fina_indicator", ts_code=ts_code,
+                  fields="ann_date,end_date,eps,profit_dedt,roe,roa,grossprofit_margin,"
+                         "netprofit_margin,debt_to_assets,bps,ocfps")
+    if (inc is None or not len(inc)) and (fi is None or not len(fi)):
+        raise FetchError(f"{ts_code}: income∪fina_indicator 全空")
+    rows: list[dict] = []
+
+    def _emit(frame: pd.DataFrame, mapping: dict) -> None:
+        if frame is None or not len(frame):
+            return
+        f = frame.sort_values("ann_date").drop_duplicates("end_date", keep="last")
+        per = f["end_date"].astype(str)
+        for key, src in mapping.items():
+            if src not in f.columns:
+                continue
+            s = pd.to_numeric(f[src], errors="coerce")
+            for p, v in zip(per, s):
+                if v is not None and v == v:
+                    rows.append({"report_period": p, "metric": key, "value": float(v)})
+
+    _emit(inc, {"revenue": "total_revenue", "operating_cost": "oper_cost",
+                "net_profit": "n_income_attr_p", "net_profit_total": "n_income"})
+    _emit(fi, {"np_deducted": "profit_dedt", "eps": "eps", "bvps": "bps", "cps": "ocfps",
+               "roe": "roe", "roa": "roa", "gross_margin": "grossprofit_margin",
+               "net_margin": "netprofit_margin", "debt_ratio": "debt_to_assets"})
+    if inc is not None and len(inc) and {"sell_exp", "admin_exp", "fin_exp", "total_revenue"} <= set(inc.columns):
+        f = inc.sort_values("ann_date").drop_duplicates("end_date", keep="last")
+        exp = ((pd.to_numeric(f["sell_exp"], errors="coerce").fillna(0)
+                + pd.to_numeric(f["admin_exp"], errors="coerce").fillna(0)
+                + pd.to_numeric(f["fin_exp"], errors="coerce").fillna(0))
+               / pd.to_numeric(f["total_revenue"], errors="coerce").abs().where(
+                   pd.to_numeric(f["total_revenue"], errors="coerce").abs() > 1e-9) * 100.0)
+        for p, v in zip(f["end_date"].astype(str), exp):
+            if v is not None and v == v:
+                rows.append({"report_period": p, "metric": "expense_ratio", "value": float(v)})
+    out = pd.DataFrame(rows, columns=["report_period", "metric", "value"])
+    if not len(out):
+        raise FetchError(f"{ts_code}: financials(tushare) rows empty")
+    return out
 
 
 def fetch_stock_dividend(symbol: str, timeout: float = 40.0,
