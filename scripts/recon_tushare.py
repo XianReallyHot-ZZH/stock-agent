@@ -154,7 +154,66 @@ def recon_macro(_args=None) -> Path:
     return out
 
 
-SUBS = {"valuation": recon_valuation, "macro": recon_macro}
+def recon_nav(_args=None) -> Path:
+    """1.7 ETF净值腿: DB 天天基金存量(source='em') vs tushare fund_nav 实拉。
+    高精度族——重叠≥250日, 逐日 |Δ|≤0.001 元 且 ≥99.9% 落内。"""
+    import sqlite3
+    from stockagent.config import get_config
+    cfg = get_config()
+    conn = sqlite3.connect(cfg.db_path)
+    syms = cfg.all_symbols()
+    lines = ["# tushare 迁移对账 · 1.7 ETF净值 (高精度族: |Δ|≤0.001元 · ≥99.9%落内)", ""]
+    n_ok = n_fail = n_skip = 0
+    for sym in syms:
+        em = pd.read_sql_query(
+            "SELECT date,unit_nav,acc_nav FROM etf_nav WHERE symbol=? AND source='em' "
+            "ORDER BY date", conn, params=(sym,))
+        if not len(em):
+            n_skip += 1
+            continue
+        try:
+            ts = fetcher.fetch_etf_nav_tushare(sym)
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"- {sym}: SKIP — tushare 失败 {str(e)[:80]}")
+            n_skip += 1
+            continue
+        em = em.set_index("date")
+        both = em.join(ts, how="inner", lsuffix="_em", rsuffix="_ts")
+        if len(both) < 250:
+            lines.append(f"- {sym}: SKIP — 重叠仅 {len(both)} 日(<250)")
+            n_skip += 1
+            continue
+        verdicts = []
+        ok_all = True
+        for c in ("unit_nav", "acc_nav"):
+            cj, ct = f"{c}_em", f"{c}_ts"
+            if cj not in both or ct not in both:
+                continue
+            d = (pd.to_numeric(both[cj]) - pd.to_numeric(both[ct])).abs().dropna()
+            if not len(d):
+                continue
+            within = float((d <= 0.001).mean())
+            ok = within >= 0.999
+            ok_all &= ok
+            verdicts.append(f"{c}: 重叠 {len(d)} 日, 落内 {within:.3%}, max|Δ|={float(d.max()):.4f}"
+                            + ("" if ok else " ⚠超阈"))
+        if ok_all:
+            n_ok += 1
+        else:
+            n_fail += 1
+        lines.append(f"- {sym}: " + ("PASS — " if ok_all else "FAIL — ") + "; ".join(verdicts))
+    conn.close()
+    lines += ["", f"合计: PASS {n_ok} · FAIL {n_fail} · SKIP {n_skip} (共 {len(syms)} 标的)",
+              "> 放行判据(高精度族): 全部标的 PASS 才切主源;个别 FAIL 先查该标的分红日口径。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_nav.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
+SUBS = {"valuation": recon_valuation, "macro": recon_macro, "nav": recon_nav}
 
 
 def main() -> None:

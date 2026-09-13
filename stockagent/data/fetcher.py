@@ -527,6 +527,40 @@ def fetch_etf_nav(symbol: str, start_date: str = "20000101", end_date: str = "20
     return out.sort_values("date").set_index("date")
 
 
+# 货币ETF: 两源净值口径结构性不同(2026-09-13 对账 max|Δ|=3.92),永远走天天基金
+NAV_TS_EXCLUDE = {"511990"}
+
+
+def fetch_etf_nav_tushare(symbol: str, start_date: str = "20000101",
+                          end_date: str = "20500101") -> pd.DataFrame:
+    """ETF 净值全史(tushare `fund_nav` 按 ts_code,2026-09-13 迁移1.7 主源)。
+    返回与 fetch_etf_nav 同形 DataFrame[date: unit_nav, acc_nav](accum_nav=累计净值)。
+    5 开头→.SH 其余→.SZ;QDII T+2 滞后同源语义。失败抛 TushareError/FetchError→调用方降级 em。
+
+    对账(2026-09-13,data/recon/tushare_nav.md): 39 标的 38 PASS(|Δ|=0.0000 为主);
+    511990 货币ETF FAIL(两源面值/摊余口径结构性不同,max|Δ|=3.92)→ NAV_TS_EXCLUDE 永走 em。"""
+    if symbol in NAV_TS_EXCLUDE:
+        raise FetchError(f"{symbol}: 货币ETF 两源净值口径不同(对账FAIL),永走 em")
+    from . import tushare_client as tc
+    ts_code = f"{symbol}.SH" if symbol.startswith("5") else f"{symbol}.SZ"
+    df = tc.query("fund_nav", ts_code=ts_code,
+                  start_date=str(start_date).replace("-", ""),
+                  end_date=str(end_date).replace("-", ""))
+    if df is None or len(df) == 0:
+        raise FetchError(f"empty fund_nav {symbol}")
+    date_col = next((c for c in df.columns if str(c) in ("nav_date", "date")), None)
+    if date_col is None or "unit_nav" not in df.columns:
+        raise FetchError(f"fund_nav {symbol} 列不符: {list(df.columns)}")
+    out = pd.DataFrame({
+        "date": pd.to_datetime(df[date_col].astype(str), errors="coerce").dt.strftime("%Y-%m-%d"),
+        "unit_nav": pd.to_numeric(df["unit_nav"], errors="coerce"),
+        "acc_nav": (pd.to_numeric(df["accum_nav"], errors="coerce")
+                    if "accum_nav" in df.columns else float("nan")),
+    })
+    return (out.dropna(subset=["date", "unit_nav"])
+               .drop_duplicates("date").set_index("date").sort_index())
+
+
 def fetch_etf_scale_szse_range(start: str, end: str, timeout: float = 60.0) -> pd.DataFrame:
     """SZSE ETF shares for a date range via fund_scale_daily_szse (date-range native).
 

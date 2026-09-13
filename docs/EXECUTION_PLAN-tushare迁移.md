@@ -23,7 +23,7 @@
 | 1.4 | M2/M1（china_money_supply） | 金十被拦退避 | `cn_m`（600积分） | 精确族 | **判死不迁(2026-09-13)**：tushare cn_m 的 M1=旧口径，2024 起新口径门 FAIL(差 43 万亿)；fallback 翻口径比缺数据更糟，金十留任 |
 | 1.5 | 社融增量（china_tsf） | 金十源滞后 2-3 月 | `sf_month` | 精确族 | **已判**：金十主源(分项列全)+tushare sf_month 应急(修订差≤0.2% 观测用途无碍,keep_null 保分项)；stk_endval 社融存量→批次 2.5 |
 | 1.6 | CPI/PPI（china_macro_monthly 两 metric） | 金十 | `cn_cpi`/`cn_ppi`（600积分） | 精确族 | **已判：tushare 主源**——金十=自算假精度(1.80138…)，tushare=官方发布口径(1.8)，严格更优；PMI/社零/工业增加值留金十同表混存，图注标注 |
-| 1.7 | ETF 净值（etf_nav） | 天天基金缺码双调 fallback | `fund_nav`（unit/accum/adj_nav） | 高精度族 | 研究看板主数据：偏离度全历史分位全量重算；accum 分红日附近逐日 ≤0.001 元；含商品看板 5 只非池内标的 |
+| 1.7 | ETF 净值（etf_nav） | 天天基金缺码双调 fallback | `fund_nav`（unit/accum/adj_nav） | 高精度族 | **已判(2026-09-13 对账)：tushare 主源**——39 标的 38 PASS(|Δ|=0.0000 为主)；**511990 货币ETF 除外**(两源面值/摊余口径结构性不同 max\|Δ\|=3.92，`NAV_TS_EXCLUDE` 永走 em)；含商品看板 5 只非池内标的 |
 | 1.8 | 指数日线 7 宽基（index_daily） | sina（无痛） | `index_daily` | 精确族 | amount 千元单位换算；同官方数据期望零差 |
 | 1.9 | 分红（stock_dividend） | sina（无痛） | `dividend`（2000-01 起） | 精确族 | pool 宇宙周更腿同迁 |
 | 1.10 | 指数成分+权重（index_constituents） | csindex（无痛，月更） | `index_weight` | 精确族 | **实测门**：国证系（399006）是否覆盖；QDII/CES 缺口保留 csindex 兜底 |

@@ -262,6 +262,18 @@ class DataManager:
         years = int(self.config.params.get("data", {}).get("history_years", 6))
         return (datetime.now() - timedelta(days=365 * years)).strftime("%Y%m%d")
 
+    def _fetch_nav(self, sym: str, start: str, end: str):
+        """NAV 抓取回退链(2026-09-13 迁移1.7): tushare fund_nav 主源→天天基金 em 降级。
+        Returns (DataFrame, source_tag)。"""
+        from . import tushare_client as tc
+        if tc.has_token():
+            try:
+                return (fetcher.fetch_etf_nav_tushare(sym, start_date=start, end_date=end),
+                        "tushare_fund_nav")
+            except Exception as e:  # noqa: BLE001
+                log.warning("nav tushare %s 失败→em 降级: %s", sym, str(e)[:100])
+        return fetcher.fetch_etf_nav(sym, start_date=start, end_date=end), "em"
+
     def update_etf_nav(self, symbols: Optional[list[str]] = None) -> dict:
         """Daily incremental NAV per ETF. Returns {symbol: rows_added}."""
         syms = symbols or self.config.tracked_symbols()  # 含 research_only(研究看板标的也要净值)
@@ -272,20 +284,21 @@ class DataManager:
             if i > 0:
                 time.sleep(0.4)
             try:
-                df = fetcher.fetch_etf_nav(sym, start_date=start, end_date=end)
+                df, src = self._fetch_nav(sym, start, end)
             except Exception as e:  # noqa: BLE001
                 log.warning("nav fetch %s failed: %s", sym, str(e)[:120])
                 results[sym] = 0
                 continue
-            n = self.store.upsert_nav(sym, df, source="em")
-            log.info("nav %s: +%d rows (to %s)", sym, n, df.index[-1] if len(df) else "?")
+            n = self.store.upsert_nav(sym, df, source=src)
+            log.info("nav %s[%s]: +%d rows (to %s)", sym, src, n,
+                     df.index[-1] if len(df) else "?")
             results[sym] = n
         if any(results.values()):
             self.store.set_meta("last_nav_update", fetcher.today_str())
         return results
 
     def backfill_etf_nav(self, start: str, end: str) -> int:
-        """One-time historical NAV backfill (fund_etf_fund_info_em takes a date range natively)."""
+        """One-time historical NAV backfill (date-range native, both sources)."""
         pool = self.config.all_symbols()
         s, e = start.replace("-", ""), end.replace("-", "")
         total = 0
@@ -293,11 +306,11 @@ class DataManager:
             if i > 0:
                 time.sleep(0.4)
             try:
-                df = fetcher.fetch_etf_nav(sym, start_date=s, end_date=e)
+                df, src = self._fetch_nav(sym, s, e)
             except Exception as ex:  # noqa: BLE001
                 log.warning("nav backfill %s failed: %s", sym, str(ex)[:100])
                 continue
-            total += self.store.upsert_nav(sym, df, source="em")
+            total += self.store.upsert_nav(sym, df, source=src)
         self.store.set_meta("last_nav_backfill", fetcher.today_str())
         log.info("nav backfill: +%d rows across %d symbols", total, len(pool))
         return total
