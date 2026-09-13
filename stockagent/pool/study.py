@@ -116,6 +116,14 @@ def gate_at_event(ev: dict, cfg: dict, price_getter: Callable[[str], pd.Series],
         out["valuation_note"] = "事件日前无价格"
         return out
     price_at = float(px_row["close"].iloc[-1])   # price_getter 契约=OHLCV DataFrame
+    # ST 代理敏感性门(cfg.min_price,默认关): 历史 ST 名单不可回放(名称逐期漂移无免费源),
+    # 用「事件日价 < 2 元」近似垃圾股/仙股——戴帽股长期趴 1-3 元区;实盘当时按名称排除,
+    # 回测无法执行,此门给出偏差方向的敏感性界
+    min_px = _num(cfg.get("min_price"))
+    if min_px is not None and price_at < min_px:
+        out["valuation_pass"] = False
+        out["valuation_note"] = f"低价股代理剔除(<{min_px:g}元)"
+        return out
     np_abs = report_np_abs.get(ev["code"], {})
     ttm = None
     shares_ev = shares.get(ev["code"])

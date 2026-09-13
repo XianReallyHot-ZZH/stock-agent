@@ -29,9 +29,9 @@ from stockagent.pool import valuation as vl
 from stockagent.pool.report import _e  # 简单转义复用(fat renderer 同款)
 
 ROOT = Path(__file__).resolve().parent.parent
-ARMS = ["full", "no_valuation", "no_risk", "mktcap_on"]
+ARMS = ["full", "no_valuation", "no_risk", "mktcap_on", "st_proxy"]
 ARM_LABELS = {"full": "全门", "no_valuation": "去估值门", "no_risk": "去风险旗",
-              "mktcap_on": "全门+市值P80"}
+              "mktcap_on": "全门+市值P80", "st_proxy": "全门+ST代理(价≥2元)"}
 
 
 def _load_frames(store: Store, periods: list[str]) -> dict[str, dict[str, pd.DataFrame]]:
@@ -117,7 +117,7 @@ def _conclusion(agg_by_arm: dict, n_win: int) -> str:
         parts.append(f"高业绩池回放 {n_win} 窗: 跑赢全部宽基的窗口占比 {wr:.0%}")
     if med is not None:
         parts.append(f"池收益中位 {med:+.1%}")
-    for arm in ("no_valuation", "no_risk", "mktcap_on"):
+    for arm in ("no_valuation", "no_risk", "mktcap_on", "st_proxy"):
         a = agg_by_arm.get(arm) or {}
         w = a.get("win_rate_all")
         if w is not None:
@@ -393,7 +393,12 @@ def main():
     agg_by_arm = {}
     windows_by_arm = {}
     for arm in ARMS:
-        cfg_arm = {**hcfg, "mktcap_threshold": mkt_thr} if arm == "mktcap_on" else hcfg
+        if arm == "mktcap_on":
+            cfg_arm = {**hcfg, "mktcap_threshold": mkt_thr}
+        elif arm == "st_proxy":
+            cfg_arm = {**hcfg, "min_price": 2.0}   # ST/仙股代理: 事件日价 <2 元剔除
+        else:
+            cfg_arm = hcfg
         daily, members_by_day = study.daily_pool_returns(
             events, make_decide(arm, cfg_arm), adjpx, calendar, top_n=top_n)
         import math as _m
@@ -485,6 +490,8 @@ def main():
         "股票按 PEG 升序前 100(排序分冻结于披露时点,与实盘每日重排有差异),事件次日开盘进出"
         "(分红前复权价),等权日内再平衡,停牌当日剔除",
         "零成本假设: 无佣金/滑点/冲击成本(乐观向,读超额打折)",
+        "ST 代理敏感性臂: 历史 ST 名单不可回放(名称逐期漂移)——用事件日价 <2 元近似垃圾股"
+        "剔除(实盘当时按名称排除);该门方向为收紧回测池,给出「32% 被垃圾股压了多少」的界",
         "回放统一归母口径(扣非精筛腿是幸存者逐股腿,回放退归母保持全市场一致)",
         "股本=现市值/现价反推→np_abs/eps 反推兜底(股本缓变);历史 universe 无逐期 ST 名单(代码段过滤)",
         "窗口=报告期首个环事件日→下期首个环事件日(滚动覆盖);指数=窗口 close 简单收益",

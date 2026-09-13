@@ -319,3 +319,19 @@ def test_daily_sim_topn_cap_and_rank():
     assert set(mbd["2026-02-03"]) == {"A", "B"}      # C 分数最高(PEG 0.8)被截
     # 全成员日收益同为 11/10-1=10%
     assert abs(daily["2026-02-03"] - 0.10) < 1e-12
+
+
+def test_gate_min_price_st_proxy():
+    """ST 代理敏感性门: cfg.min_price=2 时事件日价 <2 元剔除(封地板/估值前生效)。"""
+    ev = {"code": "600XXX", "date": "2026-01-05", "period": "20260630",
+          "ring": "express", "np_yoy": 90.0, "rev_yoy": 50.0, "type": None}
+    price = _price_df("2026-01-02", [10.0, 1.5, 12.0, 13.0])   # 事件日(01-05)收 1.5 元
+    np_abs = {"600XXX": {"20251231": 50e8}}   # TTM 原料(年报期)
+    g = gate_at_event(ev, {"floor_np_yoy": 50.0, "floor_rev_yoy": 20.0,
+                           "peg_max": 10.0, "min_price": 2.0},
+                      lambda c: price, {"600XXX": 1e9}, np_abs, {}, arm="full")
+    assert not g["valuation_pass"] and "低价股代理剔除" in g.get("valuation_note", "")
+    # 不配 min_price(默认关)→ 不剔(1.5 元价也能算出 PEG 通过)
+    g2 = gate_at_event(ev, {"floor_np_yoy": 50.0, "floor_rev_yoy": 20.0, "peg_max": 10.0},
+                       lambda c: price, {"600XXX": 1e9}, np_abs, {}, arm="full")
+    assert g2["valuation_pass"]
