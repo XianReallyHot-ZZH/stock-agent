@@ -385,9 +385,49 @@ def recon_margin(_args=None) -> Path:
     return out
 
 
+def recon_turnover(_args=None) -> Path:
+    """批次2.2 两市成交额: DB baostock 存量 vs tushare daily_info 官方口径。
+    口径差族——两官方源统计范围或有差(A股/含基金债),⑧⑨消费为比值型,量化不拦。"""
+    import sqlite3
+    from stockagent.config import get_config
+    cfg = get_config()
+    conn = sqlite3.connect(cfg.db_path)
+    bs = pd.read_sql_query(
+        "SELECT date,sse,sz,total FROM market_turnover WHERE source='baostock' "
+        "ORDER BY date", conn)
+    conn.close()
+    lines = ["# tushare 对账 · 批次2.2 两市成交额 (口径差族: 比值型消费,量化不拦)", ""]
+    if not len(bs):
+        lines.append("- SKIP — DB 无 baostock 存量")
+    else:
+        try:
+            ts = fetcher.fetch_market_turnover_tushare(start=bs["date"].min(),
+                                                       end=bs["date"].max())
+        except Exception as e:  # noqa: BLE001
+            ts = None
+            lines.append(f"- tushare 拉取失败: {str(e)[:100]}")
+        if ts is not None:
+            both = bs.set_index("date").join(ts, how="inner", lsuffix="_b", rsuffix="_t")
+            rel = ((both["total_b"] - both["total_t"]).abs()
+                   / both["total_t"].where(both["total_t"] > 0)).dropna()
+            if len(rel):
+                lines.append(
+                    f"- total: 重叠 {len(rel)} 日 · 相对Δ中位 {rel.median():.3%} · "
+                    f"p95 {rel.quantile(0.95):.3%} · 最大 {rel.max():.2%} · "
+                    f"≤0.5% 占 {(rel <= 0.005).mean():.1%}")
+                lines.append(f"- tushare 覆盖 {len(ts)} 日({ts.index.min()}..{ts.index.max()})")
+    lines += ["", "> 放行判据(口径差族): 相对Δ中位 <1% 即切官方口径(⑧地量=成交额/MA250 比值,口径平移无碍)。"]
+    RECON_DIR.mkdir(parents=True, exist_ok=True)
+    out = RECON_DIR / "tushare_turnover.md"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    print("\n".join(lines))
+    print(f"\n[written] {out}")
+    return out
+
+
 SUBS = {"valuation": recon_valuation, "macro": recon_macro, "nav": recon_nav,
         "index": recon_index, "dividend": recon_dividend, "commodity": recon_commodity,
-        "margin": recon_margin}
+        "margin": recon_margin, "turnover": recon_turnover}
 
 
 def main() -> None:

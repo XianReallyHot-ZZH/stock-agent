@@ -783,7 +783,11 @@ class DataManager:
         return n
 
     def update_market_turnover(self) -> int:
-        """Fetch + store 两市日成交额(baostock sh.000001 + sz.399001 amount 求和)。⑧地量监测数据源。"""
+        """Fetch + store 两市日成交额(baostock sh.000001 + sz.399001 amount 求和)。⑧地量监测数据源。
+        (批次2.2 判死不切,2026-09-13 对账: tushare daily_info=A股口径,baostock=含债券基金全证券
+        口径,中位差 86%/p95 205%且系数不稳定——⑧地量阈值与 event-study 实证校准在旧口径上,
+        切换=平移已校准实证层;fallback 也不做,防瞬时污染量纲。fetch_market_turnover_tushare
+        留盘存档,recon turnover 可复查;若未来要 A 股语义口径须另立重校准项目。)"""
         try:
             df = fetcher.fetch_market_turnover()
         except Exception as e:  # noqa: BLE001

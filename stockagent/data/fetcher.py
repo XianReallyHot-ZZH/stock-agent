@@ -222,6 +222,50 @@ def fetch_market_turnover(start=None, end=None, timeout=60.0):
     return pd.DataFrame(rows, columns=["date", "sse", "sz", "total"]).set_index("date")
 
 
+def fetch_market_turnover_tushare(start: str = "1991-01-01", end: Optional[str] = None) -> pd.DataFrame:
+    """两市日成交额(tushare `daily_info` 交易所官方口径,2026-09-13 批次2.2 主源)。
+    取「上海市场/深圳市场」两总量行(深市含主板+创业板 A 股),amount 亿元→元对齐 baostock 存量
+    单位;区间查询 12 行/日→按 ~300 日窗分段(单次 4000 行内)。⑧地量/⑨流动性成分数据源——
+    官方口径替换 baostock 拼指数的旧路,顺带消除 399001(深证成指)口径隐患。
+    返回同形 DataFrame[date: sse/sz/total(元)]。"""
+    from datetime import datetime, timedelta
+    from . import tushare_client as tc
+    end = end or today_str()
+    s_dt = datetime.strptime(str(start)[:10], "%Y-%m-%d")
+    e_dt = datetime.strptime(str(end)[:10], "%Y-%m-%d")
+    parts: dict[str, dict[str, float]] = {}
+    last_err = None
+    cur = s_dt
+    while cur <= e_dt:
+        win_end = min(cur + timedelta(days=300), e_dt)
+        try:
+            df = tc.query("daily_info",
+                          start_date=cur.strftime("%Y%m%d"),
+                          end_date=win_end.strftime("%Y%m%d"),
+                          fields="trade_date,ts_name,amount")
+            for _, r in df.iterrows():
+                name = str(r.get("ts_name") or "")
+                if name not in ("上海市场", "深圳市场"):
+                    continue
+                d = _ts_d8(r.get("trade_date"))
+                v = _ts_f(r.get("amount"))
+                if d and v is not None:
+                    parts.setdefault(d, {})[name] = v * 1e8   # 亿元→元
+            last_err = None
+        except Exception as ex:  # noqa: BLE001
+            last_err = ex
+        cur = win_end + timedelta(days=1)
+    if not parts:
+        raise FetchError(f"market_turnover(tushare) failed ({last_err})")
+    rows = []
+    for d in sorted(parts):
+        s = parts[d].get("上海市场")
+        z = parts[d].get("深圳市场")
+        both = [v for v in (s, z) if v is not None]
+        rows.append((d, s, z, sum(both) if both else None))
+    return pd.DataFrame(rows, columns=["date", "sse", "sz", "total"]).set_index("date")
+
+
 def fetch_market_margin(start: str = "2010-03-01", end: Optional[str] = None,
                         timeout: float = 40.0, retries: int = 2) -> pd.DataFrame:
     """上交所融资融券日级总量(stock_margin_sse,信用交易汇总)。两融 2010-03-31 启动 → 历史自彼起。
