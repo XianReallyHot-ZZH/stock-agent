@@ -37,9 +37,13 @@
 |---|---|---|---|
 | 2.1 | 融资融券（market_margin） | `margin`（沪深北全史 2010-03 起） | **已落(2026-09-13)**：对账沪市侧 3998 日**零格不一致**；全量重灌 2010-03-31 起带 `financing_cs/total_margin_cs` 沪深合计（北交所排除——量级微小且 2022 起步）；旧 `*_sse` 列留档并排（COALESCE 互不抹）；⑨杠杆成分 `fillna` 过渡、口径标签三处更新；最新两融合计 13495 亿 |
 | 2.2 | 两市成交额（market_turnover） | `daily_info`（600积分，官方口径 SH_A 1991 起） | **判死不切(2026-09-13 对账)**：daily_info=纯 A 股口径，baostock=**含债券/基金全证券口径**（中位差 86%、p95 205% 且系数不稳定）——⑧地量阈值与 event-study 实证校准在旧口径上，切换=平移已校准实证层；fallback 也不做（防瞬时污染量纲）。**发现留档**：现有「两市成交额」实为全证券口径、比市场惯称的 A 股口径高 ~86%；若要 A 股语义须另立重校准项目（fetch_market_turnover_tushare 留盘存档） |
-| 2.3 | 交易所仓单（commodity_inventory） | `fut_wsr` | **实测门**：覆盖面；CZCE 三品种重叠精确对账后扩 SHFE/DCE/GFEX |
-| 2.4 | 期限结构精确展期 | `fut_mapping` | 主力换月映射，修记录在案的「精确展期口径」待补项 |
-| 2.5 | 社融存量落地（china_tsf 扩列） | `sf_month.stk_endval` | 白捡升级(2026-09-13 探针发现)：社融存量直接可得，替换「增量 TTM/M2 代理」——解 CLAUDE.md 记录的「社融存量同比无免费源」老缺口 |
+| 2.3 | 交易所仓单（commodity_inventory） | `fut_wsr` | **剩余**：仓库粒度按 symbol 日聚合(列已探明: trade_date/symbol/fut_name/warehouse/vol/unit;CU=上期所铜已实证覆盖)；扩 SHFE/DCE/GFEX 品种时 validate_commodity_inventory(CZCE 口径)须同步界定边界 |
+| 2.4 | 期限结构精确展期 | `fut_mapping` | **剩余**：主力换月映射，修记录在案的「精确展期口径」待补项(研究性改造) |
+| 2.5 | 社融存量落地（china_tsf 扩列） | `sf_month.stk_endval` | **剩余**：白捡升级(探针发现)——stk_endval 直接可得；需 sf_month 改常规月调(非应急) + china_tsf 扩列 + nowcast.py ④节从「增量TTM/M2 代理」换真存量同比(动看板语义,独立批做) |
+
+## 1.12/1.13 降级说明（2026-09-13 实施中重排）
+
+实测发现**按报告期拉全市场是 5000 积分 vip 接口**（forecast_vip/express_vip/income_vip）→ 1.12「迁主源」在 2000 档做不到同形状替换（东财按期整面板 vs tushare 按公告日增量）。降级为「东财主源 + tushare ann_date 应急重建」设计（实测门已过：forecast 按 ann_date 高峰日 1002 行可用）。1.13（sina 17项→income∪fina_indicator）同理降为应急补位优先级。二者重排到批次 2 之后——给无痛腿买保险的价值低于真升级。
 
 ## 判死 / 保留清单（勿再评估）
 

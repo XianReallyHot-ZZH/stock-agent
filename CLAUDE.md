@@ -148,7 +148,7 @@ python scripts/transcribe_video.py --url "<链接>" --no-subtitle --device cpu #
 token 在 `.env` 的 `TUSHARE_TOKEN`（gitignored，永不入库/打印）；客户端 `stockagent/data/tushare_client.py`（全局节流+限频退避）。
 新增数据腿时默认先探 tushare 有无对应接口，有则为主源、akshare 为兜底。
 
-**存量腿回溯迁移**（2026-09-13 定稿·进行中）：docs/EXECUTION_PLAN-tushare迁移.md —— 批次0退役(行业PE+ETF重仓兜底 已落) → 批次1平移13腿 → 批次2升级4腿；纪律=ADR-0002（引擎冻结/平移升级分批/对账门）；实测门探针 scripts/probe_tushare_gates.py（5门已测：forecast按ann_date✅/国证index_weight✅/主力连续RB.SHF✅/fut_wsr仓库粒度⚠/shibor_lpr限频1次每小时⚠）。
+**存量腿回溯迁移**（2026-09-13 定稿·批次0+平移13腿+升级2.1已落,11 commits）：docs/EXECUTION_PLAN-tushare迁移.md——每腿对账判决写在表内（已切主源: 个股估值daily_basic/CPI·PPI/LPR/ETF净值fund_nav/分红/指数成分国证兜底/商品15品种主力连续；判死留旧: M2M1旧口径/指数日线volume单位/两市成交额A股vs全证券断层；⑨杠杆已升沪深两市·financing_cs）；纪律=ADR-0002（引擎冻结/平移升级分批/对账门）；对账报告 data/recon/、探针 scripts/probe_tushare_gates.py；**剩余**：2.3 fut_wsr库存/2.4 fut_mapping展期/2.5 社融存量stk_endval/1.12·1.13应急fallback(降级说明见计划尾部)。
 
 ## 数据质量注意
 
