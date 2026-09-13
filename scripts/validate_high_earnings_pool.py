@@ -133,7 +133,9 @@ def _conclusion(agg_by_arm: dict, n_win: int) -> str:
 def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
                  approx_notes: list[str], took_s: float,
                  concentration: dict | None = None,
-                 concentration_wins: dict | None = None) -> str:
+                 concentration_wins: dict | None = None,
+                 smallcaps: dict | None = None,
+                 smallcaps_wins: dict | None = None) -> str:
     idx_syms = study.INDEX_BASELINES
     rows_html = []
     for w in windows_by_arm.get("full") or []:
@@ -219,6 +221,59 @@ def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
                       "<div class='hint'>✓/✗=该容量当期是否跑赢当窗全部可用宽基(科创50 "
                       "2020-07 前不存在,缺席不计);七列指数=同窗对照;Top-5 单格波动巨大"
                       "(单股 20% 敞口),读单格谨慎。</div></details>")
+    small_html = ""
+    if smallcaps:
+        rows_s = []
+        for (pool_k, n_small), a in smallcaps.items():
+            wr = "—" if a["win_rate_all"] is None else f"{a['win_rate_all']:.0%}"
+            med = "—" if a["median_pool"] is None else f"{a['median_pool'] * 100:+.1f}%"
+            rows_s.append(f"<tr><td>Top-{pool_k}(PEG) → 市值最小 {n_small}</td>"
+                          f"<td>{a['n_windows']}</td><td><b>{wr}</b></td><td>{med}</td></tr>")
+        small_html = (
+            "<h2>小市值精选(全门 · Top-K PEG 池内选市值最小 N · 直接检验「中小市值弹性」)</h2>"
+            + "<table><tr><th>组合</th><th>窗口</th><th>全胜率</th><th>池中位</th></tr>"
+            + "".join(rows_s) + "</table>"
+            "<div class='hint'>市值=事件日冻结值(股本×事件日价,与排序分同纪律不逐日重排);"
+            "市值缺失者排尾不入选;门/进出纪律与主口径完全相同,仅选择规则不同;零成本;"
+            "单股敞口=1/N(Top5=20%)。</div>")
+        if smallcaps_wins:
+            combos = list(smallcaps_wins.keys())
+            base = smallcaps_wins[combos[0]]
+            rows_sm = []
+            for i, w0 in enumerate(base):
+                idxs = w0["indices"] or {}
+                avail = [r for r in idxs.values() if r is not None]
+                cells = [f"<td>{_e(w0['period'])}</td>",
+                         f"<td>{_e(w0['start'])}→{_e(w0['end'])}</td>"]
+                for c in combos:
+                    v = smallcaps_wins[c][i].get("pool")
+                    if v is None:
+                        cells.append("<td class='dim'>—</td>")
+                        continue
+                    beat = bool(avail) and all(v > r for r in avail)
+                    cls = "pos" if v > 0 else ("neg" if v < 0 else "")
+                    mark = "✓" if beat else "✗"
+                    mcls = "ok" if beat else "crit"
+                    cells.append(f"<td><span class='{cls}'>{v * 100:+.1f}%</span>"
+                                 f"<span class='{mcls}'>{mark}</span></td>")
+                for sym in study.INDEX_BASELINES:
+                    r = idxs.get(sym)
+                    if r is None:
+                        cells.append("<td class='dim'>—</td>")
+                    else:
+                        cls = "pos" if r > 0 else ("neg" if r < 0 else "")
+                        cells.append(f"<td><span class='{cls}'>{r * 100:+.1f}%</span></td>")
+                rows_sm.append("<tr>" + "".join(cells) + "</tr>")
+            head_c = "".join(f"<th>池{k}·小{n}</th>" for (k, n) in combos)
+            head_i = "".join(f"<th>{_e(study.INDEX_LABELS.get(s, s))}</th>"
+                             for s in study.INDEX_BASELINES)
+            small_html += ("<details class='conc-detail'><summary>📋 小市值精选 · 逐期明细"
+                           "(点开/收起)</summary><div style='overflow-x:auto'><table "
+                           "style='font-size:12px;min-width:1100px'>"
+                           "<tr><th>报告期</th><th>窗口</th>" + head_c + head_i + "</tr>"
+                           + "".join(rows_sm) + "</table></div>"
+                           "<div class='hint'>✓/✗=当期跑赢当窗全部可用宽基;七列指数=同窗对照。</div>"
+                           "</details>")
     idx_head = "".join(f"<th>{_e(study.INDEX_LABELS.get(s, s))}</th>" for s in idx_syms)
     notes_html = "".join(f"<li>{_e(n)}</li>" for n in approx_notes)
     missing_n = len(price_stats.get("missing") or ())
@@ -234,7 +289,7 @@ h2{{font-size:16px}} li{{font-size:13px;line-height:1.8;color:#52514e}}</style><
 <table><tr><th>臂</th><th>窗口数</th><th>跑赢全部宽基</th><th>池收益中位</th></tr>{''.join(arm_rows)}</table>
 <h2>逐窗口(全门臂)</h2>
 <table><tr><th>报告期</th><th>窗口</th><th>成员</th><th>池收益</th>{idx_head}</tr>{''.join(rows_html)}</table>
-{conc_html}<h2>口径与近似(诚实注记)</h2><ul>{notes_html}</ul>
+{conc_html}{small_html}<h2>口径与近似(诚实注记)</h2><ul>{notes_html}</ul>
 <div class='hint'>价格缺失股票 {missing_n} 只(未回放,backfill_stock_pool --prices 补) ·
 命中 {price_stats.get('hits', 0)} 次 · 耗时 {took_s:.1f}s ·
 生成: python scripts/validate_high_earnings_pool.py · 温度计非开关——本报告只陈述回放事实</div>
@@ -321,7 +376,7 @@ def main():
             score = g.get("peg")
             if score is None:
                 score = -(ev.get("np_yoy") or 0.0)
-            return passed, score
+            return passed, score, g.get("cap")
         return decide
 
     wide_codes = set()
@@ -407,6 +462,23 @@ def main():
         med = "—" if a["median_pool"] is None else f"{a['median_pool']:+.1%}"
         print(f"[Top-{size}] 窗口 {a['n_windows']} · 全胜率 {wr} · 中位 {med}", flush=True)
 
+    # ---- 小市值精选扫描(用户指令 2026-09-13): Top-K(PEG) 池内选市值最小 N 只 ----
+    # 检验陈老师「中小市值弹性更好」: 在同一套门内, 倾斜小市值是否带来增量
+    print("小市值精选扫描: Top-100/50 × 最小市值 5/10/15/20/25", flush=True)
+    smallcaps = {}
+    smallcaps_wins = {}
+    for pool_k in (100, 50):
+        for n_small in (5, 10, 15, 20, 25):
+            daily_s, _ = study.daily_pool_returns(events, decide_memo, adjpx, calendar,
+                                                  top_n=n_small, pre_rank_k=pool_k)
+            smallcaps_wins[(pool_k, n_small)] = _window_cums(daily_s)
+            smallcaps[(pool_k, n_small)] = study.aggregate(smallcaps_wins[(pool_k, n_small)])
+            a = smallcaps[(pool_k, n_small)]
+            wr = "—" if a["win_rate_all"] is None else f"{a['win_rate_all']:.0%}"
+            med = "—" if a["median_pool"] is None else f"{a['median_pool']:+.1%}"
+            print(f"  [池{pool_k}·小{n_small}] 窗口 {a['n_windows']} · 全胜率 {wr} · 中位 {med}",
+                  flush=True)
+
     conclusion = _conclusion(agg_by_arm, agg_by_arm["full"]["n_windows"])
     approx_notes = [
         "V8.1 口径(2026-09-13 用户指令): Top-100 容量 + 逐日组合模拟——任意时刻持仓=当前过门"
@@ -424,7 +496,9 @@ def main():
     out_html.write_text(_html_report(agg_by_arm, windows_by_arm, price_stats,
                                      approx_notes, time.time() - t0,
                                      concentration=concentration,
-                                     concentration_wins=concentration_wins), encoding="utf-8")
+                                     concentration_wins=concentration_wins,
+                                     smallcaps=smallcaps,
+                                     smallcaps_wins=smallcaps_wins), encoding="utf-8")
     print(f"-> {out_html}")
 
     if not args.no_meta:

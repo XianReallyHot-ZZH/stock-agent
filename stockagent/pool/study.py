@@ -82,7 +82,8 @@ def gate_at_event(ev: dict, cfg: dict, price_getter: Callable[[str], pd.Series],
               "np_yoy": ev["np_yoy"], "rev_yoy": ev["rev_yoy"],
               "yoy": ev["np_yoy"], "type": ev["type"]}
     floor = gt.ring_floor(active, cfg)          # 回放统一归母口径(扣非腿退归母,docstring 近似①)
-    out = {**floor, "valuation_pass": True, "risk_red": [], "peg": None, "pb_pct": None}
+    out = {**floor, "valuation_pass": True, "risk_red": [], "peg": None, "pb_pct": None,
+           "cap": None}
     if not floor["passed"]:
         return out
 
@@ -131,6 +132,7 @@ def gate_at_event(ev: dict, cfg: dict, price_getter: Callable[[str], pd.Series],
     peg = vl.peg(pe, floor["np_yoy"]) if floor["np_yoy"] else None
     out["peg"] = peg
     out["valuation_pass"] = peg is not None and peg <= float(cfg.get("peg_max", 1.0))
+    out["cap"] = shares_ev * price_at if shares_ev else None   # 事件日市值(冻结,小市值精选用)
     if peg is None:
         out["valuation_note"] = "TTM/市值缺"
     # mktcap_on 臂(Q14 承诺的消融): 全门 + 市值 ≤ 阈值(全市场分位,由脚本从 spot 算好
@@ -248,7 +250,8 @@ def _median(xs: list[float]):
 
 
 
-def daily_pool_returns(events, decide, px: dict, calendar: list, top_n: int = 100):
+def daily_pool_returns(events, decide, px: dict, calendar: list, top_n: int = 100,
+                       pre_rank_k: int | None = None):
     """Top-N 组合逐日模拟(纯核心, V8.1 2026-09-13: 散户容量+逐日市值口径)。
 
     events: 升序事件流;decide(ev)->(passed, score) 过门与排序分(升序取前 top_n, None→排尾);
@@ -274,13 +277,21 @@ def daily_pool_returns(events, decide, px: dict, calendar: list, top_n: int = 10
     for k, d in enumerate(calendar):
         removed_today: set = set()
         for ev in effective.get(d, []):
-            passed, score = decide(ev)
+            res = decide(ev)
+            passed, score = res[0], res[1]
+            cap = res[2] if len(res) > 2 else None   # 可选第三元: 事件日冻结市值
             if passed:
-                members[ev["code"]] = score if score is not None else float("inf")
+                members[ev["code"]] = (score if score is not None else float("inf"),
+                                       cap if cap is not None else float("inf"))
             else:
                 members.pop(ev["code"], None)
                 removed_today.add(ev["code"])
-        top = sorted(members.items(), key=lambda kv: kv[1])[:top_n]
+        if pre_rank_k:
+            # 两段选择(小市值精选): 先按排序分取前 pre_rank_k,再在池内取市值最小的 top_n
+            ranked = sorted(members.items(), key=lambda kv: kv[1][0])[:pre_rank_k]
+            top = sorted(ranked, key=lambda kv: kv[1][1])[:top_n]
+        else:
+            top = sorted(members.items(), key=lambda kv: kv[1][0])[:top_n]
         top_codes = tuple(c for c, _ in top)
         members_by_day[d] = top_codes
         prev = calendar[k - 1] if k else None
