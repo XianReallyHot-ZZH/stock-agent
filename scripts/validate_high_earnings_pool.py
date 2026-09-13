@@ -131,7 +131,8 @@ def _conclusion(agg_by_arm: dict, n_win: int) -> str:
 
 
 def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
-                 approx_notes: list[str], took_s: float) -> str:
+                 approx_notes: list[str], took_s: float,
+                 concentration: dict | None = None) -> str:
     idx_syms = study.INDEX_BASELINES
     rows_html = []
     for w in windows_by_arm.get("full") or []:
@@ -158,6 +159,25 @@ def _html_report(agg_by_arm: dict, windows_by_arm: dict, price_stats: dict,
             f"<td><b>{('—' if wr is None else f'{wr:.0%}')}</b></td>"
             f"<td>{('—' if med is None else f'{med * 100:+.1f}%')}</td></tr>")
 
+    conc_html = ""
+    if concentration:
+        rows_c = []
+        for size in (100, 25, 20, 15, 10, 5):
+            a = concentration.get(size)
+            if not a:
+                continue
+            wr = "—" if a["win_rate_all"] is None else f"{a['win_rate_all']:.0%}"
+            med = "—" if a["median_pool"] is None else f"{a['median_pool'] * 100:+.1f}%"
+            tag = " <span class='hint'>(对照=主口径)</span>" if size == 100 else ""
+            rows_c.append(f"<tr><td>Top-{size}{tag}</td><td>{a['n_windows']}</td>"
+                          f"<td><b>{wr}</b></td><td>{med}</td></tr>")
+        conc_html = (
+            "<h2>集中度扫描(散户真实持有量级 · 全门 · 单股敞口=1/N)</h2>"
+            + "<table><tr><th>持仓数</th><th>窗口</th><th>全胜率</th><th>池中位</th></tr>"
+            + "".join(rows_c) + "</table>"
+            + "<div class='hint'>门判定/进出纪律与 Top-100 主口径完全相同,仅容量不同"
+              "(排序分=PEG 升序);零成本;n=37 小样本。Top-5 意味着单股 20% 敞口——"
+              "集中度放大的是波动与路径依赖,读数时与仓位纪律(仓位看板⑥)对表。</div>")
     idx_head = "".join(f"<th>{_e(study.INDEX_LABELS.get(s, s))}</th>" for s in idx_syms)
     notes_html = "".join(f"<li>{_e(n)}</li>" for n in approx_notes)
     missing_n = len(price_stats.get("missing") or ())
@@ -173,7 +193,7 @@ h2{{font-size:16px}} li{{font-size:13px;line-height:1.8;color:#52514e}}</style><
 <table><tr><th>臂</th><th>窗口数</th><th>跑赢全部宽基</th><th>池收益中位</th></tr>{''.join(arm_rows)}</table>
 <h2>逐窗口(全门臂)</h2>
 <table><tr><th>报告期</th><th>窗口</th><th>成员</th><th>池收益</th>{idx_head}</tr>{''.join(rows_html)}</table>
-<h2>口径与近似(诚实注记)</h2><ul>{notes_html}</ul>
+{conc_html}<h2>口径与近似(诚实注记)</h2><ul>{notes_html}</ul>
 <div class='hint'>价格缺失股票 {missing_n} 只(未回放,backfill_stock_pool --prices 补) ·
 命中 {price_stats.get('hits', 0)} 次 · 耗时 {took_s:.1f}s ·
 生成: python scripts/validate_high_earnings_pool.py · 温度计非开关——本报告只陈述回放事实</div>
@@ -306,6 +326,43 @@ def main():
         med = "—" if a["median_pool"] is None else f"{a['median_pool']:+.1%}"
         print(f"[{ARM_LABELS[arm]}] 窗口 {a['n_windows']} · 全胜率 {wr} · 池中位 {med}")
 
+    # ---- 集中度扫描(用户指令 2026-09-13): 散户真实持有量级 Top-5/10/15/20/25 vs Top-100 对照 ----
+    # 门判定与 top_n 无关 → 逐事件 memoize,5 档尺寸零重复判定成本
+    decide_full = make_decide("full", hcfg)
+    _memo = {}
+
+    def decide_memo(ev):
+        k = id(ev)
+        if k not in _memo:
+            _memo[k] = decide_full(ev)
+        return _memo[k]
+
+    import math as _m
+
+    def _window_cums(daily):
+        out = []
+        for w in wins:
+            dr = daily[[d for d in daily.index if w["start"] < d <= w["end"]]]
+            pool_cum = float(_m.prod(1.0 + dr.values) - 1.0) if len(dr) else None
+            idx_ret = {}
+            for sym, s in idx_dfs.items():
+                idx = s.index.astype(str)
+                sub = s[(idx > w["start"]) & (idx <= w["end"])]
+                if len(sub) >= 2:
+                    idx_ret[sym] = float(sub.iloc[-1] / sub.iloc[0]) - 1.0
+            out.append({"pool": pool_cum, "indices": idx_ret})
+        return out
+
+    concentration = {}
+    for size in (100, 25, 20, 15, 10, 5):
+        daily_c, _mbd = study.daily_pool_returns(events, decide_memo, adjpx, calendar,
+                                                 top_n=size)
+        concentration[size] = study.aggregate(_window_cums(daily_c))
+        a = concentration[size]
+        wr = "—" if a["win_rate_all"] is None else f"{a['win_rate_all']:.0%}"
+        med = "—" if a["median_pool"] is None else f"{a['median_pool']:+.1%}"
+        print(f"[Top-{size}] 窗口 {a['n_windows']} · 全胜率 {wr} · 中位 {med}", flush=True)
+
     conclusion = _conclusion(agg_by_arm, agg_by_arm["full"]["n_windows"])
     approx_notes = [
         "V8.1 口径(2026-09-13 用户指令): Top-100 容量 + 逐日组合模拟——任意时刻持仓=当前过门"
@@ -316,12 +373,13 @@ def main():
         "股本=现市值/现价反推→np_abs/eps 反推兜底(股本缓变);历史 universe 无逐期 ST 名单(代码段过滤)",
         "窗口=报告期首个环事件日→下期首个环事件日(滚动覆盖);指数=窗口 close 简单收益",
         "市值P80 臂=全门+总市值≤当前全市场 P80(阈值当前 spot 分位,回放共用)",
-        f"小样本 n={len(wins)},对「70% 场合跑赢所有指数」是小样本检验——观察口径,温度计非开关",
+        f"集中度扫描与主口径同门同纪律,仅 Top-N 容量不同;小样本 n={len(wins)},对「70% 场合跑赢所有指数」是小样本检验——观察口径,温度计非开关",
     ]
     out_html = ROOT / "data" / "high_earnings_pool_study.html"
     out_html.parent.mkdir(parents=True, exist_ok=True)
     out_html.write_text(_html_report(agg_by_arm, windows_by_arm, price_stats,
-                                     approx_notes, time.time() - t0), encoding="utf-8")
+                                     approx_notes, time.time() - t0,
+                                     concentration=concentration), encoding="utf-8")
     print(f"-> {out_html}")
 
     if not args.no_meta:
