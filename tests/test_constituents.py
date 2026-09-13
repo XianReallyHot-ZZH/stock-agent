@@ -121,13 +121,10 @@ def _fake_forecast(n: int = 150) -> pd.DataFrame:
 
 
 def test_update_etf_earnings_skips_when_no_holdings(monkeypatch):
-    """无成分 + top-10 端点死 → 不写零行(2026-08 断点教训的回归测试)."""
+    """无成分 → 不写零行(2026-08 断点教训的回归测试; top-10 兜底已删 2026-09-13, 缺口=诚实跳过)."""
     st = _store()
     dm = mgr.DataManager(store=st)
     monkeypatch.setattr(mgr.fetcher, "fetch_earnings_forecast", lambda period, **kw: _fake_forecast())
-    def boom(sym, **kw):
-        raise RuntimeError("JSONDecodeError")
-    monkeypatch.setattr(mgr.fetcher, "fetch_etf_holdings", boom)
     n = dm.update_etf_earnings(symbols=["512800"], report_period="20260630")
     assert n == 0
     assert st.get_etf_earnings("512800") is None          # 零行都没写

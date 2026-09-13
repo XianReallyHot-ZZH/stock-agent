@@ -556,7 +556,10 @@ def fetch_etf_scale_szse_range(start: str, end: str, timeout: float = 60.0) -> p
 
 # ---- Industry PE (V3.1 research) — cninfo, per-date snapshot of all CSRC industries ----
 def fetch_industry_pe(date: str, timeout: float = 40.0, retries: int = 3) -> pd.DataFrame:
-    """All CSRC 证监会行业 static-PE for a given date (YYYYMMDD). One call covers every
+    """【⚰️ 退役 2026-09-13·tushare 迁移批次0】PE 因子 unused + cninfo 限流, 无调用方,
+    留盘存档勿运行 (ADR-0002 / docs/EXECUTION_PLAN-tushare迁移.md)。
+
+    All CSRC 证监会行业 static-PE for a given date (YYYYMMDD). One call covers every
     industry, so backfill is one-fetch-per-trading-day (mirrors fund_etf_scale_sse pattern).
 
     Returns DataFrame[industry, pe, pe_median]. PE = 静态市盈率-加权平均 (中位数 as cross-check).
@@ -596,7 +599,10 @@ def fetch_industry_pe(date: str, timeout: float = 40.0, retries: int = 3) -> pd.
 
 # ---- ETF earnings expectation (V3.2 research) — holdings + 业绩预告, both data.eastmoney ----
 def fetch_etf_holdings(symbol: str, year: Optional[int] = None, timeout: float = 40.0) -> pd.DataFrame:
-    """An ETF's latest disclosed stock holdings (重仓股) via fund_portfolio_hold_em.
+    """【⚰️ 兜底路径已删 2026-09-13·tushare 迁移批次0】端点 2026-08 已死(probe P1),
+    manager 不再调用, 留盘存档勿运行 (ADR-0002 / docs/EXECUTION_PLAN-tushare迁移.md)。
+
+    An ETF's latest disclosed stock holdings (重仓股) via fund_portfolio_hold_em.
 
     Returns DataFrame[code, weight, name, period] where weight = 占净值比例 (% of NAV).
     Tries the given year (or current year), falling back to the prior year if empty.

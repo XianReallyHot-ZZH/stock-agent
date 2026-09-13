@@ -24,7 +24,6 @@ from stockagent.config import get_config
 from stockagent.data import Store, DataManager
 from stockagent.pool import universe as pool_universe
 
-PE_STALE_DAYS = 14  # PE is weekly cadence + cninfo-throttle-prone; only refresh if >2wk stale
 INDUSTRY_STALE_DAYS = 45  # 东财行业板块成分月更(候选池策略2 三类分流)
 
 
@@ -97,14 +96,12 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
                         (cfg.benchmark_symbol,))[0]
     target = _target_trading_day(conn, datetime.now())
     ref = target or bench_last  # authoritative calendar target; fall back to benchmark if no calendar
-    pe_last = _fetch(conn, "SELECT MAX(date) FROM industry_pe")[0] or "（无）"
-    pe_dates = _fetch(conn, "SELECT COUNT(DISTINCT date) FROM industry_pe")[0]
     today = datetime.now().strftime("%Y-%m-%d")
     if target:
         print(f"\n最新交易日(已收盘): {target}   基准{cfg.benchmark_symbol}价格: {bench_last}   (今天 {today})")
     else:
         print(f"\n基准 {cfg.benchmark_symbol} 最新价格日: {bench_last}   (今天 {today}, 日历为空)")
-    print(f"行业 PE: 最新 {pe_last}  共 {pe_dates} 个日期\n")
+    print()
 
     rows = []
     n_price_ok = n_shares_ok = n_nav_ok = 0
@@ -136,10 +133,6 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
 
     print(f"\n汇总: price新鲜 {n_price_ok}/{len(syms)} · shares新鲜 {n_shares_ok}/{len(syms)}"
           f" · nav新鲜 {n_nav_ok}/{len(syms)} · 份额全缺 {n_shares_zero} · 净值全缺 {n_nav_zero}")
-    pe_stale = pe_last == "（无）" or (
-        ref and (datetime.strptime(ref, "%Y-%m-%d")
-                 - datetime.strptime(pe_last, "%Y-%m-%d")).days > PE_STALE_DAYS)
-    print(f"PE新鲜: {'旧(>' + str(PE_STALE_DAYS) + '天)' if pe_stale else 'OK'}")
     earn_period = _fetch(conn, "SELECT MAX(report_period) FROM etf_earnings")[0] or "（无）"
     earn_n = _fetch(conn, "SELECT COUNT(DISTINCT symbol) FROM etf_earnings")[0]
     earn_cov = _fetch(conn, "SELECT COUNT(DISTINCT symbol) FROM etf_earnings WHERE coverage>0")[0]
@@ -194,7 +187,6 @@ def report(conn, cfg, syms, store: "Store | None" = None) -> dict:
     if store is not None:
         pool_info = _pool_report(store, conn, ref)
     return {"bench_last": bench_last, "target": target, "ref": ref,
-            "pe_last": pe_last, "pe_stale": pe_stale,
             "earn_period": earn_period,
             "rows": rows, "n_shares_zero": n_shares_zero,
             "pool_universe": pool_info.get("universe", []),
@@ -247,12 +239,6 @@ def main():
 
     # 3) nav: incremental per-symbol (resumes from each symbol's last_nav_date)
     print("  净值增量更新..."); dm.update_etf_nav()
-
-    # 4) PE: only if stale (>2wk) — cninfo throttle, don't hammer for small gaps
-    if info["pe_stale"] and info["pe_last"] != "（无）":
-        start = (datetime.strptime(info["pe_last"], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-        print(f"  行业PE补缺 {start}..{target} (step=7 sleep=8) ...")
-        dm.backfill_industry_pe(start, target, step_days=7, sleep=8)
 
     # 5) constituents (E1): refresh if missing or snapshot >45 days old (月度节奏)
     cons_last = _fetch(conn, "SELECT MAX(snapshot_date) FROM index_constituents")[0]

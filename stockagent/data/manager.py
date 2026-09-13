@@ -302,52 +302,19 @@ class DataManager:
         log.info("nav backfill: +%d rows across %d symbols", total, len(pool))
         return total
 
-    # ---- Industry PE (V3.1 research) ----
+    # ---- Industry PE — ⚰️ 退役 2026-09-13 (tushare 迁移批次0): PE 因子自研究看板 v2 起
+    # unused, cninfo 腿限流且无 2023 前历史; 门控/回填编排已摘除, 表与 fetcher 留盘存档
+    # (ADR-0002 / docs/EXECUTION_PLAN-tushare迁移.md)。方法保留为 no-op 防旧调用方崩溃。 ----
     def update_industry_pe(self, date: Optional[str] = None) -> int:
-        """Daily: store all CSRC industries' PE for one date. One fetch covers every sector."""
-        date = date or fetcher.today_str()
-        try:
-            df = fetcher.fetch_industry_pe(date.replace("-", ""))
-        except Exception as e:  # noqa: BLE001
-            log.warning("industry_pe fetch failed: %s", str(e)[:120])
-            return 0
-        rows = [(r["industry"], date, r.get("pe"), r.get("pe_median"))
-                for _, r in df.iterrows() if pd.notna(r.get("pe"))]
-        n = self.store.upsert_industry_pe(rows, source="cninfo")
-        self.store.set_meta("last_industry_pe_update", date)
-        log.info("industry_pe %s: +%d rows (%d industries)", date, n, len(rows))
-        return n
+        """[退役] no-op — 调用即告警返回 0。"""
+        log.warning("update_industry_pe 已退役(2026-09-13, PE unused) — no-op")
+        return 0
 
     def backfill_industry_pe(self, start: str, end: str, step_days: int = 1,
                              sleep: float = 1.5) -> int:
-        """One-time historical backfill; uses benchmark's stored price dates as the timeline.
-
-        cninfo is throttle-prone under sustained calling — raise `sleep` (e.g. 8s) and
-        `step_days` (e.g. 30=monthly) for a gentler pace that gets through. History ~2023+."""
-        bench = self.store.get_series(self.config.benchmark_symbol, start=start, end=end)
-        days = list(bench.index)
-        if not days:
-            log.warning("backfill_industry_pe: no benchmark dates in [%s,%s]", start, end)
-            return 0
-        sampled = days[::max(1, step_days)]
-        total = 0
-        ok = 0
-        for i, d in enumerate(sampled):
-            if i > 0:
-                time.sleep(sleep)
-            try:
-                df = fetcher.fetch_industry_pe(d.replace("-", ""))
-            except Exception as e:  # noqa: BLE001
-                log.warning("industry_pe %s failed: %s", d, str(e)[:80])
-                continue
-            rows = [(r["industry"], d, r.get("pe"), r.get("pe_median"))
-                    for _, r in df.iterrows() if pd.notna(r.get("pe"))]
-            if rows:
-                ok += 1
-            total += self.store.upsert_industry_pe(rows, source="cninfo")
-        self.store.set_meta("last_industry_pe_backfill", fetcher.today_str())
-        log.info("industry_pe backfill: %d/%d dates ok, +%d rows", ok, len(sampled), total)
-        return total
+        """[退役] no-op — 同 update_industry_pe。"""
+        log.warning("backfill_industry_pe 已退役(2026-09-13, PE unused) — no-op")
+        return 0
 
     # ---- ETF earnings expectation (V3.2 research; informational, not in composite) ----
     def _latest_report_period(self) -> str:
@@ -394,17 +361,11 @@ class DataManager:
                 cons = self.store.get_constituents(str(idx))
                 if len(cons):
                     holdings = cons  # B 路线: 指数官方全成分×权重(update_constituents 落库)
-            if holdings is None:
-                # A 路线 fallback: top-10 重仓 — fund_portfolio_hold_em 端点 2026-08 已死
-                # (JSONDecodeError, probe P1), 多半拿不到; 拿到也只覆盖 25-85% 权重(调研§5).
-                try:
-                    holdings = fetcher.fetch_etf_holdings(sym)
-                except Exception as e:  # noqa: BLE001
-                    log.warning("holdings %s failed: %s", sym, str(e)[:80])
-                    holdings = None
+            # (A 路线 top-10 重仓兜底已删 2026-09-13·tushare 迁移批次0: fund_portfolio_hold_em
+            #  端点 2026-08 已死 probe P1; E1 指数无码表/未回填的缺口从此诚实报缺)
             if holdings is None or not len(holdings):
                 # 断点教训(调研§6.2): 空持仓绝不写零行 — 静默全零表曾掩盖端点死亡两个月
-                log.warning("holdings %s unavailable (成分未拉取且 top-10 端点死) — skip", sym)
+                log.warning("holdings %s unavailable (指数无码表或成分未回填) — skip", sym)
                 continue
             sig = earnings.aggregate_earnings(holdings, forecast)
             rows.append((sym, period, sig["weighted_yoy"], sig["median_yoy"],

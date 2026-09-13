@@ -3,19 +3,18 @@
 A fresh clone has NO data (the SQLite DB is gitignored), so the dashboard needs a full
 historical backfill before it can render. This script orchestrates it in dependency order:
   0. dep check (akshare/plotly/pandas/...) + ensure .env
-  1. prices + trade calendar  (update_all — needed as the timeline for share/PE backfills)
+  1. prices + trade calendar  (update_all — needed as the timeline for share backfills)
   2. shares (SSE per-date, then SZSE range)
   3. NAV (fund-published, all ETFs)
-  4. industry PE (cninfo — slowest, throttle-tuned)
+  4. industry PE — ⚰️ 退役 2026-09-13 (PE unused, cninfo 限流; tushare 迁移批次0)
   5. render the dashboard
 
 Each stage is idempotent (resumes from where it stopped), so re-running after a failure
-continues rather than restarts. Total ~1hr, dominated by PE + shares. --skip-pe gives a
-fast first look (valuation=NaN → 2-factor ranking still works).
+continues rather than restarts. Total ~30min, dominated by shares. --skip-pe 是 legacy
+no-op（保留兼容旧命令行习惯）。
 
 Usage:
   python scripts/setup_research_dashboard.py             # full cold start
-  python scripts/setup_research_dashboard.py --skip-pe   # fast: skip the ~30min PE backfill
   python scripts/setup_research_dashboard.py --from 2022-01-01
 """
 from __future__ import annotations
@@ -69,7 +68,8 @@ def ensure_env() -> None:
 def main():
     ap = argparse.ArgumentParser(description="Cold-start setup for the research dashboard")
     ap.add_argument("--from", dest="start", default="2021-01-01", help="backfill start date")
-    ap.add_argument("--skip-pe", action="store_true", help="skip the slow cninfo PE backfill")
+    ap.add_argument("--skip-pe", action="store_true",
+                    help="legacy no-op — PE 腿已退役 2026-09-13(tushare 迁移批次0)")
     args = ap.parse_args()
 
     if not check_deps():
@@ -102,13 +102,9 @@ def main():
     _stage(3, "单位净值 NAV（真NAV，全 ETF）", "(~2min)")
     dm.backfill_etf_nav(args.start, end)
 
-    # stage 4: industry PE (cninfo, slow + throttle-prone)
-    if args.skip_pe:
-        _stage(4, "行业 PE [跳过 --skip-pe]", "(估值因子将为 NaN，看板走双因子；以后可单独回填)")
-    else:
-        pe_start = "2023-01-01"  # cninfo history starts ~2023
-        _stage(4, "行业 PE (cninfo，周度·限流)", f"({pe_start}..{end}, ~30min)")
-        dm.backfill_industry_pe(pe_start, end, step_days=7, sleep=8)
+    # stage 4: industry PE — ⚰️ 退役 2026-09-13 (tushare 迁移批次0): PE 因子 unused + cninfo 限流;
+    # 表留盘存档 (ADR-0002 / docs/EXECUTION_PLAN-tushare迁移.md)
+    _stage(4, "行业 PE [已退役]", "(无动作)")
 
     # stage 4.5: 业绩预期底座 (E0/E1/E3 — 成分+一致预期快照+三环链 + 重算 etf_earnings, ~4min)
     _stage(4.5, "指数成分 + 一致预期快照 + 业绩三环链 + 业绩预期重算 (E0/E1/E3)", "(~4min)")

@@ -29,8 +29,8 @@ python scripts/validate_high_earnings_pool.py  # 验证器 V8.1：Top-100 逐日
 # （旧六表验证器 2026-09-12 随重写退役：validate_deviation_extreme / validate_pead 留盘存档勿运行——import 已断+脚本头有退役横幅;实证结论留档 meta 注入。validate_forecast_industry 仍可运行(预告行业选股·2026-08 首跑:无稳健 edge 温度计)但非 V8 主轴）
 
 # 行业研究（只读·不碰引擎；择时跟踪看板）
-# 新机器/fresh clone 冷启动（DB 被 gitignore，需从零回填；PE 已不用故 ~30min；详见 .claude/skills/research-dashboard-setup/SKILL.md）
-python scripts/setup_research_dashboard.py --skip-pe  # 一键：依赖+.env+价格+份额+净值+渲染（PE 已不用，跳过省~30min；幂等）
+# 新机器/fresh clone 冷启动（DB 被 gitignore，需从零回填；行业PE腿已退役故 ~30min；详见 .claude/skills/research-dashboard-setup/SKILL.md）
+python scripts/setup_research_dashboard.py   # 一键：依赖+.env+价格+份额+净值+渲染（行业PE已退役2026-09-13·tushare迁移批次0；幂等；--skip-pe=legacy no-op）
 # 日常维护（数据已存在后；详见 .claude/skills/research-dashboard/SKILL.md）
 python scripts/dashboard_data_check.py         # 查数据新鲜度（ETF 份额/净值/价格 + 业绩预期底座 + 指数层 + 货币条件[国内宏观①] + 国内宏观利率/政府债/实体 + 候选池）
 python scripts/dashboard_data_check.py --fix   # 自动补齐缺口到最新交易日（上面全部腿按各自节奏门控：日更 价格·spot/周更 consensus·chain·分红/月更 成分·货币·央行表·实体/>2天 利率·政府债/>35天 资产负债·正式报扩列缺则补拉；候选池腿 --no-pool 可跳）
@@ -120,7 +120,7 @@ python scripts/transcribe_video.py --url "<链接>" --no-subtitle --device cpu #
 
 - **T+1**：信号 T 收盘生成、T+1 开盘成交
 - **数据源**：AkShare（eastmoney→sina→baostock 三源容错）；份额 SSE `fund_etf_scale_sse` + SZSE `fund_etf_scale_szse`（双源，深市不再缺历史）
-- **行业研究数据**：单位净值 `fund_etf_fund_info_em`（真NAV，天然正确无需复权）；行业PE `stock_industry_pe_ratio_cninfo`（证监会行业，按日快照，历史~2023起约3年，cninfo 限流需重试）
+- **行业研究数据**：单位净值 `fund_etf_fund_info_em`（真NAV，天然正确无需复权）；行业PE 腿已退役（2026-09-13·tushare迁移批次0：PE 因子 unused + cninfo 限流，门控/回填编排摘除、表留盘存档）
 - **不复权数据**：sina 原始价格，需 `fix_splits.py` 修拆分后使用（仅影响价格序列；真NAV不受影响）
 - **指数择时数据**：7 宽基日线(含中证1000) `stock_zh_index_daily`（sina，含上证综指 000001=⑦基准）；沪深300 PE/PB `stock_index_pe/pb_lg`（legulegu，仅沪深300/上证50/中证500，**不支持**创业板指/科创50/上证综指）；全市场 PB `stock_a_all_pb`；两市成交额 baostock（sh.000001+sz.399001 的 amount 求和=两市，历史到 1991，**仅 ⑧ 用**）。存 `index_daily`/`index_pe`/`index_pb`/`market_pb`/`market_turnover`/`market_margin` 表（指数日线独立于 `daily_prices`，不复用 ETF 复权族）；货币条件(国内宏观①数据腿) = 金十 `macro_china_money_supply`(2008 起 223 月·全量重拉 upsert) + `macro_china_shrzgm`(社融增量·源滞后 2-3 月)存 `china_money_supply`/`china_tsf` 表（月频，每月中旬出上月值后 `backfill_index --money` 或 dashboard_data_check --fix 月度门控自动带）；⑨恐惧贪婪·杠杆成分 = 上交所融资余额 `stock_margin_sse`（按年分段拉，单次封顶 2000 行；深市总量历史 akshare 不可得，v1 仅沪市）
 - **ETF 三类标签**：`etf_pool.yaml` 的 `style`/`style_alt`（人工标 value/growth/cyclic，主+次）仅作择时跟踪看板的分页分组（不再用于估值）；偏离度/剪刀差与类别无关。PE/PB/分红/筹码 已不在本看板使用
@@ -147,6 +147,8 @@ python scripts/transcribe_video.py --url "<链接>" --no-subtitle --device cpu #
 行业=申万（tushare 优先/东财回退）；扣非=fina_indicator∪sina 期级合并；资产负债=balancesheet 精确表优先/zcfz 代理回退。
 token 在 `.env` 的 `TUSHARE_TOKEN`（gitignored，永不入库/打印）；客户端 `stockagent/data/tushare_client.py`（全局节流+限频退避）。
 新增数据腿时默认先探 tushare 有无对应接口，有则为主源、akshare 为兜底。
+
+**存量腿回溯迁移**（2026-09-13 定稿·进行中）：docs/EXECUTION_PLAN-tushare迁移.md —— 批次0退役(行业PE+ETF重仓兜底 已落) → 批次1平移13腿 → 批次2升级4腿；纪律=ADR-0002（引擎冻结/平移升级分批/对账门）；实测门探针 scripts/probe_tushare_gates.py（5门已测：forecast按ann_date✅/国证index_weight✅/主力连续RB.SHF✅/fut_wsr仓库粒度⚠/shibor_lpr限频1次每小时⚠）。
 
 ## 数据质量注意
 

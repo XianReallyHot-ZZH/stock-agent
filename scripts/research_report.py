@@ -5,7 +5,7 @@
 不碰交易引擎）。告警推送已停用（仅可视化）。
 
 Usage:
-  # 1. one-time historical backfill (NAV + industry PE + SZSE shares)
+  # 1. one-time historical backfill (NAV + SZSE shares; industry PE 已退役 2026-09-13)
   python scripts/research_report.py --backfill all --start 2021-01-01
 
   # 2. generate the dashboard (evaluates at latest available bar)
@@ -58,9 +58,6 @@ def do_backfill(dm: DataManager, kind: str, start: str, end: str, step: int, sle
     if kind in ("nav", "all"):
         print(f"  backfill NAV {start}..{end} ...")
         dm.backfill_etf_nav(start, end)
-    if kind in ("pe", "all"):
-        print(f"  backfill industry PE {start}..{end} step={step} sleep={sleep} ...")
-        dm.backfill_industry_pe(start, end, step_days=step, sleep=sleep)
     if kind in ("scale", "all"):
         print(f"  backfill shares source={source} {start}..{end} step={step} ...")
         dm.backfill_etf_scale(start, end, step_days=step, source=source)
@@ -343,7 +340,7 @@ def build_flow_payload(cfg, series_map: dict, meta: dict, symbols: list[str],
 def main():
     ap = argparse.ArgumentParser(description="ETF 行业研究 · 择时跟踪看板 (read-only)")
     ap.add_argument("--backfill",
-                    choices=("nav", "pe", "scale", "earnings", "consensus", "chain", "all"),
+                    choices=("nav", "scale", "earnings", "consensus", "chain", "all"),
                     default=None, help="run historical backfill instead of rendering")
     ap.add_argument("--period", default=None,
                     help="earnings backfill report period YYYYMMDD, comma-separated for multi "
@@ -352,7 +349,7 @@ def main():
     ap.add_argument("--end", default=None)
     ap.add_argument("--step", type=int, default=1, help="backfill sampling step (days); 5=weekly, 30=monthly")
     ap.add_argument("--sleep", type=float, default=1.5,
-                    help="seconds between backfill calls (raise to 8 for cninfo PE throttle)")
+                    help="legacy — PE 腿退役(2026-09-13)后无消费者, 保留兼容旧命令")
     ap.add_argument("--source", choices=("all", "sse", "szse"), default="all",
                     help="scale backfill source: 'szse' fills only the deep-market gap")
     ap.add_argument("--as-of", default=None, help="evaluation date YYYY-MM-DD (default: latest)")

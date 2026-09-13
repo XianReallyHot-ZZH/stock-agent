@@ -62,13 +62,13 @@
 4. pytest：新 fetcher 单测 + 消费方 parity 测试
 5. 独立 commit（平移/升级不混批，引用本文件）
 
-## 实测门清单（批次内先测后迁）
+## 实测门清单（2026-09-13 已测 · scripts/probe_tushare_gates.py）
 
-1. `forecast`/`express` 按 ann_date 拉全市场（2000 档真实可用性）
-2. `index_weight` 国证系覆盖（399006）
-3. `fut_daily` 连续合约代码映射（主力连续风格 / 经 `fut_mapping`）
-4. `fut_wsr` 交易所覆盖面
-5. `shibor_lpr` 历史起点（不浅于金十 1991 则全量重灌，浅则增量接续）
+1. ✅ `forecast`/`express` 按 ann_date 拉全市场 — 高峰日 1002 行（20260715 中报预告）/ 633 行（20260131），路径可用
+2. ✅ `index_weight` 国证系 — 399006.SZ 有数据（对照组 000300.SH 同返 7000 行），成分腿可全量迁
+3. ✅ `fut_daily` 主力连续 — `RB.SHF`（螺纹钢主力）直接可拉、带 oi 持仓；17 品种经 `fut_basic` 建 `<品种>.<所>` 映射
+4. ⚠ `fut_wsr` — 列为**仓库粒度**（trade_date/symbol/fut_name/warehouse/vol/unit），样例含 CU=上期所铜 → ≥SHFE 覆盖成立；实施时按 symbol 日聚合 + 全品种覆盖核对（单次行数上限需分页核对）
+5. ⚠ `shibor_lpr` — 实测**限频 1次/小时**（文档 120 积分档未标）；腿按「单次全区间 ≤4000 行、retries=1、失败留旧源」设计，历史起点检查并入首次实拉
 
 ## 已完成 / 无需迁移
 
