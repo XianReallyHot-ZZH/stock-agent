@@ -1453,12 +1453,16 @@ class DataManager:
                 d -= timedelta(days=1)
                 continue
             n_day = 0
+            td8 = str(td)
+            td_iso = f"{td8[:4]}-{td8[4:6]}-{td8[6:]}"   # trade_date 转 ISO——daily_prices 全表
+            # 统一 'YYYY-MM-DD'(sina/em 历史皆 ISO;2026-09-13 实测裸写紧凑格式混表,炸过
+            # stock_report 的 pd.to_datetime 严格解析,同日双格式还造成 4845 行重复)
             for ts_code, g in df.groupby("ts_code"):
                 code = str(ts_code).split(".")[0].zfill(6)
                 if code not in tracked:
                     continue
                 day_df = pd.DataFrame({
-                    "date": [str(g.iloc[0]["trade_date"])],
+                    "date": [td_iso],
                     "open": [float(g.iloc[0]["open"])],
                     "high": [float(g.iloc[0]["high"])],
                     "low": [float(g.iloc[0]["low"])],

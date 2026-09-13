@@ -297,3 +297,31 @@ def test_update_fut_rollover_no_token(monkeypatch, tmp_path):
     dm = mgr.DataManager(store=st)
     monkeypatch.setattr(tc, "has_token", lambda: False)
     assert dm.update_fut_rollover() == {"mapping": 0, "contracts": 0, "failed": 0}
+
+
+def test_update_stock_daily_market_writes_iso_dates(monkeypatch, tmp_path):
+    """回归(2026-09-13 实火): pool 日线整表腿曾裸写 tushare 紧凑日期 'YYYYMMDD',
+    与 sina/em 的 ISO 历史混表 → stock_report 的 pd.to_datetime 严格解析炸 +
+    同日双格式重复。写入必须转 ISO。"""
+    from stockagent.data.store import Store
+    st = Store(tmp_path / "t.db")
+    # 预置一只已跟踪个股(ISO 历史)——覆盖集来自 daily_prices 6 位代码
+    st.upsert_prices("600519", pd.DataFrame(
+        {"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0],
+         "volume": [1.0], "amount": [1.0]}, index=["2026-09-10"]), source="sina_raw")
+    dm = mgr.DataManager(store=st)
+
+    def fake(api, **kw):
+        assert kw["trade_date"] == "20260911"
+        return pd.DataFrame({"ts_code": ["600519.SH"], "trade_date": ["20260911"],
+                             "open": [1500.0], "high": [1510.0], "low": [1490.0],
+                             "close": [1505.0], "vol": [30000.0], "amount": [4500000.0]})
+    monkeypatch.setattr(tc, "query", fake)
+    import datetime as _dt
+    monkeypatch.setattr(mgr.fetcher, "today_str",
+                        lambda: "2026-09-13")
+    n = dm.update_stock_daily_market()
+    assert n == 1
+    s = st.get_series("600519")
+    assert list(s.index) == ["2026-09-10", "2026-09-11"]   # ISO,无紧凑格式
+    assert float(s["close"].iloc[-1]) == 1505.0
