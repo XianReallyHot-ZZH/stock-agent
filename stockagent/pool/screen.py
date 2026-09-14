@@ -250,7 +250,8 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
                 goodwill_series = {str(k): v for k, v in gw.items()}
         goodwill_now = None
         # 商誉优先 tushare 资产负债明细(精确+带披露日);sina 序列留作环比激增的历史轴
-        bf_row = bal_full.get(code)
+        # (bf_row 已在上方按 [period_used].loc[code] 取好;勿再用 bal_full.get(code) 覆盖——
+        #  bal_full 按报告期 keyed,按代码查恒 None,会把精确口径整体打回 zcfz 代理)
         if bf_row is not None and _num(bf_row.get("goodwill")) is not None:
             known_gw = [k for k in goodwill_series if k <= s["period_used"]]
             if known_gw:
