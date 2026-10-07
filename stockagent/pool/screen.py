@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 
@@ -25,6 +26,14 @@ from . import valuation as vl
 
 def _nan(v) -> bool:
     return v is None or (isinstance(v, float) and math.isnan(v))
+
+
+def _num(v) -> Optional[float]:
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return None if (isinstance(f, float) and math.isnan(f)) else f
 
 
 def _period_frame(frame: pd.DataFrame, codes: set[str]) -> pd.DataFrame:
