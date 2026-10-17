@@ -185,6 +185,8 @@ def _adj_open_cache(store: Store, price_getter):
 def main():
     ap = argparse.ArgumentParser(description="预告队列验证器(v1·截点队列三臂回测)")
     ap.add_argument("--no-meta", action="store_true", help="不写 meta(调试)")
+    ap.add_argument("--limit", type=int, default=12,
+                    help="预告期回看深度(默认 12;v2 全史跑 60)")
     args = ap.parse_args()
 
     cfg = get_config()
@@ -200,7 +202,7 @@ def main():
 
     # ---- 期清单: 已结算(正式报截止<今天) vs 活样本(截止已过、正式报截止未到) ----
     today = date.today()
-    periods_desc = [p for p, _n in store.forecast_period_counts(min_rows=100, limit=12)]
+    periods_desc = [p for p, _n in store.forecast_period_counts(min_rows=100, limit=args.limit)]
     settled, live = [], []
     for p in periods_desc:
         if ch.forecast_cutoff(p) >= today:
