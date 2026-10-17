@@ -161,11 +161,12 @@ def gate_at_event(ev: dict, cfg: dict, price_getter: Callable[[str], pd.Series],
         out["valuation_note"] = "无价格"
         return out
     px_row = price[price.index.astype(str) <= ev["date"]]
-    if len(px_row) == 0:
+    closes = px_row["close"].dropna() if len(px_row) else px_row["close"]
+    if len(closes) == 0:
         out["valuation_pass"] = False
         out["valuation_note"] = "事件日前无价格"
         return out
-    price_at = float(px_row["close"].iloc[-1])   # price_getter 契约=OHLCV DataFrame
+    price_at = float(closes.iloc[-1])   # 停牌日 close=NaN 行跳过,取最近有价日(price_getter 契约=OHLCV DataFrame)
     # ST 代理敏感性门(cfg.min_price,默认关): 历史 ST 名单不可回放(名称逐期漂移无免费源),
     # 用「事件日价 < 2 元」近似垃圾股/仙股——戴帽股长期趴 1-3 元区;实盘当时按名称排除,
     # 回测无法执行,此门给出偏差方向的敏感性界
