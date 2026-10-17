@@ -504,7 +504,7 @@ def main():
 
 
 def _conclusion(agg: dict, n: int, first: str, last: str) -> str:
-    parts = [f"预告队列v1({n}期·{first[:6]}→{last[:6]}·期数等权·vs沪深300):"]
+    parts = [f"预告队列({n}期·{first[:6]}→{last[:6]}·期数等权·vs沪深300):"]
     for arm in ARMS_ALL:
         a = agg[arm]
         if a["win_rate"] is None:
@@ -512,7 +512,8 @@ def _conclusion(agg: dict, n: int, first: str, last: str) -> str:
             continue
         parts.append(f"{ARM_NAMES[arm]} {a['wins']}/{a['n_valid']}"
                      f"·平均超额{a['mean_excess']:+.1%}")
-    parts.append("v1磨口径不结算claim(判据已批·v2跑数前登记);温度计非开关")
+    parts.append("Claim004判据=臂C胜率≥60%方向一致/≤50%证伪(2026-10-18终审:方向一致·"
+                 "纹理警示 2017-2022恰50%);温度计非开关")
     return ";".join(parts)
 
 
