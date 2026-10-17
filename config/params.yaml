@@ -286,5 +286,10 @@ stock_pool:
       receivable_rev_yellow: 0.50 # 黄旗: 应收/营收 >50%(建筑军工行业性高,不硬杀交人工)
       goodwill_jump_yellow: 0.30  # 黄旗: 商誉环比激增 >30%(并购增长代理,人工查 F10)
     theme_windows: []             # 主题死线事实标注 [{label, until}](可证伪,配套 docs/CLAIMS_LEDGER.md)
+  cohort:                         # 预告队列研究(validate_forecast_cohort · 2026-10 grill 定稿)
+    benchmark: "000300"           # 主基准=沪深300(个股与臂的赢输判定;只此一个,不比池Top-100)
+    k_cap: 20                     # 精选臂容量上限(K=min(k_cap, k_frac×队列))
+    k_frac: 0.25                  # 精选臂容量比例(B1/B2 同 K,B2 剔旗后少中选优)
+    sens_ks: [10, 20, 40]         # B1 敏感性扫描(固定K,探索性附表,不入判据)
   display:
     table_rows_default: 50

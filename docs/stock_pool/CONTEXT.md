@@ -58,6 +58,36 @@ choice emerges from the pool, not from top-down prediction). Display-only.
 New entrants / exits vs the previous archived snapshot — the visualization of "增速不行了
 下季度自然被淘汰" (no persistence prediction; the pool stays composed of high earnings).
 
+**预告队列 (Forecast cohort)**:
+A report period's buy-candidate list for the cohort study — every stock whose 预告
+announced within that period's forecast window passes the 预告环 floor. Includes stocks
+already in the pool: a continuing member whose fresh forecast re-passes the floor joins
+the cohort too (the strategy buys "everyone re-qualified on the newest forecast", not
+just new faces — user ruling 2026-10-17). Forecasts announced after the legal cutoff are
+excluded (point-in-time). Hard exclusions mirror the pool's red flags as computable
+point-in-time: ST (name at the time), 存贷双高 proxy, and 商誉/净资产 >30% (goodwill red
+line joined 2026-10-17 after a dedicated tushare backfill; unknown goodwill stays —
+missing data ≠ danger). _Avoid_: confusing with 环比 diff's 新进 (out→in transitions
+only; the cohort is the wider passing-event criterion).
+
+**截点 (Forecast cutoff)**:
+The legal forecast disclosure deadline that freezes a cohort — annual 1/31, Q1 4/15,
+H1 7/15, Q3 10/15 (the same clock the pool calendar encodes). At the cutoff, every
+forecast that will ever appear for the period has appeared; late filers don't count.
+
+**持有窗 (Holding window)**:
+Cohort backtest window — buy at the first trading day's open after the cutoff, sell at
+the period's formal-report legal deadline; buy and sell complete within one quarterly
+cycle ("forecast out → buy; formal report lands → sell"). Structurally heterogeneous:
+annual cohorts hold ~3 months, H1 ~6-7 weeks, Q1/Q3 only ~2 weeks (their formal
+deadlines are 4/30 and 10/31).
+
+**精选臂 (Selection arm)**:
+Cohort backtest structure — Arm A = whole cohort equal-weight (baseline), Arm B =
+rule-based fundamental selection using point-in-time factors only; humans do post-hoc
+attribution and never in-backtest selection. _Avoid_: "选出业绩好的个股" (tautology —
+the cohort is high-earnings by construction; selection can only pick 便宜/干净/可持续).
+
 **未精筛 (Unrefined)**:
 The sina survivor leg (扣非 / goodwill) hasn't been pulled for this floor-passer yet —
  归母 proxy in use, flag self-heals after the next leg refresh. Missing data is never

@@ -83,3 +83,17 @@ def test_commodity_spot_roundtrip():
     assert len(jm) == 1 and float(jm["price"].iloc[0]) == 1702.0
     assert jm["date"].iloc[0] == "2026-09-08" and jm["quote_time"].iloc[0] == "230000"
     assert set(got["variety"]) == {"焦煤", "生猪"}
+
+
+def test_profit_dedt_rows_roundtrip():
+    """扣非行带披露日(预告队列研究「未精筛」point-in-time 可得性判定的原料)。"""
+    st = _store()
+    st.upsert_fina_indicator([
+        ("600001", "20251231", "2026-03-20", 5.0e8, 12.0),
+        ("600001", "20250930", "2025-10-28", 3.2e8, 11.0),
+        ("600001", "20260331", None, 4.0e8, None),
+    ])
+    rows = st.profit_dedt_rows("600001")
+    assert rows == [("20250930", "2025-10-28", 3.2e8),
+                    ("20251231", "2026-03-20", 5.0e8),
+                    ("20260331", None, 4.0e8)]

@@ -1475,6 +1475,16 @@ class Store:
                 "WHERE code=? AND profit_dedt IS NOT NULL", (code,)).fetchall()
         return {r[0]: r[1] for r in rows}
 
+    def profit_dedt_rows(self, code: str) -> list[tuple]:
+        """单股扣非行 [(report_period, ann_date, profit_dedt)..] 报告期升序——预告队列研究
+        「未精筛」point-in-time 可得性判定用(profit_dedt_map 不带披露日,这里带)。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT report_period,ann_date,profit_dedt FROM stock_fina_indicator "
+                "WHERE code=? AND profit_dedt IS NOT NULL ORDER BY report_period ASC",
+                (code,)).fetchall()
+        return [(str(r[0]), (str(r[1])[:10] if r[1] else None), r[2]) for r in rows]
+
     def upsert_balance_full(self, rows: list) -> int:
         """rows: 13 元组 (code, report_period, ann_date, monetary_cap, accounts_receiv,
         goodwill, total_cur_assets, total_cur_liab, total_assets, total_liab, st_borr,
