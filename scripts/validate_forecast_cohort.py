@@ -187,6 +187,8 @@ def main():
     ap.add_argument("--no-meta", action="store_true", help="不写 meta(调试)")
     ap.add_argument("--limit", type=int, default=12,
                     help="预告期回看深度(默认 12;v2 全史跑 60)")
+    ap.add_argument("--dump-members", action="store_true",
+                    help="成员级明细落 data/forecast_cohort_members.csv(复盘/二阶矩分析原料)")
     args = ap.parse_args()
 
     cfg = get_config()
@@ -486,6 +488,11 @@ def main():
         rows_p = sorted([r for r in member_rows if r["period"] == p and r["excess"] is not None],
                         key=lambda r: r["excess"])[:5]
         losers.extend(rows_p)
+
+    if args.dump_members and member_rows:
+        out_csv = ROOT / "data" / "forecast_cohort_members.csv"
+        pd.DataFrame(member_rows).to_csv(out_csv, index=False, encoding="utf-8-sig")
+        print(f"-> {out_csv} ({len(member_rows)} 行)")
 
     conclusion = _conclusion(agg, len(settled), settled[0], settled[-1])
     html = _html_report(agg, settled_rows, sens, attr_tables, ATTRS, losers,
