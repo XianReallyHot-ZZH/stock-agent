@@ -220,6 +220,7 @@ def main():
                     "应收黄旗": "黄" if m["receivable_yellow"] else "无",
                     "未精筛": "未精筛" if m["unrefined"] else "已精筛",
                     "gw_band": m.get("gw_band", "未知"),
+                    "tk_depr_pct": m.get("tk_depr_pct"),
                     "cap_decile": dec.get(m["code"]),
                     "peg_quintile": quin.get(m["code"]),
                     "ret": ret, "index_ret": iret, "excess": ret - iret,

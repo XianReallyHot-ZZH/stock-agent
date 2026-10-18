@@ -1404,6 +1404,27 @@ def fetch_balancesheet_tushare(code: str, timeout: float = 60.0) -> pd.DataFrame
     out["code"] = code
     return out[["code", "report_period", "ann_date"] + list(out_cols)]
 
+
+def fetch_income_impairment_tushare(code: str, timeout: float = 60.0) -> pd.DataFrame:
+    """利润表减值原料(按股全史一次调用,income)——「扭亏·上年计提占亏损比」chip 的底座
+    (MANUAL_REVIEW 3.1 头号检查项的程序化)。Returns [code, report_period, ann_date,
+    assets_impair, n_income_attr_p];assets_impair=资产减值损失(负值=损失,含商誉减值——
+    信用减值损失 2000 档未暴露,占比为保守低估);同日多版本行去重取最晚 ann_date。"""
+    from . import tushare_client as tc
+    ts_code = f"{code}.SH" if code.startswith(("6", "9")) else f"{code}.SZ"
+    df = tc.query("income", ts_code=ts_code,
+                  fields="ts_code,end_date,ann_date,assets_impair_loss,n_income_attr_p",
+                  start_date="20140101", end_date="20991231")
+    if df is None or not len(df) or not df["end_date"].notna().any():
+        raise FetchError(f"income {code} empty")
+    df = df.dropna(subset=["end_date"]).copy()
+    df["report_period"] = df["end_date"].astype(str).str[:8]
+    df["ann_date"] = df["ann_date"].astype(str).str[:10]
+    df = df.sort_values("ann_date").drop_duplicates("report_period", keep="last")
+    out = df.rename(columns={"assets_impair_loss": "assets_impair"})
+    out["code"] = code
+    return out[["code", "report_period", "ann_date", "assets_impair", "n_income_attr_p"]]
+
 # ---- Broad-index daily / valuation (V4 tracker) — sina + legulegu, proxy-independent ----
 def _index_prefix(symbol: str) -> str:
     """Broad-index sina prefix: 399xxx (深证, e.g. 创业板指) -> sz; everything else

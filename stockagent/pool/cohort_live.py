@@ -186,6 +186,15 @@ def period_members(store, hcfg: dict, events: list[dict], period: str, cutoff: s
                 if fp == latest_pub and _avail(fa, fp) <= cutoff_c:
                     m["unrefined"] = False
                     break
+        # 扭亏·上年计提占亏损比(MANUAL_REVIEW 3.1 头号检查项的程序化;展示 chip 不进门)
+        m["tk_depr_pct"] = None
+        if "扭亏" in m["flags"]:
+            base_p = f"{int(period[:4]) - 1}{period[4:]}"    # 上年同期=扭亏的基数期
+            for fp, fa, imp, ni in store.income_impairment_rows(code):
+                if fp == base_p:
+                    if _avail(fa, fp) <= cutoff_c:
+                        m["tk_depr_pct"] = ch.wash_sale_ratio(imp, ni)
+                    break
 
     # 两轨分流(行业级 type) + 周期 PB 分位(保守可得日阶梯) + 商誉档
     for m in members:
@@ -322,7 +331,12 @@ def build_cohort_view(store, config, now=None) -> dict:
             val = "—" if m.get("peg") is None else f"PEG {m['peg']:.2f}"
         else:
             val = "—" if m.get("pb_pct") is None else f"PB分位 {m['pb_pct']:.0%}"
-        flags = list(m["flags"])
+        flags = []
+        for f in m["flags"]:
+            if f == "扭亏" and m.get("tk_depr_pct") is not None:
+                flags.append(f"扭亏·上年计提{m['tk_depr_pct']:.0%}")
+            else:
+                flags.append(f)
         if m["receivable_yellow"]:
             flags.append("应收黄")
         if m["unrefined"]:

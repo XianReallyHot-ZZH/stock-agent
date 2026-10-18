@@ -520,6 +520,15 @@ CREATE TABLE IF NOT EXISTS stock_fina_indicator ( -- tushare 财务指标(扣非
     PRIMARY KEY (code, report_period)
 );
 CREATE INDEX IF NOT EXISTS idx_fina_indicator_code ON stock_fina_indicator(code);
+CREATE TABLE IF NOT EXISTS stock_income (          -- tushare 利润表减值原料(资产减值损失·含商誉减值)
+    code          TEXT NOT NULL,                    -- 「扭亏·上年计提占亏损比」chip 的底座(MANUAL_REVIEW 3.1 头号检查项的程序化)
+    report_period TEXT NOT NULL,
+    ann_date      TEXT,
+    assets_impair REAL,                             -- 资产减值损失(元,负值=损失;信用减值 2000 档未暴露→占比保守低估)
+    n_income_attr_p REAL,                           -- 归母净利润(元,分母)
+    PRIMARY KEY (code, report_period)
+);
+CREATE INDEX IF NOT EXISTS idx_stock_income_code ON stock_income(code);
 CREATE TABLE IF NOT EXISTS stock_balance_full (   -- tushare 资产负债表明细(商誉/借款/流动项)
     code             TEXT NOT NULL,
     report_period    TEXT NOT NULL,
@@ -1484,6 +1493,37 @@ class Store:
                 "WHERE code=? AND profit_dedt IS NOT NULL ORDER BY report_period ASC",
                 (code,)).fetchall()
         return [(str(r[0]), (str(r[1])[:10] if r[1] else None), r[2]) for r in rows]
+
+    def upsert_stock_income(self, rows: list, source: str = "ts_income") -> int:
+        """rows: (code, report_period, ann_date, assets_impair, n_income_attr_p)。幂等
+        (code, report_period)。资产减值损失原料(负值=损失)。"""
+        if not rows:
+            return 0
+
+        def _s(x):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return None
+            return str(x)[:10]
+
+        def _f(x):
+            if x is None or (isinstance(x, float) and pd.isna(x)):
+                return None
+            return float(x)
+        with self._conn() as c:
+            c.executemany(
+                "INSERT OR REPLACE INTO stock_income(code,report_period,ann_date,"
+                "assets_impair,n_income_attr_p) VALUES(?,?,?,?,?)",
+                [(str(r[0]), str(r[1]), _s(r[2]), _f(r[3]), _f(r[4])) for r in rows])
+        return len(rows)
+
+    def income_impairment_rows(self, code: str) -> list[tuple]:
+        """单股利润表减值行 [(report_period, ann_date, assets_impair, n_income_attr_p)..]
+        报告期升序——「扭亏·上年计提占亏损比」chip 的原料(point-in-time 由调用方判)。"""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT report_period,ann_date,assets_impair,n_income_attr_p FROM stock_income "
+                "WHERE code=? ORDER BY report_period ASC", (code,)).fetchall()
+        return [(str(r[0]), (str(r[1])[:10] if r[1] else None), r[2], r[3]) for r in rows]
 
     def upsert_balance_full(self, rows: list) -> int:
         """rows: 13 元组 (code, report_period, ann_date, monetary_cap, accounts_receiv,

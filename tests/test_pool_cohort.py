@@ -244,3 +244,16 @@ def test_goodwill_band_unknown_cases():
     assert ch.goodwill_band(10.0, None) == "未知"
     assert ch.goodwill_band(10.0, 0.0) == "未知"           # 净资产≤0
     assert ch.goodwill_band(10.0, float("nan")) == "未知"
+
+
+# ---------- wash_sale_ratio(扭亏·上年计提占亏损比 · 2026-10-18) ----------
+
+def test_wash_sale_ratio():
+    # 宜宾纸业 2024 实例形状: 亏 1.28 亿 · 计提 0.77 亿 → ~60%
+    assert ch.wash_sale_ratio(-76_874_187.48, -128_427_749.27) == pytest.approx(0.5986, abs=1e-3)
+    assert ch.wash_sale_ratio(-100.0, -100.0) == pytest.approx(1.0)    # 亏损全由计提构成
+    assert ch.wash_sale_ratio(50.0, -100.0) == 0.0                     # 减值转回(正值)按 0
+    assert ch.wash_sale_ratio(-100.0, 100.0) is None                   # 上年盈利→无扭亏基数语义
+    assert ch.wash_sale_ratio(None, -100.0) is None                    # 数据缺
+    assert ch.wash_sale_ratio(-100.0, None) is None
+    assert ch.wash_sale_ratio(-100.0, 0.0) is None                     # 分母为 0

@@ -235,6 +235,20 @@ def select_pool_mirror(members: list[dict], top_n: int = 100,
 GOODWILL_RED_BAND = ">30%(红旗线)"
 
 
+def wash_sale_ratio(assets_impair: Optional[float], base_income: Optional[float]) -> Optional[float]:
+    """扭亏·上年计提占亏损比(纯,2026-10-18 MANUAL_REVIEW 3.1 头号检查项的程序化):
+    |资产减值损失| / |上年同期归母净利|,仅上年亏损(<0)时有意义;减值为正(转回)按 0 计。
+    任一缺 / 上年盈利 / 分母为 0 → None。口径: 资产减值损失(含商誉减值——洗大澡主武器),
+    信用减值损失 2000 档未暴露 → 比值为**保守低估**。>~0.5 即「上年亏损大头是计提」的嫌疑区,
+    人工按 3.1 翻年报确认。"""
+    if assets_impair is None or base_income is None:
+        return None
+    a, n = float(assets_impair), float(base_income)
+    if _nan(a) or _nan(n) or n >= 0 or abs(n) <= 0:
+        return None
+    return abs(min(a, 0.0)) / abs(n)
+
+
 def goodwill_band(goodwill: Optional[float], equity: Optional[float]) -> str:
     """商誉/净资产档(纯,2026-10-17 补拉后入队筛选): <1% / 1-10% / 10-30% / >30%(红旗线) /
     未知(任一缺)。goodwill 传 0.0=「该期资产负债表行项为空≈无商誉」(tushare 全历史专项
