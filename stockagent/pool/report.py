@@ -486,18 +486,24 @@ def _cohort_section(snap: dict) -> str:
     if table_rows:
         body = []
         for r in table_rows:
+            cap = r.get("mktcap")
             body.append([
                 f"<td>{_e(r.get('name'))}<span class='dim'> {_e(r.get('code'))}</span></td>",
                 f"<td>{_e(r.get('industry'))}</td>",
                 f"<td>{_e(r.get('ftype'))}</td>",
                 f"<td>{_e(r.get('track'))}</td>",
                 f"<td>{_e(r.get('val'))}</td>",
+                (f"<td data-v='{cap:.0f}'>{_fmt_mktcap(cap)}</td>"
+                 if cap is not None and cap == cap else "<td data-v='-1' class='dim'>—</td>"),
                 f"<td>{_e(r.get('flags'))}</td>",
                 f"<td>{_e(r.get('gw_band'))}</td>",
             ])
         out.append(_table(
             [("name", "名称"), ("industry", "行业(申万L3)"), ("ftype", "预告类型"),
              ("track", "轨道"), ("val", "估值"),
+             ("cap", "市值",
+              "title='截点时点市值 = 股本(现市值/现价反推,恒定近似) × 截点日收盘价——与回测同口径,"
+              "回答「买入那天它多大」;非当前实时市值。可排序' style='cursor:help'"),
              ("flags", "旗",
               "title='人工复审提示旗(不参与精选判定):扭亏=上年低基数/或洗大澡·逐案查(38期实证组不差于预增);"
               "「扭亏·上年计提N%」=上年亏损中资产减值计提占比(≥50% 即洗大澡嫌疑区,翻年报3.1确认;口径不含信用减值=保守低估);"

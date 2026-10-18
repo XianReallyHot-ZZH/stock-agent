@@ -350,6 +350,7 @@ def build_cohort_view(store, config, now=None) -> dict:
             "code": m["code"], "name": names.get(m["code"], m["code"]),
             "industry": info.get("industry", "未映射"), "ftype": str(m["ftype"] or "未标注"),
             "track": "PB轨" if m["track"] == "pb" else "PEG轨", "val": val,
+            "mktcap": m.get("cap"),
             "flags": "·".join(flags) or "无", "gw_band": m["gw_band"],
             "in_c": m["code"] in arm_c_set,
         })
