@@ -83,6 +83,24 @@ def forecast_open(period: str) -> date:
     return date(int(period[:4]) + 1, om, od) if tail == "1231" else date(int(period[:4]), om, od)
 
 
+def cohort_window_state(period: str, now) -> dict:
+    """预告队列窗口三态(纯,⑥节队列时钟·与 validate_forecast_cohort 同口径):
+    gap 空窗(今天<预告开窗——上期已清仓等下季) / forming 预告窗换血中(开窗≤今天≤法定截止)
+    / active 活队列(截止<今天≤正式报法定截止,名单已定格)。
+    Returns {state, forecast_open, cutoff, deadline, days_to_next}(日期 ISO str)。"""
+    from .cohort import forecast_cutoff   # cohort 无反向 import,无环
+    d = now.date() if isinstance(now, datetime) else now
+    fo, co, dl = forecast_open(period), forecast_cutoff(period), formal_deadline(period)
+    if d < fo:
+        state, nxt = "gap", fo
+    elif d <= co:
+        state, nxt = "forming", co
+    else:
+        state, nxt = "active", dl
+    return {"state": state, "forecast_open": fo.isoformat(), "cutoff": co.isoformat(),
+            "deadline": dl.isoformat(), "days_to_next": (nxt - d).days}
+
+
 def window_b_period(now, grace_days: int = 14) -> dict | None:
     """窗口B(季中预估埋伏窗,纯): 上期正式报截止+grace ≤ 今天 < 下期预告开窗。
 

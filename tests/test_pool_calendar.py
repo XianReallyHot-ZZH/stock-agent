@@ -134,3 +134,21 @@ def test_pool_phase_gap_after_deadline_november():
     ph = pool_phase(_date(2026, 11, 15))
     assert ph["phase"] == "gap"
     assert ph["next_date"] == "2027-01-01"
+
+
+# ---------- cohort_window_state(⑥节预告队列时钟 · 与 validate_forecast_cohort 同口径) ----------
+
+def test_cohort_window_state_boundaries():
+    # 2026Q3: 开窗 10-01 · 截点 10-15 · 正式报截止 10-31
+    from stockagent.pool.calendar import cohort_window_state as cws
+    assert cws("20260930", _date(2026, 9, 30))["state"] == "gap"
+    assert cws("20260930", _date(2026, 10, 1))["state"] == "forming"
+    assert cws("20260930", _date(2026, 10, 15))["state"] == "forming"   # 截点当日闭区间
+    r = cws("20260930", _date(2026, 10, 16))
+    assert r["state"] == "active" and r["deadline"] == "2026-10-31"
+    r = cws("20260930", _date(2026, 10, 31))
+    assert r["state"] == "active" and r["days_to_next"] == 0
+    # 年报期: 开窗/截止在次年 1 月
+    assert cws("20251231", _date(2026, 1, 31))["state"] == "forming"
+    r = cws("20251231", _date(2026, 2, 1))
+    assert r["state"] == "active" and r["deadline"] == "2026-04-30"

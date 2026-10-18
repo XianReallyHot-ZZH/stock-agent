@@ -1,4 +1,5 @@
-"""生成候选个股池看板(V8 高业绩池;thin CLI,fat renderer 在 stockagent/pool/report.py)。
+"""生成候选个股池看板(V8 高业绩池·七节;thin CLI,fat renderer 在 stockagent/pool/report.py)。
+⑥节预告队列=Claim 004 附产品(cohort_live 装配,与 validate_forecast_cohort 共用同一套判定)。
 
 Usage:
   python scripts/stock_pool_report.py            # 装配快照 → 精筛腿(按需) → 渲染 stock_pool.html

@@ -28,6 +28,7 @@ from stockagent.config import get_config
 from stockagent.data.store import Store
 from stockagent.pool import calendar as cal
 from stockagent.pool import cohort as ch
+from stockagent.pool import cohort_live
 from stockagent.pool import prices as pr
 from stockagent.pool import study
 from stockagent.pool.report import _e
@@ -39,55 +40,7 @@ ARM_NAMES = {"A": "臂A·队列全体等权", "B1": "臂B1·排序分前K",
              "C": "臂C·实盘镜面(估值门两轨+两轨排序Top-N)"}
 
 
-# ---------- I/O 装配层 ----------
-
-def _c(d) -> str:
-    """日期 → 紧凑 YYYYMMDD(比较统一口径;库里 ISO/紧凑混存,fina 紧凑·report/balance ISO)。"""
-    return str(d).replace("-", "")[:8]
-
-
-def _avail(announce, period: str) -> str:
-    """某期数据的可得日(紧凑) = min(公告日, 该期正式报法定截止)。真公告早 → 用真值;
-    公告日被刷新腿重盖成晚值(stock_report_actual/stock_balance 的 announce MAX 顶到当天,
-    point-in-time 不可信) → 退法定截止:永不前视、最多保守滞后。公告日早于期末=脏行 → 法定截止。"""
-    dl = cal.formal_deadline(period).strftime("%Y%m%d")
-    a = _c(announce) if announce else ""
-    if not a or a < period:
-        return dl
-    return min(a, dl)
-
-
-def _balance_asof_rows(store: Store) -> dict[str, list[tuple]]:
-    """全库资产负债 → {code: [(可得日, period, {cash,receivables,total_assets,debt_ratio})..]}
-    升序;可得日 = _avail(公告日, 期)。"""
-    out: dict[str, list[tuple]] = {}
-    for p in store.stock_balance_periods(min_rows=100):
-        bf = store.get_stock_balance_period(p)
-        if not len(bf):
-            continue
-        for code, r in bf.iterrows():
-            out.setdefault(str(code), []).append(
-                (_avail(r.get("announce_date"), p), p,
-                 {k: r.get(k) for k in ("cash", "receivables", "total_assets",
-                                        "debt_ratio", "equity")}))
-    for lst in out.values():
-        lst.sort(key=lambda t: t[0])
-    return out
-
-
-def _latest_asof(rows: list[tuple] | None, asof: str) -> dict | None:
-    """asof 日已可得的最新一行(纯;两侧统一紧凑比较)。"""
-    if not rows:
-        return None
-    target = _c(asof)
-    pick = None
-    for ann, _p, row in rows:
-        if ann <= target:
-            pick = row
-        else:
-            break
-    return pick
-
+# ---------- I/O 装配层(单期队列装配已抽 cohort_live.period_members——与看板⑥节共用) ----------
 
 def _price_cache(store: Store):
     """惰性原始价缓存(gate 的 PE 用 raw close)。Returns (getter, stats)。"""
@@ -106,56 +59,6 @@ def _price_cache(store: Store):
         return cache[code] if len(cache[code]) else None
 
     return getter, stats
-
-
-def _goodwill_band(store: Store, code: str, bal_row: dict | None, cutoff: str,
-                   bf_cache: dict) -> str:
-    """商誉/净资产档(2026-10-17 tushare balancesheet 补拉 ~1.4k 缺口后入队筛选):
-    goodwill = balance_full 保守可得日 ≤cutoff 的最新一期行(行项 NULL≈0——全历史专项拉取后
-    的读法;与实屏 sina 腿的「商誉未精筛」缺口语义不同,报告注记) → 全无行者 sina 精筛腿
-    兜底(最新期法定截止 ≤cutoff);equity = zcfz as-of 行。档位归 cohort.goodwill_band。"""
-    y = int(cutoff[:4])
-    cands = []
-    for yy in (y, y - 1, y - 2):
-        for tail in ("1231", "0930", "0630", "0331"):
-            rp = f"{yy}{tail}"
-            try:
-                if cal.formal_deadline(rp).strftime("%Y%m%d") <= _c(cutoff):
-                    cands.append(rp)
-            except ValueError:
-                continue
-    cands.sort(reverse=True)
-    gw = None
-    for rp in cands:
-        if rp not in bf_cache:
-            try:
-                bfp = store.get_balance_full_period(rp)
-            except Exception:  # noqa: BLE001
-                bfp = pd.DataFrame()
-            bf_cache[rp] = bfp if bfp is not None else pd.DataFrame()
-        bf = bf_cache[rp]
-        if bf is None or not len(bf) or code not in bf.index:
-            continue
-        gw_v = bf.loc[code].get("goodwill")
-        gw = 0.0 if (gw_v is None or pd.isna(gw_v)) else float(gw_v)
-        break   # 最新可得期有行即定(NULL 行项≈无商誉);全无行 → sina 兜底
-    if gw is None:
-        try:
-            panel = store.get_stock_financials_panel(code, metrics=["goodwill"])
-        except Exception:  # noqa: BLE001
-            panel = None
-        if panel is not None and len(panel) and "goodwill" in panel.columns:
-            s = panel["goodwill"].dropna()
-            for rp in sorted((str(x) for x in s.index), reverse=True):
-                try:
-                    if cal.formal_deadline(rp).strftime("%Y%m%d") <= _c(cutoff):
-                        gw = float(s[rp])
-                        break
-                except (ValueError, KeyError):
-                    continue
-    eq = (bal_row or {}).get("equity")
-    eq_f = None if eq is None or pd.isna(eq) else float(eq)
-    return ch.goodwill_band(gw, eq_f)
 
 
 def _adj_open_cache(store: Store, price_getter):
@@ -249,7 +152,7 @@ def main():
             report_eps[(c, p)] = float(eps_v)
     print(f"股本反推 {sum(v is not None for v in shares.values())} 只 · np_abs {len(np_abs)} 只")
 
-    bal_rows = _balance_asof_rows(store)
+    bal_rows = cohort_live.balance_asof_rows(store)
     print(f"资产负债 as-of 行: {len(bal_rows)} 只")
 
     ind_df = store.sw_industry_map()
@@ -276,91 +179,10 @@ def main():
     for p in settled + live:
         cutoff = ch.forecast_cutoff(p).isoformat()
         deadline = cal.formal_deadline(p).isoformat()
-        evs = ch.cohort_events(events, p, cutoff)
-        balance_asof: dict[tuple[str, str], dict] = {}
-        for ev in evs:
-            row = _latest_asof(bal_rows.get(ev["code"]), cutoff)
-            if row is not None:
-                balance_asof[(p, ev["code"])] = row
-
-        members: list[dict] = []
-        for ev in evs:
-            g = study.gate_at_event(ev, hcfg, price_getter, shares, np_abs, balance_asof,
-                                    arm="full", report_eps=report_eps)
-            if not (g["passed"] and not g["risk_red"]):
-                continue                  # 队列=预告环过门 ∧ 非ST非红旗(估值门不拦队列)
-            members.append({
-                "code": ev["code"], "period": p, "np_yoy": g["np_yoy"],
-                "ftype": ev.get("type"), "flags": list(g["flags"]),
-                "peg": g["peg"], "cap": g["cap"],
-                "score": g["peg"] if g["peg"] is not None else -(ev.get("np_yoy") or 0.0),
-            })
-
-        # B2 的 point-in-time 旗: 应收黄旗(zcfz as-of 应收 ÷ 最新已公告**年报**营收——存量对
-        # 年度流量同量纲;季频累计营收作分母会虚高 ~4×,v1 首跑 43% 误旗已修) + 未精筛
-        # (扣非 fina_indicator 截至截点未覆盖最新已公告期)。可得日统一 _avail=min(公告日,法定截止)
-        # 紧凑口径——v1 二跑发现 fina 紧凑/ISO 混比致同年恒判晚+report/balance announce 被刷新腿
-        # 重盖,三处一并修。
-        cutoff_c = _c(cutoff)
-        rep_cache: dict[str, pd.DataFrame] = {}
-        for m in members:
-            code = m["code"]
-            if code not in rep_cache:
-                rep_cache[code] = store.stock_report_rows_for(code)
-            rep = rep_cache[code]
-            latest_pub, rev_ann = None, None
-            bvps_events: list[tuple] = []
-            if len(rep):
-                for rp, r in rep.iterrows():
-                    rp_s = str(rp)
-                    avail = _avail(r.get("announce_date"), rp_s)
-                    if avail > cutoff_c:
-                        continue
-                    if latest_pub is None or rp_s > latest_pub:
-                        latest_pub = rp_s
-                    if rp_s.endswith("1231"):
-                        rev_ann = r.get("rev_abs")   # 升序遍历 → 留下最新年报
-                    bv = r.get("bvps")
-                    if bv is not None and pd.notna(bv) and float(bv) > 0:
-                        bvps_events.append((avail, rp_s, float(bv)))
-            m["bvps_events"] = bvps_events
-            bal = balance_asof.get((p, m["code"]))
-            m["receivable_yellow"] = False
-            try:
-                thr = float((hcfg.get("risk") or {}).get("receivable_rev_yellow", 0.50))
-            except (TypeError, ValueError):
-                thr = 0.50
-            if bal and rev_ann is not None and pd.notna(rev_ann) and float(rev_ann) > 0:
-                rec = bal.get("receivables")
-                if rec is not None and pd.notna(rec):
-                    m["receivable_yellow"] = float(rec) / float(rev_ann) > thr
-            m["unrefined"] = True
-            if latest_pub is not None:
-                for fp, fa, _v in store.profit_dedt_rows(m["code"]):
-                    if fp == latest_pub and _avail(fa, fp) <= cutoff_c:
-                        m["unrefined"] = False
-                        break
-
-        # 臂C原料: 两轨分流(行业级 type,与实屏同源) + 周期 PB 分位(保守可得日阶梯防前视)
-        # + 商誉档(归因维度,balance_full→sina 双源 as-of)
-        for m in members:
-            info_c = ind_info.get(m["code"]) or {}
-            m["track"] = "pb" if info_c.get("type") == "cyclic" else "peg"
-            m["pb_pct"] = None
-            if m["track"] == "pb":
-                pdf = price_getter(m["code"])
-                if pdf is not None and len(pdf):
-                    m["pb_pct"] = ch.pb_percentile_asof(
-                        pdf["close"], [e for e in m["bvps_events"] if e[0] <= cutoff_c],
-                        cutoff, min_history=120)
-            m["gw_band"] = _goodwill_band(store, m["code"],
-                                          balance_asof.get((p, m["code"])), cutoff, _bf_cache)
-        # 商誉红旗入队筛选(2026-10-17 用户指令·补拉后覆盖足): >30% 硬剔;「未知」保留计数
-        # 不删(缺数据≠危险,与实屏 gap 语义一致——不因覆盖残缺删人)
-        n_pre = len(members)
-        n_gw_red = sum(1 for m in members if m["gw_band"] == ch.GOODWILL_RED_BAND)
-        if n_gw_red:
-            members = [m for m in members if m["gw_band"] != ch.GOODWILL_RED_BAND]
+        # 单期队列装配与看板⑥节共用同一份(cohort_live.period_members——回测/实盘同一套判定)
+        members, n_pre, n_gw_red = cohort_live.period_members(
+            store, hcfg, events, p, cutoff, bal_rows, shares, np_abs, report_eps,
+            price_getter, ind_info, _bf_cache)
         mset = {m["code"]: m for m in members}
         k = ch.adaptive_k(len(members), k_cap, k_frac)
 

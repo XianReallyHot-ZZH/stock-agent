@@ -170,7 +170,8 @@ def _framework_section(snap: dict) -> str:
         "<div style='font-size:12.5px;background:var(--ovbg);border-left:3px solid var(--link);"
         "border-radius:6px;padding:8px 12px;line-height:1.9'>"
         "<b>使用动线</b>:① 总览(池+黄旗) → <b>③ 人工复审(逐旗排除——你的活)</b> → ② 行业构成"
-        "(涌现簇) → ④ 披露时钟(什么时候换血) → ⑤ 历史回放(验证器结论兜底)。"
+        "(涌现簇) → ④ 披露时钟(什么时候换血) → ⑤ 历史回放(验证器结论兜底) → "
+        "⑥ 预告队列(季报周期定格名单·Claim 004)。"
         "方法论全文与逐条 SOP 详见 docs/stock_pool/MANUAL_REVIEW.md。"
         "</div></div></details>")
 
@@ -202,7 +203,7 @@ def _fmt_mktcap(v) -> str:
 def _anchor_nav() -> str:
     items = [("fw", "〇 选股框架"), ("pool", "① 池总览"), ("sector", "② 行业构成"),
              ("risk", "③ 风险与人工复审"), ("clock", "④ 披露时钟·diff"),
-             ("history", "⑤ 历史回放"), ("guide", "⑥ 读图说明")]
+             ("history", "⑤ 历史回放"), ("cohort", "⑥ 预告队列"), ("guide", "⑦ 读图说明")]
     return ("nav class='anchor'>" +
             "".join(f"<a href='#{i}'>{t}</a>" for i, t in items) + "</nav>")
 
@@ -448,10 +449,73 @@ def _history_section(snap: dict) -> str:
     return "".join(out)
 
 
+def _cohort_section(snap: dict) -> str:
+    """⑥ 预告队列·截点定格(Claim 004 附产品)——只陈列名单与日期,不出现买卖建议。"""
+    co = snap.get("cohort")
+    out = ["<h2 id='cohort'>⑥ 预告队列 · 截点定格 <span class='count'>Claim 004 附产品</span></h2>"]
+    if not co:
+        out.append("<div class='hint'>本快照为回放/测试渲染,不带队列节(live 渲染才装配)。</div>")
+        return "".join(out)
+    if co.get("error"):
+        out.append(f"<div class='banner'>队列装配失败: {_e(co['error'])}</div>")
+        return "".join(out)
+    period = _fmt_period(co.get("period"))
+    st = co.get("state")
+    if st == "gap":
+        out.append(
+            f"<div class='banner'>⏸ 空窗期 —— {_e(_fmt_period(co.get('prev_period')))} 队列已于 "
+            f"{_e(co.get('prev_deadline'))} 清仓;下期 {_e(period)} 预告 {_e(co.get('forecast_open'))} "
+            f"开窗(还 {co.get('days_to_next', 0)} 天)</div>")
+    elif st == "forming":
+        out.append(
+            f"<div class='banner hot'>🩸 换血中 —— {_e(period)} 预告窗内,已过门 "
+            f"<b>{co.get('n', 0)}</b> 只(剔商誉 {co.get('n_gw_red', 0)});截点 {_e(co.get('cutoff'))} "
+            f"定格(还 {co.get('days_to_next', 0)} 天)——名单未冻结,下表为当前实况</div>")
+    else:
+        sell_txt = _e(co.get('sell_date'))
+        if co.get('sell_date') == co.get('deadline'):
+            sell_txt += "(法定截止·遇非交易日自动前移)"
+        out.append(
+            f"<div class='banner'>▶ 活队列 —— {_e(period)} 截点 {_e(co.get('cutoff'))} 已定格:队列 "
+            f"<b>{co.get('n', 0)}</b> 只(剔商誉 {co.get('n_gw_red', 0)}·入队 {co.get('n_pre', 0)}) · "
+            f"臂C <b>{co.get('n_arm_c', 0)}</b> 只 · 买入 {_e(co.get('buy_date'))} 开盘(已过) → "
+            f"卖出 {sell_txt} 开盘(还 {co.get('days_to_next', 0)} 天)</div>")
+    rows = co.get("rows") or []
+    if rows:
+        body = []
+        for r in rows:
+            c_badge = ("<td>★ 臂C</td>" if r.get("in_c") else "<td class='dim'>—</td>")
+            body.append([
+                f"<td>{'★ ' if r.get('in_c') else ''}{_e(r.get('name'))}"
+                f"<span class='dim'> {_e(r.get('code'))}</span></td>",
+                f"<td>{_e(r.get('industry'))}</td>",
+                f"<td>{_e(r.get('ftype'))}</td>",
+                f"<td>{_e(r.get('track'))}</td>",
+                f"<td>{_e(r.get('val'))}</td>",
+                f"<td>{_e(r.get('flags'))}</td>",
+                f"<td>{_e(r.get('gw_band'))}</td>",
+                c_badge,
+            ])
+        out.append(_table(
+            [("name", "名称"), ("industry", "行业(申万L3)"), ("ftype", "预告类型"),
+             ("track", "轨道"), ("val", "估值"), ("flags", "旗"), ("gw", "商誉档"),
+             ("", "臂C")], body))
+    out.append(
+        "<div class='hint'>口径与 Claim 004 冻结件一致(与验证器共用同一套装配,回测/实盘同判): "
+        "队列=预告窗内公告∧过预告环地板(净利≥50%/扭亏)的全体(含池内续留再过门),硬剔 "
+        "ST(当时名称)/存贷双高/商誉>30%;臂C=估值门两轨(PEG≤1 / PB分位≤30%)+两轨合并排序"
+        "+Top-100 封顶。本节<b>只陈列名单与日期,不构成买卖建议</b>——调仓是人的决定,看板不冒充;"
+        "永不喂引擎。成绩表述锁定台账口径: <b>" + _e(co.get("claim") or "验证器未跑,结论未注入")
+        + "</b>。全史回测(38 期·四臂·归因)见 <a href='forecast_cohort_study.html'>📋 预告队列研究报告"
+        "</a>(每季正式报截止后 <code>python scripts/validate_forecast_cohort.py --limit 60</code> "
+        "刷新=前瞻滚动加窗)。</div>")
+    return "".join(out)
+
+
 def _guide_section(snap: dict) -> str:
     note = snap.get("cfg_note") or {}
     return (
-        "<div class='summary-box' id='guide'><b>⑥ 读图说明</b> —— 只读筛选旁路,永不喂交易引擎"
+        "<div class='summary-box' id='guide'><b>⑦ 读图说明</b> —— 只读筛选旁路,永不喂交易引擎"
         "(ADR-0001);给候选不给买卖点,人决策综合多看板。<br>"
         "<b>三环口径差异(数据先天,非妥协)</b>: 预告环只有净利维度(单腿地板);快报环双轴未审计;"
         "正式环=扣非双轴(sina 逐股精筛,幸存者才有;未拉到时归母回退+「未精筛」旗)。<br>"
@@ -505,6 +569,7 @@ def render(snapshot: dict) -> str:
         + _risk_section(snapshot)
         + _clock_section(snapshot)
         + _history_section(snapshot)
+        + _cohort_section(snapshot)
         + _guide_section(snapshot)
         + "<footer>生成: python scripts/stock_pool_report.py · 参数: config/params.yaml stock_pool.high_pool ·"
           " 行业映射: config/stock_industry.yaml(未映射→PEG轨,不入周期PB轨)<br>"

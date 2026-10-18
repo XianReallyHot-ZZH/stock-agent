@@ -24,7 +24,7 @@ python scripts/dashboard_home.py               # 生成 + 打开（八看板 HTM
 
 # 候选个股池（pool，第六看板 · 高业绩池(陈氏季度池) V8 2026-09 重写，六表退役，详见 docs/stock_pool/CONTEXT.md + MANUAL_REVIEW.md）
 python scripts/backfill_stock_pool.py --all    # 冷启动：spot(含市值/估值列)→行业→正式报扩列16期→资产负债16期→日线(~2-4h断点续跑)→分红→幸存者sina精筛腿；日度增量由 dashboard_data_check --fix 自动带(--no-pool 可跳)
-python scripts/stock_pool_report.py            # 生成 data/stock_pool.html（六节：①池总览 ②行业构成·涌现簇 ③风险筛与人工复审SOP ④披露时钟·环比diff ⑤历史回放 ⑥读图说明；sina 精筛腿 7 天节流自动带）
+python scripts/stock_pool_report.py            # 生成 data/stock_pool.html（七节：①池总览 ②行业构成·涌现簇 ③风险筛与人工复审SOP ④披露时钟·环比diff ⑤历史回放 ⑥预告队列·截点定格(Claim 004 附产品·活队列/臂C名单/买卖日倒计时·与验证器共用 cohort_live 装配) ⑦读图说明；sina 精筛腿 7 天节流自动带）
 python scripts/validate_high_earnings_pool.py  # 验证器 V8.1：Top-100 逐日组合模拟 vs 七宽基 + 消融四臂(去估值门/去风险旗/市值P80) + 集中度扫描(Top-5~25) + 小市值精选(Top-K PEG→市值最小N) → data/high_earnings_pool_study.html + 结论写 meta；38 期(2017Q1 起 9.5 年)；Claim 003 已终审证伪(32%)
 python scripts/validate_forecast_cohort.py     # 预告队列验证器 v1(2026-10 grill 定稿·`pool/cohort.py` 纯核心)：每季预告法定截止(1/31·4/15·7/15·10/15)截点,当季预告环过门队列(**含续留再过门**·迟到预告不计·剔ST/存贷双高/商誉>30%——2026-10-17 tushare balancesheet 补拉~1.4k缺口后商誉红旗入队筛选)截点后首交易日开盘买入→本季正式报法定截止开盘卖出；四臂 A全体等权/B1排序前K/B2再剔黄旗·扭亏·未精筛/C实盘镜面(估值门两轨+两轨排序Top100) vs 沪深300(只此基准)；期数等权聚合+全维归因(含逐期矩阵·商誉档)+每期输家Top5 → data/forecast_cohort_study.html + meta `forecast_cohort_conclusion`；K=min(20,25%×队列)+固定K敏感性；**Claim 004 已结算(2026-10-18·n=38 期 2017Q1→2026Q2)：臂C 26/38=68.4%≥60% 方向一致**·纹理警示 2017-2022 恰 50%/2023 起十连✓(近段 regime 撑判据)·B2 剔旗镜像长期负贡献·前瞻滚动每季加窗
 # （旧六表验证器 2026-09-12 随重写退役：validate_deviation_extreme / validate_pead 留盘存档勿运行——import 已断+脚本头有退役横幅;实证结论留档 meta 注入。validate_forecast_industry 仍可运行(预告行业选股·2026-08 首跑:无稳健 edge 温度计)但非 V8 主轴）

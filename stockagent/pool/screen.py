@@ -429,6 +429,15 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
             history = store.latest_pool_snapshots(12)
     history = _forward_settle(store, history)
 
+    # ---- ⑥节预告队列(2026-10-18 · Claim 004 附产品;live 渲染才建,回放/测试快照不带) ----
+    cohort_view = None
+    if asof is None:
+        try:
+            from . import cohort_live
+            cohort_view = cohort_live.build_cohort_view(store, cfg)
+        except Exception as ex:  # noqa: BLE001 — 队列节失败不拖垮整板
+            cohort_view = {"error": str(ex)[:160]}
+
     return {
         "as_of": asof_str,
         "period": period,
@@ -447,6 +456,7 @@ def build_high_earnings_snapshot(store, config=None, asof: str | None = None,
         "emergent": emerg,
         "diff": diff,
         "history": history,
+        "cohort": cohort_view,
         "conclusion": store.get_meta("high_earnings_pool_conclusion"),
         "cfg_note": {
             "floor_np_yoy": float(hcfg.get("floor_np_yoy", 50.0)),
