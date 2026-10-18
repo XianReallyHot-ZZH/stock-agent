@@ -187,13 +187,16 @@ def period_members(store, hcfg: dict, events: list[dict], period: str, cutoff: s
                     m["unrefined"] = False
                     break
         # 扭亏·上年计提占亏损比(MANUAL_REVIEW 3.1 头号检查项的程序化;展示 chip 不进门)
+        # 原始金额同存——浅亏分母会让比值爆炸,百分比必须配绝对量读(用户裁定 2026-10-18)
         m["tk_depr_pct"] = None
+        m["tk_impair"], m["tk_base_income"] = None, None
         if "扭亏" in m["flags"]:
             base_p = f"{int(period[:4]) - 1}{period[4:]}"    # 上年同期=扭亏的基数期
             for fp, fa, imp, ni in store.income_impairment_rows(code):
                 if fp == base_p:
                     if _avail(fa, fp) <= cutoff_c:
                         m["tk_depr_pct"] = ch.wash_sale_ratio(imp, ni)
+                        m["tk_impair"], m["tk_base_income"] = imp, ni
                     break
 
     # 两轨分流(行业级 type) + 周期 PB 分位(保守可得日阶梯) + 商誉档
@@ -334,7 +337,9 @@ def build_cohort_view(store, config, now=None) -> dict:
         flags = []
         for f in m["flags"]:
             if f == "扭亏" and m.get("tk_depr_pct") is not None:
-                flags.append(f"扭亏·上年计提{m['tk_depr_pct']:.0%}")
+                amt = (f"({abs(m['tk_impair']) / 1e8:.2f}亿/亏{abs(m['tk_base_income']) / 1e8:.2f}亿)"
+                       if m.get("tk_impair") is not None and m.get("tk_base_income") is not None else "")
+                flags.append(f"扭亏·上年计提{m['tk_depr_pct']:.0%}{amt}")
             else:
                 flags.append(f)
         if m["receivable_yellow"]:
