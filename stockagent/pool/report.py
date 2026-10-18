@@ -478,16 +478,17 @@ def _cohort_section(snap: dict) -> str:
         out.append(
             f"<div class='banner'>▶ 活队列 —— {_e(period)} 截点 {_e(co.get('cutoff'))} 已定格:队列 "
             f"<b>{co.get('n', 0)}</b> 只(剔商誉 {co.get('n_gw_red', 0)}·入队 {co.get('n_pre', 0)}) · "
-            f"臂C <b>{co.get('n_arm_c', 0)}</b> 只 · 买入 {_e(co.get('buy_date'))} 开盘(已过) → "
+            f"精选名单 <b>{co.get('n_arm_c', 0)}</b> 只(★ 标记,回测臂C 口径) · "
+            f"买入 {_e(co.get('buy_date'))} 开盘(已过) → "
             f"卖出 {sell_txt} 开盘(还 {co.get('days_to_next', 0)} 天)</div>")
     rows = co.get("rows") or []
     if rows:
         body = []
         for r in rows:
-            c_badge = ("<td>★ 臂C</td>" if r.get("in_c") else "<td class='dim'>—</td>")
+            c_badge = ("<td data-v='1'><b>★ 精选</b></td>" if r.get("in_c")
+                       else "<td data-v='0' class='dim'>—</td>")
             body.append([
-                f"<td>{'★ ' if r.get('in_c') else ''}{_e(r.get('name'))}"
-                f"<span class='dim'> {_e(r.get('code'))}</span></td>",
+                f"<td>{_e(r.get('name'))}<span class='dim'> {_e(r.get('code'))}</span></td>",
                 f"<td>{_e(r.get('industry'))}</td>",
                 f"<td>{_e(r.get('ftype'))}</td>",
                 f"<td>{_e(r.get('track'))}</td>",
@@ -499,7 +500,15 @@ def _cohort_section(snap: dict) -> str:
         out.append(_table(
             [("name", "名称"), ("industry", "行业(申万L3)"), ("ftype", "预告类型"),
              ("track", "轨道"), ("val", "估值"), ("flags", "旗"), ("gw", "商誉档"),
-             ("", "臂C")], body))
+             ("pick", "★ 精选",
+              "title='★ 精选 = 过估值门两轨(PEG≤1 / PB分位≤30%)且两轨合并排序前 100——"
+              "回测「臂C·实盘镜面」口径(Claim 004 的检验对象):38 期 26 胜'"
+              " style='cursor:help'")], body))
+        out.append(
+            "<div class='hint'>★ <b>精选</b> = 名单中过了估值门且排进两轨合并前 100 的部分"
+            "(回测报告里的「臂C·实盘镜面」=按第六看板同款筛选栈选出的可执行名单);"
+            "未标★=仍在队列(回测「臂A·全体等权」的成分)但未过估值门/未排进前 100——"
+            "表头点「★ 精选」可把精选排到最前。</div>")
     out.append(
         "<div class='hint'>口径与 Claim 004 冻结件一致(与验证器共用同一套装配,回测/实盘同判): "
         "队列=预告窗内公告∧过预告环地板(净利≥50%/扭亏)的全体(含池内续留再过门),硬剔 "
