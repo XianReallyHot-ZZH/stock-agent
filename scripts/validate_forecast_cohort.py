@@ -34,10 +34,11 @@ from stockagent.pool import study
 from stockagent.pool.report import _e
 
 ROOT = Path(__file__).resolve().parent.parent
-ARMS_ALL = ("A", "B1", "B2", "C")
+ARMS_ALL = ("A", "B1", "B2", "C", "D")
 ARM_NAMES = {"A": "臂A·队列全体等权", "B1": "臂B1·排序分前K",
              "B2": "臂B2·排序前K再剔黄旗/扭亏/未精筛",
-             "C": "臂C·实盘镜面(估值门两轨+两轨排序Top-N)"}
+             "C": "臂C·实盘镜面(估值门两轨+两轨排序Top-N)",
+             "D": "臂D·队列∧队内市值最小20%(探索·0.80先例锚)"}
 
 
 # ---------- I/O 装配层(单期队列装配已抽 cohort_live.period_members——与看板⑥节共用) ----------
@@ -104,6 +105,9 @@ def main():
     k_cap = int(ccfg.get("k_cap", 20))
     k_frac = float(ccfg.get("k_frac", 0.25))
     sens_ks = [int(x) for x in (ccfg.get("sens_ks") or [10, 20, 40])]
+    small_cap_frac = float(ccfg.get("small_cap_frac", 0.20))
+    small_cap_scan = [float(x) for x in (ccfg.get("small_cap_scan")
+                                         or [0.10, 0.20, 0.30, 0.40, 0.50])]
 
     # ---- 期清单: 已结算(正式报截止<今天) vs 活样本(截止已过、正式报截止未到) ----
     today = date.today()
@@ -234,8 +238,8 @@ def main():
                                             or m["unrefined"])),
                "_members": members, "_legs": legs}   # 敏感性扫描复用(不进 HTML)
         if is_live:
-            row["arm_A"] = row["arm_B1"] = row["arm_B2"] = row["arm_C"] = None
-            row["n_C"] = None
+            row["arm_A"] = row["arm_B1"] = row["arm_B2"] = row["arm_C"] = row["arm_D"] = None
+            row["n_C"] = row["n_D"] = None
             live_info = {"period": p, "n": len(members), "k": k,
                          "b1": ch.select_arm(members, k)[:k],
                          "names": names, "members": mset}
@@ -251,6 +255,9 @@ def main():
                 pb_pct_max=float(hcfg.get("pb_pct_max", 0.30)))
             row["n_C"] = len(codes_c)
             row["arm_C"] = ch.arm_return([legs.get(c) for c in codes_c])
+            codes_d = ch.select_smallest_cap(members, frac=small_cap_frac)
+            row["n_D"] = len(codes_d)
+            row["arm_D"] = ch.arm_return([legs.get(c) for c in codes_d])
         period_rows.append(row)
         a_txt = "—"
         if not is_live and row["arm_A"] is not None:
@@ -284,6 +291,22 @@ def main():
         a = sens[kk]
         print(f"[B1·固定K={kk}] 胜率 {a['wins']}/{a['n_valid']}"
               f" · 平均超额 {'—' if a['mean_excess'] is None else format(a['mean_excess'], '+.1%')}")
+
+    # ---- 臂D 比例扫描(队内市值最小 10-50%,只验方向稳健,不挑最优) ----
+    capscan = {}
+    for fr in small_cap_scan:
+        rows_d = []
+        for r in settled_rows:
+            codes_d = ch.select_smallest_cap(r.get("_members") or [], frac=fr)
+            legs_p = r.get("_legs") or {}
+            rows_d.append({"period": r["period"],
+                           "ret": ch.arm_return([legs_p.get(c) for c in codes_d]),
+                           "index_ret": r["index"]})
+        capscan[fr] = ch.aggregate_arm(rows_d)
+        a = capscan[fr]
+        print(f"[D·最小{fr:.0%}] 胜率 {a['wins']}/{a['n_valid']}"
+              f" · 平均超额 {'—' if a['mean_excess'] is None else format(a['mean_excess'], '+.1%')}",
+              flush=True)
 
     # ---- 归因 ----
     ATTRS = [("industry", "申万 L3 行业"), ("l1", "申万一级行业"), ("cluster", "商品周期簇"),
@@ -320,7 +343,8 @@ def main():
     conclusion = _conclusion(agg, len(settled), settled[0], settled[-1])
     html = _html_report(agg, settled_rows, sens, attr_tables, ATTRS, losers,
                         live_info, price_stats, time.time() - t0,
-                        bench_sym, k_cap, k_frac, per_attr=per_attr, settled=settled)
+                        bench_sym, k_cap, k_frac, per_attr=per_attr, settled=settled,
+                        capscan=capscan)
     out_html = ROOT / "data" / "forecast_cohort_study.html"
     out_html.parent.mkdir(parents=True, exist_ok=True)
     out_html.write_text(html, encoding="utf-8")
@@ -392,7 +416,7 @@ def _per_attr_html(per_attr: dict, settled: list[str]) -> str:
 
 def _html_report(agg, settled_rows, sens, attr_tables, attrs, losers, live_info,
                  price_stats, took_s, bench_sym, k_cap, k_frac,
-                 per_attr=None, settled=None) -> str:
+                 per_attr=None, settled=None, capscan=None) -> str:
     bench_name = study.INDEX_LABELS.get(bench_sym, bench_sym)
     # 四臂总表
     arm_rows = []
@@ -422,16 +446,25 @@ def _html_report(agg, settled_rows, sens, attr_tables, attrs, losers, live_info,
                 cells.append("<td class='dim'>—</td>")
             else:
                 ex = v - iret
-                n_c = f"<span class='hint'>({r.get('n_C')})</span>" if arm == "C" else ""
+                if arm == "C":
+                    n_c = f"<span class='hint'>({r.get('n_C')})</span>"
+                elif arm == "D":
+                    n_c = f"<span class='hint'>({r.get('n_D')})</span>"
+                else:
+                    n_c = ""
                 cells.append(f"<td>{v * 100:+.1f}%{n_c}<span class='{'ok' if ex > 0 else 'crit'}'>"
                              f"{'✓' if ex > 0 else '✗'}</span></td>")
         cells.append(f"<td>{'—' if iret is None else format(iret, '+.1%')}</td>")
         per_rows.append("<tr>" + "".join(cells) + "</tr>")
-    # 敏感性
+    # 敏感性(K 扫描 + 臂D 市值比例扫描)
     sens_rows = "".join(
         f"<tr><td>B1 固定 K={kk}</td><td>{a['wins']}/{a['n_valid']}</td>"
         f"<td>{_fmt(a['mean_excess'])}</td><td>{_fmt(a['median_excess'])}</td></tr>"
         for kk, a in (sens or {}).items())
+    sens_rows += "".join(
+        f"<tr><td>D 队内市值最小 {fr:.0%}</td><td>{a['wins']}/{a['n_valid']}</td>"
+        f"<td>{_fmt(a['mean_excess'])}</td><td>{_fmt(a['median_excess'])}</td></tr>"
+        for fr, a in (capscan or {}).items())
     # 归因
     attr_html = ""
     for key, label in attrs:
@@ -490,6 +523,8 @@ def _html_report(agg, settled_rows, sens, attr_tables, attrs, losers, live_info,
         "窗收在 4/30(贴正式报季),差异在此注明;否则一季持有窗退化为零",
         f"聚合=期数等权(每期一票,~2周窗与~3个月窗同权);资金曲线仅展示;不年化;基准只取"
         f"{_e(bench_name)}(同窗开盘口径);K=min({k_cap},{k_frac}×队列)",
+        "臂D(探索)=队列∧队内市值最小20%(截点冻结市值,无市值者不入池;锚=连续池 "
+        "mktcap_filter_pct 0.80 先例的队内化,非本数据挑选)——比例扫描 10-50% 只验方向稳健性",
         "v1 不登记 CLAIMS_LEDGER、不结算——判据已批(≥5/8 期超额>0=方向一致,≤4/8=证伪),"
         "v2(补历史预告扩样本)跑数前登记;敏感性固定K为探索性附表不入判据",
     ]
@@ -509,8 +544,8 @@ details.conc-detail{{margin:6px 0}} details.conc-detail summary{{cursor:pointer;
 <h2>预告队列研究 v1 · 截点回测({n_members} 个已结算期)</h2>
 <table><tr><th>臂</th><th>有效期</th><th>胜率(超额&gt;0)</th><th>平均超额</th><th>中位超额</th><th>资金曲线</th><th>基准曲线</th></tr>{''.join(arm_rows)}</table>
 <h2>逐期明细(✓/✗=当期跑赢基准)</h2>
-<table><tr><th>报告期</th><th>截点→卖出</th><th>队列</th><th>K(B2可选)</th><th>有效腿</th><th>臂A</th><th>臂B1</th><th>臂B2</th><th>臂C(n)</th><th>{_e(bench_name)}</th></tr>{''.join(per_rows)}</table>
-<h2>K 敏感性(B1 固定K · 探索性·不入判据)</h2>
+<table><tr><th>报告期</th><th>截点→卖出</th><th>队列</th><th>K(B2可选)</th><th>有效腿</th><th>臂A</th><th>臂B1</th><th>臂B2</th><th>臂C(n)</th><th>臂D(n)</th><th>{_e(bench_name)}</th></tr>{''.join(per_rows)}</table>
+<h2>敏感性与扫描(B1 固定K + D 市值比例 · 探索性·不入判据)</h2>
 <table><tr><th>组合</th><th>胜率</th><th>平均超额</th><th>中位超额</th></tr>{sens_rows}</table>
 <h2>归因(个股级·超额 vs 同窗基准)</h2>
 <div class='hint'>混合口径=全 8 期个股池按维度分组:统计力最高,但大期(年报/中报队列)天然权重大、

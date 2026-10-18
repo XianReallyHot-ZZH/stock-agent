@@ -209,6 +209,18 @@ def _mem_c(code, track="peg", peg=None, pb_pct=None):
     return {"code": code, "track": track, "peg": peg, "pb_pct": pb_pct}
 
 
+def test_select_smallest_cap():
+    ms = [{"code": f"c{i:02d}", "cap": float(i * 10)} for i in range(1, 11)]  # c01 最小
+    ms.append({"code": "cx", "cap": None})                    # 无市值不入池不猜
+    assert ch.select_smallest_cap(ms, 0.20) == ["c01", "c02"]
+    assert ch.select_smallest_cap(ms, 0.10) == ["c01"]
+    assert ch.select_smallest_cap(ms, 0.50) == ["c01", "c02", "c03", "c04", "c05"]
+    assert ch.select_smallest_cap([{"code": "x", "cap": None}], 0.2) == []
+    # 并列按代码稳定
+    tie = [{"code": "b", "cap": 5.0}, {"code": "a", "cap": 5.0}, {"code": "c", "cap": 1.0}]
+    assert ch.select_smallest_cap(tie, 0.67) == ["c", "a"]
+
+
 def test_rank_two_track_and_pool_mirror():
     ms = [_mem_c("100001", "peg", peg=0.4), _mem_c("100002", "peg", peg=0.9),
           _mem_c("100003", "peg", peg=1.5),                      # 估值门不过(peg>1.0)

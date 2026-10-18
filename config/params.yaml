@@ -291,5 +291,7 @@ stock_pool:
     k_cap: 20                     # 精选臂容量上限(K=min(k_cap, k_frac×队列))
     k_frac: 0.25                  # 精选臂容量比例(B1/B2 同 K,B2 剔旗后少中选优)
     sens_ks: [10, 20, 40]         # B1 敏感性扫描(固定K,探索性附表,不入判据)
+    small_cap_frac: 0.20          # 臂D=队内市值最小档(锚=上方 mktcap_filter_pct 0.80 先例的队内化,非数据挑选)
+    small_cap_scan: [0.10, 0.20, 0.30, 0.40, 0.50]  # 臂D 比例扫描(只验方向稳健,不挑最优)
   display:
     table_rows_default: 50

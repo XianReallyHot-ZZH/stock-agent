@@ -219,6 +219,20 @@ def rank_two_track(gated: list[dict]) -> list[dict]:
     return out
 
 
+def select_smallest_cap(members: list[dict], frac: float = 0.20) -> list[str]:
+    """臂D·队内市值最小档(纯,2026-10-18 探索臂): 有截点市值的成员按 cap 升序取前
+    max(1, floor(frac×有值数));无市值(股本反推缺)者不入池不猜;并列按代码稳定。
+    阈值锚 = 连续池 mktcap_filter_pct=0.80 先例的队内化(剔除最大两成),**非本队列数据挑选**——
+    比例扫描(10-50%)只验方向稳健性,不挑最优格。"""
+    pool = [(float(m["cap"]), str(m["code"])) for m in members
+            if m.get("cap") is not None and not _nan(float(m["cap"]))]
+    if not pool:
+        return []
+    pool.sort(key=lambda t: (t[0], t[1]))
+    k = max(1, int(len(pool) * frac))
+    return [c for _cap, c in pool[:k]]
+
+
 def select_pool_mirror(members: list[dict], top_n: int = 100,
                        peg_max: float = 1.0, pb_pct_max: float = 0.30) -> list[str]:
     """臂C·实盘镜面选臂(纯): 估值门(PEG 轨: peg≤peg_max 且非 None;PB 轨: pb_pct≤pb_pct_max
