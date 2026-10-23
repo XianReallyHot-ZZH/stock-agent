@@ -24,7 +24,8 @@ from stockagent.config import get_config
 from stockagent.data import Store, DataManager
 from stockagent.pool import universe as pool_universe
 
-INDUSTRY_STALE_DAYS = 45  # 东财行业板块成分月更(候选池策略2 三类分流)
+INDUSTRY_STALE_DAYS = 45  # 东财行业成分回退腿(月更);申万主源走 meta 35 天门控
+SW_INDUSTRY_STALE_DAYS = 35  # 申万三级成分月更(tushare·update_sw_industry 同款门控)
 
 
 def _within_days(d1: str, d2: str, tol: int) -> bool:
@@ -56,6 +57,20 @@ def _fetch(conn, sql, params=()):
     return conn.execute(sql, params).fetchone()
 
 
+def _industry_leg(store) -> dict:
+    """行业腿现状: 申万主源(sw_industry_member)优先,空才东财回退(industry_member)——
+    与 pool.screen 同优先级(V8 主源是申万;东财表空≠数据缺失)。返回
+    {src, last, n_boards, ind_map, sw} 供展示与 --fix 门控共用。"""
+    sw = store.sw_industry_map()
+    if len(sw):
+        return {"src": "申万", "last": store.get_meta("last_sw_industry_update"),
+                "n_boards": int(sw["industry"].nunique()), "ind_map": sw, "sw": True}
+    em = store.industry_map()
+    return {"src": "东财", "last": store.last_industry_snapshot(),
+            "n_boards": int(em["industry"].nunique()) if len(em) else 0,
+            "ind_map": em, "sw": False}
+
+
 def _pool_report(store, conn, ref) -> dict:
     """候选个股池段(V8 高业绩池): 全市场宇宙规模 / 价格新鲜 x/N / 行业快照 / 风险腿新鲜度。"""
     info: dict = {"universe": [], "universe_n": 0}
@@ -76,16 +91,22 @@ def _pool_report(store, conn, ref) -> dict:
         for c in codes:
             d = _fetch(conn, "SELECT MAX(date) FROM daily_prices WHERE symbol=?", (c,))[0]
             n_fresh += d is not None and d >= ref
-    ind_last = store.last_industry_snapshot() or "（无）"
-    ind_n = _fetch(conn, "SELECT COUNT(DISTINCT industry) FROM industry_member")[0]
+    ind = _industry_leg(store)
+    try:  # sw_industry_class 的 yaml 缺 → 未映射降级(与 pool.screen 同法)
+        class_cfg = (get_config().sw_industry_class() if ind["sw"]
+                     else get_config().industry_class())
+    except Exception:
+        class_cfg = {}
     cov = pool_universe.industry_coverage(pool_universe.join_industry(
-        u, store.industry_map(), get_config().industry_class()))
+        u, ind["ind_map"], class_cfg))
     bal_periods = len(store.stock_balance_periods())
     bal_last = store.get_meta("last_stock_balance_update") or "（无）"
     npabs_n = _fetch(conn, "SELECT COUNT(*) FROM stock_report_actual WHERE np_abs IS NOT NULL")[0]
     print(f"候选个股池(V8 高业绩池): universe {len(codes)} 只(全市场非 ST)"
-          f" · 价格新鲜 {n_fresh}/{len(codes)} · 行业快照 {ind_last}({ind_n} 板块,"
-          f"映射覆盖 {cov['pct']:.0%}) · 资产负债 {bal_periods} 期(至 {bal_last})"
+          f" · 价格新鲜 {n_fresh}/{len(codes)}"
+          f" · 行业快照({ind['src']}) {ind['last'] or '（无）'}"
+          f"({ind['n_boards']} 板块,映射覆盖 {cov['pct']:.0%})"
+          f" · 资产负债 {bal_periods} 期(至 {bal_last})"
           f" · 正式报扩列 {npabs_n} 行")
     return info
 
@@ -392,10 +413,15 @@ def main():
             print(f"  正式报扩列补拉(np_abs 缺, 期 {_latest2})...")
             dm.update_stock_report_actual(periods=_latest2)
 
-        # 8) industry (月更) + balance (季更·随披露环) + dividends (周更)
-        ind_last = store.last_industry_snapshot()
-        if ind_last is None or (datetime.now() - datetime.strptime(ind_last, "%Y-%m-%d")).days > INDUSTRY_STALE_DAYS:
-            print(f"  候选池行业成分(缺失或>{INDUSTRY_STALE_DAYS}天, 当前 {ind_last or '无'})...")
+        # 8) industry (月更·申万主源优先,与 pool.screen 同优先级) + balance (季更) + dividends (周更)
+        ind = _industry_leg(store)
+        if ind["sw"]:
+            if ind["last"] is None or (datetime.now() - datetime.strptime(ind["last"], "%Y-%m-%d")).days > SW_INDUSTRY_STALE_DAYS:
+                print(f"  申万行业成分(缺失或>{SW_INDUSTRY_STALE_DAYS}天, 当前 {ind['last'] or '无'})...")
+                n = dm.update_sw_industry()
+                print(f"  sw_industry_member: {n} 行" if n else "  ⚠️ 申万行业失败(不阻塞)")
+        elif ind["last"] is None or (datetime.now() - datetime.strptime(ind["last"], "%Y-%m-%d")).days > INDUSTRY_STALE_DAYS:
+            print(f"  候选池行业成分·东财回退(缺失或>{INDUSTRY_STALE_DAYS}天, 当前 {ind['last'] or '无'})...")
             n = dm.update_industry_members()
             print(f"  industry_member: {n} 行" if n else "  ⚠️ industry 失败(PB 轨降级,不阻塞)")
         bal_last = store.get_meta("last_stock_balance_update")
