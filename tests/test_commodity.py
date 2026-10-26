@@ -482,7 +482,7 @@ def test_target_rows_gap_math():
     """错配度=ETF(NAV)涨幅−品种涨幅:ref=dom 走国内序列、ref=intl 走国际基准;NAV 缺 → missing。"""
     from stockagent.config import get_config
     cfg = get_config()
-    st = _StubStore(intl_symbols={"CAD", "CL"})          # CL 给原油的国际对照腿
+    st = _StubStore(intl_symbols={"CAD", "CL", "OIL"})   # OIL=原油主语;CL=501018 intl_symbol 覆盖对照腿
     rows_all, missing_all = tgt.target_rows(st, config=cfg)
     rows = [r for r in rows_all if r["symbol"] in {"512400", "159985", "501018"}]
     assert not missing_all                               # Stub 给了 NAV → 无缺
@@ -506,6 +506,27 @@ def test_target_rows_gap_math():
     assert by_sym["512400"]["in_pool"] is True           # 池内标的(研究看板可跳)
     assert by_sym["159985"]["in_pool"] is False
     assert {r["variety"] for r in rows} >= {"铜", "豆粕", "原油"}
+
+
+def test_target_rows_intl_symbol_override():
+    """ref=intl + spec.intl_symbol 覆盖:501018 固定对照 WTI/CL——原油主语换 Brent(OIL)后 ref 不漂移。"""
+
+    class _SplitIntl(_StubStore):
+        """CL 与 OIL 两条不同斜率的国际序列,可区分 override 是否生效。"""
+
+        def get_western_series(self, source, symbol, start=None, end=None):
+            if source == "fut" and symbol in {"CL", "OIL"}:
+                slope = 0.8 if symbol == "OIL" else 0.4
+                s = pd.Series([100.0 + i * slope for i in range(300)],
+                              index=self.intl.index, dtype=float)
+                return pd.DataFrame({"close": s.values}, index=s.index)
+            return super().get_western_series(source, symbol, start, end)
+
+    from stockagent.config import get_config
+    rows, _ = tgt.target_rows(_SplitIntl(intl_symbols={"CL", "OIL"}), config=get_config())
+    r = next(r for r in rows if r["symbol"] == "501018")
+    assert r["ref_kind"] == "intl"
+    assert r["comm"]["cur"] == pytest.approx(100.0 + 299 * 0.4)   # 对照腿=CL 斜率,非主语 OIL(≈339)
 
 
 def test_target_rows_missing_nav():

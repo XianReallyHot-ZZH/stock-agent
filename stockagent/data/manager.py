@@ -708,7 +708,8 @@ class DataManager:
 
     def update_commodity_benchmarks(self, symbols: Optional[list[str]] = None) -> dict:
         """Fetch + store 国际基准日线(第八看板面板主语)。写 western_macro_series source='fut'——
-        与 western 腿同表幂等(GC/SI/CL 双腿都会刷,谁后跑谁新,无冲突);本腿独立 meta 保证
+        与 western 腿同表幂等(GC/SI/OIL 双腿都会刷,谁后跑谁新,无冲突;CL/WTI 2026-10 起改由
+        western 腿独刷);本腿独立 meta 保证
         大宗商品看板的新鲜度不依赖宏观看板的刷新节奏。返回 {symbol: 最新日期}。"""
         symbols = symbols or self.COMMODITY_BENCHMARK_SYMBOLS
         try:

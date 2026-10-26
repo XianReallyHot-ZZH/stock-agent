@@ -224,7 +224,7 @@ commodity:
     breadth_windows: [20, 60]   # 自算广度窗口(等权品种涨幅均值+上涨占比;非官方指数,图注标明)
   ratio_pairs:                  # ⚖ 比价矩阵:num/den = sina 外盘符号 或 '国内:品种'(inner-join 对齐)
     - {name: 金银比,     num: SI,         den: GC,         note: 白银相对黄金的贵贱(主语是白银,黄金只做分母)}
-    - {name: 油金比,     num: CL,         den: GC,         note: 原油以黄金计的购买力}
+    - {name: 油金比,     num: OIL,        den: GC,         note: 原油以黄金计的购买力(主语=布伦特,随面板)}
     - {name: 铜铝比,     num: CAD,        den: AHD,        note: 基本金属内相对强度}
     - {name: 豆粕玉米比, num: SM,         den: C,          note: 饲料内蛋白/能量比}
     - {name: 螺矿比,     num: 国内:螺纹钢, den: 国内:铁矿石, note: 钢价/原料,钢厂利润近似代理}
@@ -246,7 +246,8 @@ commodity:
        note: research_only 在池;黄金叙事归宏观框架,此处只作标的映射}
     - {symbol: "161226", name: 白银LOF,      kind: 期货LOF,     varieties: [白银],       ref: dom}
     - {symbol: "501018", name: 南方原油,     kind: QDII·LOF,    varieties: [原油],       ref: intl,
-       note: 跟踪国际油价(WTI/Brent 篮子)→对照 WTI;含汇率摩擦}
+       intl_symbol: CL,
+       note: 跟踪国际油价(WTI/Brent 篮子)→对照 WTI 固定(主语换 Brent 后不跟随);含汇率摩擦}
 
 # ---- 仓位管理看板 (V6 position · 只读对照 · 第五看板) ----
 # 预案表:估值档 → 权益仓位%区间(用户自定义;看板只对照「现在在哪格」,不发明建议、不喂引擎)。

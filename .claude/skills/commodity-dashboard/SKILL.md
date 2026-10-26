@@ -1,6 +1,6 @@
 ---
 name: commodity-dashboard
-description: Refresh data and generate the 大宗商品看板 (commodity.html, 7 sections). Use when the user wants to update/refresh the commodity dashboard, or asks to "生成/刷新大宗商品看板/商品看板/商品面板/比价/商品雷达/商品ETF错配/基差库存". Backfills 国际基准 (LME铜CAD/LME铝AHD/LME锌ZSD/COMEX金银/WTI/CBOT豆粕玉米, sina 外盘) + 中证商品指数 (ccidx 官方总览; 南华 akshare 端点已死) + 投资标的 NAV (非池内 5 只 → etf_nav) + 基差/期限结构 (100ppi 2019起) + 郑商所仓单 (CZCE 三品种周采样 2021起), then renders. 第八看板, 2026-09 从个股诊断拆出; 国内 17 品种日线/夜盘快照仍归 backfill_stock_data --comm. 永不喂引擎.
+description: Refresh data and generate the 大宗商品看板 (commodity.html, 7 sections). Use when the user wants to update/refresh the commodity dashboard, or asks to "生成/刷新大宗商品看板/商品看板/商品面板/比价/商品雷达/商品ETF错配/基差库存". Backfills 国际基准 (LME铜CAD/LME铝AHD/LME锌ZSD/COMEX金银/布伦特OIL/WTI CL/CBOT豆粕玉米, sina 外盘; 原油主语=Brent OIL 2026-10 起, CL 仍拉作宏观腿/501018 对照) + 中证商品指数 (ccidx 官方总览; 南华 akshare 端点已死) + 投资标的 NAV (非池内 5 只 → etf_nav) + 基差/期限结构 (100ppi 2019起) + 郑商所仓单 (CZCE 三品种周采样 2021起), then renders. 第八看板, 2026-09 从个股诊断拆出; 国内 17 品种日线/夜盘快照仍归 backfill_stock_data --comm. 永不喂引擎.
 ---
 
 # 大宗商品看板 — 维护与生成
@@ -79,13 +79,15 @@ PYTHONIOENCODING=utf-8 python scripts/commodity_report.py --no-open
   `futures_index_ccidx`(中证商品指数,ccidx.com,~4 年 969 交易日,当日新鲜)
 - **外盘铜**:HG(COMEX)/LHC 数据失真不用;**LME铜=CAD**(sina futures_foreign_hist 符号),
   LME铝=AHD、LME锌=ZSD、CBOT豆粕=SM(非美豆 S,与国内豆粕口径一致)、CBOT玉米=C
-- 国际基准写 `western_macro_series source='fut'` 与 western 腿同表幂等;GC/SI/CL 两腿都会刷,
+- 国际基准写 `western_macro_series source='fut'` 与 western 腿同表幂等;GC/SI/OIL 两腿都会刷,
   本腿独立 meta(`last_commodity_benchmark_update`)保证新鲜度不依赖宏观看板节奏
+- **原油主语=Brent OIL(2026-10 换,全球 2/3 原油挂 Brent;10 年滚动窗实测价差 vs CL 中位 +3.95 合理)**;
+  CL/WTI(30 年)改由宏观框架腿独刷,501018 对照腿 params `targets.intl_symbol: CL` 固定不随主语漂移
 - 豆粕/玉米的 CBOX 单位是 美分/蒲式耳、美元/短吨——与国内 元/吨 不同,面板按主语单位标注,
   同比/动量为各自序列内比值不受单位影响
 | 端点 | 用途 | 起点 |
 |---|---|---|
-| `futures_foreign_hist`(sina) | 国际基准 8 符号(CAD/AHD/ZSD/GC/SI/CL/SM/C) | 2016-09 |
+| `futures_foreign_hist`(sina) | 国际基准 8 符号(CAD/AHD/ZSD/GC/SI/OIL/SM/C;OIL 2016-08 起) | 2016-09 |
 | `futures_index_ccidx`(ccidx) | 中证商品期货指数/价格指数(官方总览) | ~2022 |
 | `fund_etf_fund_info_em`(复用) | 投资标的 NAV(非池内 5 只,增量为王;QDII 滞后 1-2 天) | 2019+ |
 | `futures_spot_price_daily`(100ppi) | 基差+期限结构(现货/近月/主力+基差率;逐日请求≈1.4min/年,按半年窗分段) | 2018 |

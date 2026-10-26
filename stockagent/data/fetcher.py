@@ -1695,13 +1695,16 @@ def fetch_commodity_spot(varieties: Optional[list[str]] = None, timeout: float =
 # 端点真相(2026-09-06 实测):LME铜=CAD(沪铜对口)、LME铝=AHD、LME锌=ZSD、CBOT豆粕=SM、CBOT玉米=C,
 # 均 futures_foreign_hist(sina)~10年全历史且当日新鲜;HG(COMEX铜)/LHC 数据失真不用(见上方注)。
 # 豆粕对口 SM(CBOT豆粕)而非 S(美豆)——与国内豆粕口径一致。
+# 原油主语=Brent OIL(2026-10 换:全球 2/3 原油挂 Brent 定价,10 年滚动窗,价差 vs CL 中位 +3.95 实测合理);
+# CL/WTI(30 年)仍由宏观框架腿(FOREIGN_FUTURE_SYMBOLS_W)刷新——501018 对照(params targets.intl_symbol)
+# 与宏观看板能源腿继续用 CL,不断流。
 COMMODITY_BENCHMARKS = {
     "铜": ("CAD", "LME铜", "美元/吨"),
     "铝": ("AHD", "LME铝", "美元/吨"),
     "锌": ("ZSD", "LME锌", "美元/吨"),
     "黄金": ("GC", "COMEX黄金", "美元/盎司"),
     "白银": ("SI", "COMEX白银", "美元/盎司"),
-    "原油": ("CL", "WTI原油", "美元/桶"),
+    "原油": ("OIL", "Brent原油", "美元/桶"),
     "豆粕": ("SM", "CBOT豆粕", "美元/短吨"),
     "玉米": ("C", "CBOT玉米", "美分/蒲式耳"),
 }
@@ -1714,7 +1717,7 @@ CCIDX_INDEXES = {"中证商品期货指数": "100001.CCI", "中证商品期货�
 def fetch_commodity_benchmarks(symbols: Optional[list[str]] = None,
                                retries: int = 2) -> pd.DataFrame:
     """国际基准日线批量(futures_foreign_hist,逐符号容错——同 fetch_commodity_price 式,失败符号跳过)。
-    symbols 缺省 = COMMODITY_BENCHMARKS 全部符号(含 GC/SI/CL,与 western 腿同表幂等,保证看板主语新鲜度)。
+    symbols 缺省 = COMMODITY_BENCHMARKS 全部符号(含 GC/SI/OIL,与 western 腿同表幂等,保证看板主语新鲜度)。
     返回长表 [source='fut', symbol, date, open,high,low,close,volume](与 fetch_foreign_future 同构,
     可直接 upsert_western_macro)。全失败才 raise。"""
     symbols = symbols if symbols is not None else sorted({s for s, _, _ in COMMODITY_BENCHMARKS.values()})

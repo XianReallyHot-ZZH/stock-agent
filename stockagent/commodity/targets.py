@@ -32,11 +32,12 @@ def _ret_windows(s: pd.Series) -> dict:
             "m10": _chg(10), "m20": _chg(20), "m60": _chg(60), "yoy": _chg(252)}
 
 
-def _ref_series(store, variety: str, ref: str):
-    """错配对照腿:ref=dom → 国内价(大A投资指导口径);ref=intl → 该品种国际基准序列。"""
+def _ref_series(store, variety: str, ref: str, intl_symbol: str = ""):
+    """错配对照腿:ref=dom → 国内价(大A投资指导口径);ref=intl → 该品种国际基准序列;
+    intl_symbol 可覆盖默认基准(如 501018 固定对照 WTI/CL——原油主语换 Brent 后不跟随)。"""
     bench = fetcher.COMMODITY_BENCHMARKS.get(variety)
     if ref == "intl" and bench:
-        return pnl.intl_series(store, bench[0])
+        return pnl.intl_series(store, intl_symbol or bench[0])
     return store.get_commodity_series(variety)
 
 
@@ -68,7 +69,7 @@ def target_rows(store, config=None) -> tuple[list[dict], list[dict]]:
             continue
         ref = str(spec.get("ref", "dom"))
         for v in spec.get("varieties") or []:
-            st = _ret_windows(_ref_series(store, v, ref))
+            st = _ret_windows(_ref_series(store, v, ref, str(spec.get("intl_symbol") or "")))
             if not st:
                 continue
             rows.append({
